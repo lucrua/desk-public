@@ -1,0 +1,111 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1781061487774,
+      "tag": "0000_dark_the_captain",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781121711687,
+      "tag": "0001_gigantic_betty_ross",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781123664146,
+      "tag": "0002_empty_living_lightning",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781130313658,
+      "tag": "0003_first_loki",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781136607367,
+      "tag": "0004_glorious_rhodey",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781156836363,
+      "tag": "0005_s1_events_path_pinned",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781200000000,
+      "tag": "0006_fts_search_tsv",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781200400000,
+      "tag": "0007_snapshot_align",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781200500000,
+      "tag": "0008_p2_buckets_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781200600000,
+      "tag": "0009_p3_catalogs",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781203238317,
+      "tag": "0010_audience_members",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781207648908,
+      "tag": "0011_dir_shares",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1781209402058,
+      "tag": "0012_multi_email_user_emails",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1781209500000,
+      "tag": "0013_lifecycle_distribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1781209600000,
+      "tag": "0014_doc_owner",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,462 @@
+@import "tailwindcss";
+
+/* =========================================================================
+   Desk design tokens
+   Two themes (light default / dark via [data-theme="dark"]), one token set.
+   Badge colors and surface tokens are defined as CSS custom properties below.
+   ========================================================================= */
+
+:root {
+  /* warm neutrals — Hub Docs light theme (operator surfaces) */
+  --bg: #f7f5f0;
+  --surface: #ffffff;
+  --surface-alt: #faf8f4;
+  --ink: #211e19;
+  --muted: #6e675c;
+  --faint: #9b937f;
+
+  /* hairlines */
+  --hairline: #e6e1d5;
+  --hairline-strong: #c9c2b2;
+  --hover: #f1eee6;
+  --nav-active: #ece8de;
+  --skeleton: #ede9df;
+
+  /* accent — deep green light */
+  --accent: #2e6b4f;
+  --accent-ring: rgba(46, 107, 79, 0.14);
+
+  /* hub ref chips (green mono) + external links (desaturated blue) */
+  --ref-bg: rgba(46, 107, 79, 0.07);
+  --ref-ink: #2e6b4f;
+  --ref-border: rgba(46, 107, 79, 0.25);
+  --link-ink: #3d5a8f;
+
+  /* code (partner register uses these on the reader; codeBg/codeInk from
+     Share Reader light theme) */
+  --code-bg: #f2efe8;
+  --code-ink: #3a362f;
+
+  /* warn / drift (information, not error) */
+  --warn-bg: #fbf4e2;
+  --warn-border: #e8d9ae;
+  --warn-ink: #7a6224;
+
+  /* danger / error — tint trio (low-emphasis: menu items, inline affordances, hover) */
+  --danger-bg: #fbefec;
+  --danger-bg-strong: #f6e2dc;
+  --danger-border: #ebccc4;
+  --danger-ink: #9c4a3c;
+  /* danger filled — commit button in tier-2+ dialogs */
+  --danger-solid: #a8412e;
+  --danger-solid-ink: #ffffff;
+
+  /* ok (green) + info (blue) status chips (catalog) */
+  --ok-bg: rgba(46, 107, 79, 0.1);
+  --ok-ink: #2e6b4f;
+  --info-bg: rgba(61, 90, 143, 0.1);
+  --info-ink: #3d5a8f;
+
+  /* diff */
+  --diff-add-bg: rgba(46, 107, 79, 0.08);
+  --diff-add-fg: #276046;
+  --diff-del-bg: rgba(156, 74, 60, 0.07);
+  --diff-del-fg: #9c4a3c;
+
+  /* audience badges — same lightness/chroma family (Hub Docs badge map) */
+  --badge-alice-bg: rgba(46, 107, 79, 0.1);
+  --badge-alice-ink: #2e6b4f;
+  --badge-bob-bg: rgba(95, 70, 150, 0.09);
+  --badge-bob-ink: #5f4696;
+  --badge-team-bg: rgba(61, 90, 143, 0.09);
+  --badge-team-ink: #3d5a8f;
+  --badge-external-bg: rgba(160, 110, 40, 0.1);
+  --badge-external-ink: #8a6420;
+
+  /* font stacks — wired from next/font in layout.tsx */
+  --font-serif: var(--font-newsreader), Georgia, "Times New Roman", serif;
+  --font-sans: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "SFMono-Regular", Menlo, monospace;
+}
+
+[data-theme="dark"] {
+  /* warm neutrals — Hub Docs dark theme */
+  --bg: #151311;
+  --surface: #1d1a17;
+  --surface-alt: #211e1a;
+  --ink: #ece7df;
+  --muted: #a39b8f;
+  --faint: #7a7367;
+
+  --hairline: #2e2a24;
+  --hairline-strong: #464037;
+  --hover: #262220;
+  --nav-active: #2c2823;
+  --skeleton: #2a2620;
+
+  --accent: #7fbf9b;
+  --accent-ring: rgba(127, 191, 155, 0.18);
+
+  --ref-bg: rgba(127, 191, 155, 0.1);
+  --ref-ink: #8fcba8;
+  --ref-border: rgba(127, 191, 155, 0.28);
+  --link-ink: #b7c9e8;
+
+  /* code — Share Reader dark theme codeBg/codeInk */
+  --code-bg: #1e1b17;
+  --code-ink: #d8d2c8;
+
+  --warn-bg: #272116;
+  --warn-border: #4a3d24;
+  --warn-ink: #d9be82;
+
+  --danger-bg: #291b19;
+  --danger-bg-strong: #33211d;
+  --danger-border: #52302c;
+  --danger-ink: #e2a097;
+  --danger-solid: #9e4435;
+  --danger-solid-ink: #f7ece8;
+
+  --ok-bg: rgba(127, 191, 155, 0.13);
+  --ok-ink: #8fcba8;
+  --info-bg: rgba(150, 175, 220, 0.13);
+  --info-ink: #a8bee2;
+
+  --diff-add-bg: rgba(127, 191, 155, 0.1);
+  --diff-add-fg: #9ed4b5;
+  --diff-del-bg: rgba(226, 160, 151, 0.09);
+  --diff-del-fg: #d99a90;
+
+  --badge-alice-bg: rgba(127, 191, 155, 0.12);
+  --badge-alice-ink: #8fcba8;
+  --badge-bob-bg: rgba(170, 150, 220, 0.12);
+  --badge-bob-ink: #b6a4de;
+  --badge-team-bg: rgba(150, 175, 220, 0.12);
+  --badge-team-ink: #a8bee2;
+  --badge-external-bg: rgba(217, 190, 130, 0.12);
+  --badge-external-ink: #d9be82;
+}
+
+/* Map tokens into Tailwind v4 so utilities like font-serif/font-mono,
+   bg-bg, text-ink, border-hairline resolve. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+  --color-accent: var(--accent);
+
+  --font-serif: var(--font-serif);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  transition:
+    background 0.25s ease,
+    color 0.25s ease;
+}
+
+/* =========================================================================
+   Markdown registers
+   .md-partner — editorial, Newsreader 19px/1.72, 680px measure (Share Reader)
+   .md-operator — dense, system sans 14px/1.6 (operator surfaces)
+   Same structural rules; the two wrappers differ in font, size, and rhythm.
+   ========================================================================= */
+
+.md-partner {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  line-height: 1.72;
+  color: var(--ink);
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.md-operator {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* --- catalog auto-link refs (staff doc/card readers) --- */
+.md-partner a.catalog-ref,
+.md-operator a.catalog-ref {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--ref-bg);
+  color: var(--ref-ink);
+  border: 1px solid var(--ref-border);
+  border-radius: 4px;
+  padding: 0 5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.md-partner a.catalog-ref:hover,
+.md-operator a.catalog-ref:hover {
+  background: var(--ref-border);
+}
+
+/* --- headings --- */
+.md-partner h1 {
+  font-size: clamp(34px, 6vw, 46px);
+  line-height: 1.12;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  margin: 0 0 14px;
+}
+.md-partner h2 {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 48px 0 16px;
+}
+.md-partner h3 {
+  font-size: 21px;
+  font-weight: 600;
+  margin: 36px 0 12px;
+}
+
+.md-operator h1 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 10px;
+}
+.md-operator h2 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 28px 0 10px;
+}
+.md-operator h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 20px 0 8px;
+}
+
+/* --- paragraphs / lists --- */
+.md-partner p {
+  margin: 0 0 24px;
+}
+.md-partner ul,
+.md-partner ol {
+  margin: 0 0 28px;
+  padding: 0 0 0 22px;
+}
+.md-partner li {
+  margin-bottom: 10px;
+}
+
+.md-operator p {
+  margin: 0 0 14px;
+}
+.md-operator ul,
+.md-operator ol {
+  margin: 0 0 16px;
+  padding: 0 0 0 20px;
+}
+.md-operator li {
+  margin-bottom: 5px;
+}
+
+.md-partner strong,
+.md-operator strong {
+  font-weight: 600;
+}
+
+/* --- links: external = desaturated blue, underlined --- */
+.md-partner a,
+.md-operator a {
+  color: var(--link-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* --- blockquote --- */
+.md-partner blockquote {
+  margin: 0 0 28px;
+  padding: 4px 0 4px 22px;
+  border-left: 2px solid var(--accent);
+  font-style: italic;
+  line-height: 1.66;
+  color: var(--muted);
+}
+.md-operator blockquote {
+  margin: 0 0 16px;
+  padding: 2px 0 2px 16px;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+}
+
+/* --- tables: hairline borders, mono uppercase head --- */
+.md-partner table,
+.md-operator table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.md-partner table {
+  font-size: 16px;
+  line-height: 1.45;
+  margin: 0 0 28px;
+}
+.md-operator table {
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0 0 16px;
+}
+.md-partner th,
+.md-operator th {
+  text-align: left;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 2px solid var(--ink);
+}
+.md-partner th {
+  font-size: 13.5px;
+  padding: 10px 14px 10px 0;
+}
+.md-operator th {
+  font-size: 11px;
+  padding: 7px 12px 7px 0;
+}
+.md-partner td {
+  padding: 12px 14px 12px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.md-operator td {
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* --- inline code + code blocks --- */
+.md-partner :not(pre) > code,
+.md-operator :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.md-partner pre,
+.md-operator pre {
+  margin: 0 0 28px;
+  padding: 18px 20px;
+  background: var(--code-bg);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  line-height: 1.6;
+  color: var(--code-ink);
+}
+.md-partner pre {
+  font-size: 13.5px;
+}
+.md-operator pre {
+  font-size: 12.5px;
+  margin-bottom: 16px;
+}
+.md-partner pre code,
+.md-operator pre code {
+  font-family: inherit;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* --- horizontal rule + images --- */
+.md-partner hr,
+.md-operator hr {
+  border: none;
+  border-top: 1px solid var(--hairline);
+  margin: 32px 0;
+}
+.md-partner img,
+.md-operator img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* =========================================================================
+   highlight.js token theme — compact, palette-fitted (not a vendored theme).
+   Maps hljs token classes onto the design's muted warm colors + green accent.
+   ========================================================================= */
+
+.hljs {
+  color: var(--code-ink);
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--faint);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-type,
+.hljs-name {
+  color: var(--accent);
+  font-weight: 500;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--badge-team-ink);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-built_in,
+.hljs-builtin-name {
+  color: var(--badge-external-ink);
+}
+.hljs-title,
+.hljs-class .hljs-title,
+.hljs-function .hljs-title,
+.hljs-attr {
+  color: var(--badge-bob-ink);
+}
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--ink);
+}
+.hljs-meta,
+.hljs-deletion {
+  color: var(--danger-ink);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
