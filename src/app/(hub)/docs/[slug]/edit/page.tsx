@@ -4,18 +4,17 @@ import { notFound } from "next/navigation";
 import { getPrincipal, isStaff } from "@/lib/auth";
 import { getDocBySlug, scopeForPrincipal } from "@/lib/docs";
 import { canPublishVersion } from "@/lib/permissions";
-import AudienceBadge from "@/components/AudienceBadge";
 import EditorLoader from "./EditorLoader";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Propose-edit route. Staff-only, audience-scoped, markdown docs only.
+ * Propose-edit route. Staff-only, space-scoped, markdown docs only.
  *
- * Gating mirrors the doc page + the revisions API: a member on a hidden-audience
- * doc gets a uniform notFound() (no existence leak); an html doc or an anonymous
- * visitor also 404s (anonymous is gated at the hub layout, but we defend here
- * too). The editor itself is a lazy-loaded client island.
+ * Gating mirrors the doc page + the revisions API: a member on a doc in a space
+ * they can't see gets a uniform notFound() (no existence leak); an html doc or an
+ * anonymous visitor also 404s (anonymous is gated at the hub layout, but we
+ * defend here too). The editor itself is a lazy-loaded client island.
  */
 export default async function DocEditPage({
   params,
@@ -67,7 +66,6 @@ export default async function DocEditPage({
         <h1 style={{ fontSize: 22, fontWeight: 600, letterSpacing: "-0.015em", margin: 0 }}>
           {canPublishDirect ? "Edit" : "Propose edit"} · {doc.title}
         </h1>
-        <AudienceBadge audience={doc.audience} />
       </div>
 
       <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 20px", lineHeight: 1.6 }}>

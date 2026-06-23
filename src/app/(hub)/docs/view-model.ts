@@ -13,8 +13,7 @@ import { dateStamp } from "./tree-model";
  * with no DB coupling — and are RE-EXPORTED here so existing server imports and
  * tests that reference `./view-model` keep working unchanged. Client components
  * (DocsTree, PathPicker) import from `./tree-model` directly to avoid pulling
- * the DB layer (`@/lib/docs`, via the `canSeeAudience` re-export below) into the
- * browser bundle.
+ * the DB layer (`@/lib/docs`) into the browser bundle.
  */
 
 export {
@@ -48,17 +47,6 @@ export {
 // dateStamp is imported above for internal use in buildVersionRail; re-export it
 // for server callers (page.tsx) that import it from ./view-model.
 export { dateStamp };
-
-/**
- * Audience visibility check (DB-driven, async).
- *
- * Re-exported from the service layer (src/lib/docs.ts) — single source of
- * truth. Pages import from here; internally the service uses it directly.
- *
- * Admins see every doc. Members see only docs whose audience key is marked
- * `member_visible=1` in the `audiences` table (admin-configurable).
- */
-export { canSeeAudience } from "@/lib/docs";
 
 export type VersionRailItem = {
   id: number;

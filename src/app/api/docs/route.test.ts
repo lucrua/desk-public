@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences } from "@/test/db";
+import {
+  resetDb,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+  publishDocOk,
+} from "@/test/db";
 import { publishDoc, unpublishDoc } from "@/lib/docs";
 import { GET, POST } from "./route";
 import { GET as slugGET, DELETE as slugDELETE } from "./[slug]/route";
@@ -45,7 +51,6 @@ const validBody = {
   slug: "my-doc",
   title: "My Doc",
   sourcePath: "os/my-doc.md",
-  audience: "team",
   format: "md",
   content: "# Hello",
 };
@@ -53,7 +58,6 @@ const validBody = {
 describe("POST /api/docs", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
   });
 
   it("admin publish returns 200 with slug, versionId, isNewVersion, hubUrl", async () => {
@@ -127,17 +131,9 @@ describe("POST /api/docs", () => {
     expect(res.status).toBe(200);
   });
 
-  it("unknown audience key → 400 (audiences are data; create it in /admin first)", async () => {
-    const res = await POST(postReq({ ...validBody, audience: "no-such-audience" }, "admin"));
-    expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.error).toMatch(/unknown audience/i);
-  });
-
-  it("known audience key (seeded external:Acme) → 200", async () => {
-    const res = await POST(
-      postReq({ ...validBody, slug: "ext-pub", audience: "external:Acme" }, "admin"),
-    );
+  it("an `audience` field in the body is ignored, not rejected (vestigial)", async () => {
+    // Audience is vestigial under space-scoped visibility — any value is accepted.
+    const res = await POST(postReq({ ...validBody, slug: "any-aud", audience: "no-such-audience" }, "admin"));
     expect(res.status).toBe(200);
   });
 });
@@ -145,17 +141,16 @@ describe("POST /api/docs", () => {
 describe("GET /api/docs", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
   });
 
   it("admin gets all docs including unpublished", async () => {
     await publishDoc({
-      slug: "pub-doc", title: "Pub", sourcePath: "a.md", audience: "team",
-      format: "md", content: "hello", by: "admin",
+      slug: "pub-doc", title: "Pub", sourcePath: "a.md",
+      format: "md", content: "hello", by: "lucas",
     });
     await publishDoc({
-      slug: "unpub-doc", title: "Unpub", sourcePath: "b.md", audience: "team",
-      format: "md", content: "bye", by: "admin",
+      slug: "unpub-doc", title: "Unpub", sourcePath: "b.md",
+      format: "md", content: "bye", by: "lucas",
     });
     await unpublishDoc("unpub-doc");
 
@@ -165,16 +160,18 @@ describe("GET /api/docs", () => {
     expect(json.docs).toHaveLength(2);
   });
 
-  it("member only sees published docs", async () => {
+  it("member only sees published docs in their space", async () => {
     await publishDoc({
-      slug: "pub-doc", title: "Pub", sourcePath: "a.md", audience: "team",
-      format: "md", content: "hello", by: "admin",
+      slug: "pub-doc", title: "Pub", sourcePath: "a.md",
+      format: "md", content: "hello", by: "lucas",
     });
     await publishDoc({
-      slug: "unpub-doc", title: "Unpub", sourcePath: "b.md", audience: "team",
-      format: "md", content: "bye", by: "admin",
+      slug: "unpub-doc", title: "Unpub", sourcePath: "b.md",
+      format: "md", content: "bye", by: "lucas",
     });
     await unpublishDoc("unpub-doc");
+    // Make the dev member a reader of the default workspace so it sees docs there.
+    await seedDevMemberInDefaultSpace();
 
     const res = await GET(getReq("member"));
     expect(res.status).toBe(200);
@@ -192,7 +189,6 @@ describe("GET /api/docs", () => {
 describe("GET /api/docs/[slug]", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
   });
 
   it("returns 404 for unknown slug", async () => {
@@ -204,8 +200,8 @@ describe("GET /api/docs/[slug]", () => {
 
   it("returns 200 with doc + versions + content for known slug", async () => {
     await publishDoc({
-      slug: "my-doc", title: "My Doc", sourcePath: "x.md", audience: "team",
-      format: "md", content: "# Hello", by: "admin",
+      slug: "my-doc", title: "My Doc", sourcePath: "x.md",
+      format: "md", content: "# Hello", by: "lucas",
     });
     const res = await slugGET(slugGetReq("my-doc", "admin"), {
       params: Promise.resolve({ slug: "my-doc" }),
@@ -222,10 +218,12 @@ describe("GET /api/docs/[slug]", () => {
 
   it("member gets 404 for unpublished doc", async () => {
     await publishDoc({
-      slug: "my-doc", title: "My Doc", sourcePath: "x.md", audience: "team",
-      format: "md", content: "# Hello", by: "admin",
+      slug: "my-doc", title: "My Doc", sourcePath: "x.md",
+      format: "md", content: "# Hello", by: "lucas",
     });
     await unpublishDoc("my-doc");
+    // Even a member of the doc's space can't see it once unpublished.
+    await seedDevMemberInDefaultSpace();
 
     const res = await slugGET(slugGetReq("my-doc", "member"), {
       params: Promise.resolve({ slug: "my-doc" }),
@@ -235,8 +233,8 @@ describe("GET /api/docs/[slug]", () => {
 
   it("admin can see unpublished doc", async () => {
     await publishDoc({
-      slug: "my-doc", title: "My Doc", sourcePath: "x.md", audience: "team",
-      format: "md", content: "# Hello", by: "admin",
+      slug: "my-doc", title: "My Doc", sourcePath: "x.md",
+      format: "md", content: "# Hello", by: "lucas",
     });
     await unpublishDoc("my-doc");
 
@@ -257,13 +255,12 @@ describe("GET /api/docs/[slug]", () => {
 describe("DELETE /api/docs/[slug]", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
   });
 
   it("admin unpublishes existing doc → 200 {ok: true}", async () => {
     await publishDoc({
-      slug: "my-doc", title: "My Doc", sourcePath: "x.md", audience: "team",
-      format: "md", content: "# Hello", by: "admin",
+      slug: "my-doc", title: "My Doc", sourcePath: "x.md",
+      format: "md", content: "# Hello", by: "lucas",
     });
     const res = await slugDELETE(slugDeleteReq("my-doc", "admin"), {
       params: Promise.resolve({ slug: "my-doc" }),
@@ -282,8 +279,8 @@ describe("DELETE /api/docs/[slug]", () => {
 
   it("member → 403", async () => {
     await publishDoc({
-      slug: "my-doc", title: "My Doc", sourcePath: "x.md", audience: "team",
-      format: "md", content: "# Hello", by: "admin",
+      slug: "my-doc", title: "My Doc", sourcePath: "x.md",
+      format: "md", content: "# Hello", by: "lucas",
     });
     const res = await slugDELETE(slugDeleteReq("my-doc", "member"), {
       params: Promise.resolve({ slug: "my-doc" }),
@@ -300,18 +297,20 @@ describe("DELETE /api/docs/[slug]", () => {
 
   it("republish after DELETE clears unpublishedAt (smoke test via service)", async () => {
     await publishDoc({
-      slug: "my-doc", title: "My Doc", sourcePath: "x.md", audience: "team",
-      format: "md", content: "# Hello", by: "admin",
+      slug: "my-doc", title: "My Doc", sourcePath: "x.md",
+      format: "md", content: "# Hello", by: "lucas",
     });
     await slugDELETE(slugDeleteReq("my-doc", "admin"), {
       params: Promise.resolve({ slug: "my-doc" }),
     });
     // Republish via POST
     const res = await POST(postReq(
-      { slug: "my-doc", title: "My Doc", sourcePath: "x.md", audience: "team", format: "md", content: "# Hello" },
+      { slug: "my-doc", title: "My Doc", sourcePath: "x.md", format: "md", content: "# Hello" },
       "admin"
     ));
     expect(res.status).toBe(200);
+    // Make the dev member a reader of the default workspace so it sees the republished doc.
+    await seedDevMemberInDefaultSpace();
     // Now GET should work for member
     const getRes = await slugGET(slugGetReq("my-doc", "member"), {
       params: Promise.resolve({ slug: "my-doc" }),
@@ -320,19 +319,24 @@ describe("DELETE /api/docs/[slug]", () => {
   });
 });
 
-// ── Audience scoping: member API access limited to team docs ─────────────────
+// ── Space scoping: member API access limited to docs in their space ──────────
 
-describe("GET /api/docs — audience scoping (member vs non-team)", () => {
+describe("GET /api/docs — space scoping (member's space vs a private space)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
   });
 
-  it("member list EXCLUDES alice / bob / external docs", async () => {
-    await publishDoc({ slug: "team-doc", title: "Team", sourcePath: "a.md", audience: "team", format: "md", content: "t", by: "admin" });
-    await publishDoc({ slug: "alice-doc", title: "Alice", sourcePath: "b.md", audience: "alice", format: "md", content: "p", by: "admin" });
-    await publishDoc({ slug: "bob-doc", title: "Bob", sourcePath: "c.md", audience: "bob", format: "md", content: "d", by: "admin" });
-    await publishDoc({ slug: "ext-doc", title: "Ext", sourcePath: "d.md", audience: "external:Acme", format: "md", content: "e", by: "admin" });
+  it("member list EXCLUDES docs in spaces the member is not in", async () => {
+    // Visible doc: published with no spaceId → lands in the default workspace,
+    // which the dev member is a reader of.
+    await seedDevMemberInDefaultSpace();
+    await publishDocOk({ slug: "team-doc", title: "Team", sourcePath: "a.md", format: "md", content: "t", by: "lucas" });
+
+    // Hidden docs: a separate PRIVATE space the dev member is not a member of.
+    const ownerId = await seedUser({ email: "owner@test.local", displayName: "Owner", role: "admin" });
+    const privateSpace = await seedSpace({ slug: "private-space", ownerId, visibility: "private" });
+    await publishDocOk({ slug: "pedro-doc", title: "Pedro", sourcePath: "b.md", format: "md", content: "p", by: "lucas", spaceId: privateSpace });
+    await publishDocOk({ slug: "dani-doc", title: "Dani", sourcePath: "c.md", format: "md", content: "d", by: "lucas", spaceId: privateSpace });
 
     const res = await GET(getReq("member"));
     expect(res.status).toBe(200);
@@ -341,10 +345,12 @@ describe("GET /api/docs — audience scoping (member vs non-team)", () => {
     expect(json.docs[0].slug).toBe("team-doc");
   });
 
-  it("admin list INCLUDES all audiences", async () => {
-    await publishDoc({ slug: "team-doc", title: "Team", sourcePath: "a.md", audience: "team", format: "md", content: "t", by: "admin" });
-    await publishDoc({ slug: "alice-doc", title: "Alice", sourcePath: "b.md", audience: "alice", format: "md", content: "p", by: "admin" });
-    await publishDoc({ slug: "bob-doc", title: "Bob", sourcePath: "c.md", audience: "bob", format: "md", content: "d", by: "admin" });
+  it("admin list INCLUDES docs across all spaces", async () => {
+    await publishDocOk({ slug: "team-doc", title: "Team", sourcePath: "a.md", format: "md", content: "t", by: "lucas" });
+    const ownerId = await seedUser({ email: "owner@test.local", displayName: "Owner", role: "admin" });
+    const privateSpace = await seedSpace({ slug: "private-space", ownerId, visibility: "private" });
+    await publishDocOk({ slug: "pedro-doc", title: "Pedro", sourcePath: "b.md", format: "md", content: "p", by: "lucas", spaceId: privateSpace });
+    await publishDocOk({ slug: "dani-doc", title: "Dani", sourcePath: "c.md", format: "md", content: "d", by: "lucas", spaceId: privateSpace });
 
     const res = await GET(getReq("admin"));
     expect(res.status).toBe(200);
@@ -353,17 +359,23 @@ describe("GET /api/docs — audience scoping (member vs non-team)", () => {
   });
 });
 
-describe("GET /api/docs/[slug] — audience scoping (member vs non-team)", () => {
+describe("GET /api/docs/[slug] — space scoping (member's space vs a private space)", () => {
+  let privateSpace: number;
+
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
+    // Default workspace the dev member can read.
+    await seedDevMemberInDefaultSpace();
+    // A separate private space the dev member is NOT in.
+    const ownerId = await seedUser({ email: "owner@test.local", displayName: "Owner", role: "admin" });
+    privateSpace = await seedSpace({ slug: "private-space", ownerId, visibility: "private" });
   });
 
-  it("member GET of a alice doc → 404 (identical body to a missing-slug 404)", async () => {
-    await publishDoc({ slug: "alice-doc", title: "Alice", sourcePath: "b.md", audience: "alice", format: "md", content: "secret", by: "admin" });
+  it("member GET of a doc in a private space → 404 (identical body to a missing-slug 404)", async () => {
+    await publishDocOk({ slug: "pedro-doc", title: "Pedro", sourcePath: "b.md", format: "md", content: "secret", by: "lucas", spaceId: privateSpace });
 
-    const res = await slugGET(slugGetReq("alice-doc", "member"), {
-      params: Promise.resolve({ slug: "alice-doc" }),
+    const res = await slugGET(slugGetReq("pedro-doc", "member"), {
+      params: Promise.resolve({ slug: "pedro-doc" }),
     });
     expect(res.status).toBe(404);
 
@@ -379,26 +391,17 @@ describe("GET /api/docs/[slug] — audience scoping (member vs non-team)", () =>
     expect(missingJson).toHaveProperty("error");
   });
 
-  it("member GET of a bob doc → 404", async () => {
-    await publishDoc({ slug: "bob-doc", title: "Bob", sourcePath: "c.md", audience: "bob", format: "md", content: "secret", by: "admin" });
+  it("member GET of another doc in a private space → 404", async () => {
+    await publishDocOk({ slug: "dani-doc", title: "Dani", sourcePath: "c.md", format: "md", content: "secret", by: "lucas", spaceId: privateSpace });
 
-    const res = await slugGET(slugGetReq("bob-doc", "member"), {
-      params: Promise.resolve({ slug: "bob-doc" }),
+    const res = await slugGET(slugGetReq("dani-doc", "member"), {
+      params: Promise.resolve({ slug: "dani-doc" }),
     });
     expect(res.status).toBe(404);
   });
 
-  it("member GET of an external doc → 404", async () => {
-    await publishDoc({ slug: "ext-doc", title: "Ext", sourcePath: "d.md", audience: "external:Acme", format: "md", content: "secret", by: "admin" });
-
-    const res = await slugGET(slugGetReq("ext-doc", "member"), {
-      params: Promise.resolve({ slug: "ext-doc" }),
-    });
-    expect(res.status).toBe(404);
-  });
-
-  it("member GET of a team doc → 200 with content", async () => {
-    await publishDoc({ slug: "team-doc", title: "Team", sourcePath: "a.md", audience: "team", format: "md", content: "# Hello", by: "admin" });
+  it("member GET of a doc in their space → 200 with content", async () => {
+    await publishDocOk({ slug: "team-doc", title: "Team", sourcePath: "a.md", format: "md", content: "# Hello", by: "lucas" });
 
     const res = await slugGET(slugGetReq("team-doc", "member"), {
       params: Promise.resolve({ slug: "team-doc" }),
@@ -409,21 +412,21 @@ describe("GET /api/docs/[slug] — audience scoping (member vs non-team)", () =>
     expect(json.currentVersion.content).toBe("# Hello");
   });
 
-  it("admin GET of a alice doc → 200 with full content", async () => {
-    await publishDoc({ slug: "alice-doc", title: "Alice", sourcePath: "b.md", audience: "alice", format: "md", content: "admin sees this", by: "admin" });
+  it("admin GET of a doc in a private space → 200 with full content", async () => {
+    await publishDocOk({ slug: "pedro-doc", title: "Pedro", sourcePath: "b.md", format: "md", content: "admin sees this", by: "lucas", spaceId: privateSpace });
 
-    const res = await slugGET(slugGetReq("alice-doc", "admin"), {
-      params: Promise.resolve({ slug: "alice-doc" }),
+    const res = await slugGET(slugGetReq("pedro-doc", "admin"), {
+      params: Promise.resolve({ slug: "pedro-doc" }),
     });
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.doc.slug).toBe("alice-doc");
+    expect(json.doc.slug).toBe("pedro-doc");
     expect(json.currentVersion.content).toBe("admin sees this");
   });
 
   it("versions list omits content (existing rule preserved)", async () => {
-    await publishDoc({ slug: "team-doc", title: "Team", sourcePath: "a.md", audience: "team", format: "md", content: "v1", by: "admin" });
-    await publishDoc({ slug: "team-doc", title: "Team", sourcePath: "a.md", audience: "team", format: "md", content: "v2", by: "admin" });
+    await publishDocOk({ slug: "team-doc", title: "Team", sourcePath: "a.md", format: "md", content: "v1", by: "lucas" });
+    await publishDocOk({ slug: "team-doc", title: "Team", sourcePath: "a.md", format: "md", content: "v2", by: "lucas" });
 
     const res = await slugGET(slugGetReq("team-doc", "admin"), {
       params: Promise.resolve({ slug: "team-doc" }),

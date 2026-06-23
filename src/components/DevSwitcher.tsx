@@ -19,7 +19,7 @@ function writeRoleCookie(role: Role): void {
 }
 
 /**
- * Floating dev-only role switcher (bottom-center pill).
+ * Floating dev-only role switcher (design handoff: bottom-center pill).
  *
  * Writes the `hub-dev-role` cookie that the dev auth provider reads, then
  * router.refresh() so the server layout re-resolves the principal. Selecting

@@ -1,6 +1,6 @@
 import { eq, and, gt, inArray, asc, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "@/db";
-import { events, docs, audiences, audienceMembers } from "@/db/schema";
+import { events, docs, spaces, spaceMembers } from "@/db/schema";
 
 /**
  * Event-log service — the append-only change-cursor that backs sync (S2+),
@@ -70,6 +70,14 @@ export const EVENT_KINDS = [
   // owner via setDocOwner. Payload: slug, fromUserId, toUserId. Admin-only in
   // the event feed (ownership is an internal admin-audit event).
   "doc.owner_changed",
+  // Document-host (Phase 1) — space + membership mutations. Spaces are the
+  // WRITE boundary; their lifecycle is an internal admin-audit surface (no doc
+  // scoping). Payloads carry the space slug + userId/role only, never content.
+  // Admin-only in the feed (like doc.owner_changed).
+  "space.created",
+  "space.updated",
+  "space.member_added",
+  "space.member_removed",
 ] as const;
 
 export type EventKind = (typeof EVENT_KINDS)[number];
@@ -80,6 +88,10 @@ const ADMIN_ONLY_KINDS = new Set<string>([
   "user.email_added",
   "user.email_removed",
   "doc.owner_changed",
+  "space.created",
+  "space.updated",
+  "space.member_added",
+  "space.member_removed",
 ]);
 
 /**
@@ -165,12 +177,12 @@ export type ListEventsOpts = {
   kinds?: string[];
   /** Page size cap. Defaults + max enforced inside. */
   limit?: number;
-  /** Viewer scope — admins see everything; members are audience-scoped. */
+  /** Viewer scope — admins see everything; members are space-scoped. */
   viewer: "admin" | "member";
   /**
-   * The member's resolved users-row id (Audiences v2). Decides which
-   * membership-targeted audiences this member may see in the feed. Null/absent
-   * → flag-only visibility (fail-closed). Ignored for admins.
+   * The member's resolved users-row id. Decides which spaces the member belongs
+   * to, hence which docs' events they may see. Null/absent → public/unlisted
+   * spaces only (fail-closed). Ignored for admins.
    */
   userId?: number | null;
 };
@@ -183,14 +195,13 @@ export const MAX_EVENTS_LIMIT = 1000;
  * List events after `since`, oldest-first (ascending cursor — consumers replay
  * in order and advance `since` to the last id seen).
  *
- * Audience scoping (server-side, fail-closed):
+ * Space scoping (server-side, fail-closed):
  *   - admin: every event.
- *   - member: doc-scoped events ONLY for docs whose audience is member-visible
- *     to THIS member — flag-visible (member_visible=1) OR an audience the member
- *     belongs to (Audiences v2). Joined on docs.id; admin-only kinds
- *     (user.approved) are excluded entirely; any unknown kind is treated as
- *     doc-scoped and excluded unless its doc is visible (so a future kind can't
- *     leak by default).
+ *   - member: doc-scoped events ONLY for docs whose SPACE is visible to THIS
+ *     member — a space they belong to OR a public/unlisted space. Joined on
+ *     docs.id; admin-only kinds (user.approved) are excluded entirely; any
+ *     unknown kind is treated as doc-scoped and excluded unless its doc is
+ *     visible (so a future kind can't leak by default).
  *
  * Payloads are returned as-is (they already carry references only).
  */
@@ -225,32 +236,31 @@ export async function listEvents(opts: ListEventsOpts): Promise<EventRow[]> {
 
   // Member visibility is a union of two disjoint sets:
   //   (a) staff-visible board kinds (card.*/bucket.*) — internal coordination
-  //       surface, no audience scoping, no docId.
-  //   (b) doc-scoped kinds whose referenced doc has a member-visible audience.
+  //       surface, no space scoping, no docId.
+  //   (b) doc-scoped kinds whose referenced doc lives in a space this member can
+  //       see.
   // Admin-only kinds (user.approved) are excluded from both. We compute the set
-  // of member-visible audience keys once, then express the union as a LEFT JOIN
-  // on docs with an OR predicate (a board event has no doc, so the join misses;
-  // we admit it via the staff-visible branch).
-  // Flag-visible audience keys (everyone signed in) ∪ keys this member belongs
-  // to (Audiences v2 membership). userId null → membership half empty (fail-
-  // closed to flag-only, matching the pre-v2 behaviour).
-  const flagKeys = (
+  // of member-visible space ids once, then express the union as a LEFT JOIN on
+  // docs with an OR predicate (a board event has no doc, so the join misses; we
+  // admit it via the staff-visible branch).
+  // Public/unlisted spaces (everyone signed in) ∪ spaces this member belongs to.
+  // userId null → membership half empty (fail-closed to public/unlisted only).
+  const openSpaceIds = (
     await db
-      .select({ key: audiences.key })
-      .from(audiences)
-      .where(eq(audiences.memberVisible, 1))
-  ).map((r) => r.key);
-  const memberKeys =
+      .select({ id: spaces.id })
+      .from(spaces)
+      .where(inArray(spaces.visibility, ["public", "unlisted"]))
+  ).map((r) => r.id);
+  const memberSpaceIds =
     opts.userId != null
       ? (
           await db
-            .select({ key: audiences.key })
-            .from(audienceMembers)
-            .innerJoin(audiences, eq(audiences.id, audienceMembers.audienceId))
-            .where(eq(audienceMembers.userId, opts.userId))
-        ).map((r) => r.key)
+            .select({ spaceId: spaceMembers.spaceId })
+            .from(spaceMembers)
+            .where(eq(spaceMembers.userId, opts.userId))
+        ).map((r) => r.spaceId)
       : [];
-  const visibleKeys = [...new Set([...flagKeys, ...memberKeys])];
+  const visibleSpaceIds = [...new Set([...openSpaceIds, ...memberSpaceIds])];
 
   // Exclude admin-only kinds explicitly (defense in depth — even if a caller
   // passed one in `kinds`).
@@ -265,11 +275,11 @@ export async function listEvents(opts: ListEventsOpts): Promise<EventRow[]> {
     sql`, `,
   )})`;
 
-  // Doc-scoped branch: a referenced doc whose audience is member-visible. With
-  // no visible audiences this branch admits nothing.
+  // Doc-scoped branch: a referenced doc whose space is member-visible. With no
+  // visible spaces this branch admits nothing.
   const docScopedBranch =
-    visibleKeys.length > 0
-      ? sql`(${events.docId} is not null and ${inArray(docs.audience, visibleKeys)})`
+    visibleSpaceIds.length > 0
+      ? sql`(${events.docId} is not null and ${inArray(docs.spaceId, visibleSpaceIds)})`
       : sql`false`;
 
   conds.push(sql`(${staffVisibleBranch} or ${docScopedBranch})`);

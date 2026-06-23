@@ -11,11 +11,11 @@ const NOW = new Date("2026-06-10T12:00:00Z");
 function share(over: Partial<ShareListItem> = {}): ShareListItem {
   return {
     id: 1,
-    label: "Alice",
+    label: "Pedro",
     mode: "doc",
-    docSlug: "notes-overview",
+    docSlug: "market-context",
     pathPrefix: null,
-    createdBy: "admin",
+    createdBy: "lucas",
     createdAt: new Date("2026-06-01T00:00:00Z"),
     allowComments: true,
     expiresAt: null,
@@ -41,6 +41,7 @@ function doc(over: Partial<DocListItem> = {}): DocListItem {
     unresolvedComments: 0,
     unpublishedAt: null,
     ownerUserId: null,
+    spaceSlug: null,
     ...over,
   };
 }
@@ -68,7 +69,7 @@ describe("toShareRow", () => {
     expect(r.neverViewed).toBe(true);
     expect(r.canRevoke).toBe(true);
     expect(r.isRevoked).toBe(false);
-    expect(r.scope).toBe("doc:notes-overview");
+    expect(r.scope).toBe("doc:market-context");
   });
 
   it("future expiry within window → expiringSoon", () => {
@@ -129,9 +130,9 @@ describe("computeStats", () => {
 function user(over: Partial<UserListItem> = {}): UserListItem {
   return {
     id: 1,
-    email: "bob@example.com",
+    email: "dani@example.com",
     tokenName: null,
-    displayName: "Bob",
+    displayName: "Dani",
     role: "member",
     active: 1,
     createdAt: new Date("2026-06-01T00:00:00Z"),
@@ -140,15 +141,15 @@ function user(over: Partial<UserListItem> = {}): UserListItem {
 }
 
 describe("toUserRow — admin model v2 (stored role is the truth)", () => {
-  const adminSelf: Principal = { kind: "admin", name: "Admin", email: "owner@example.com" };
+  const adminSelf: Principal = { kind: "admin", name: "Lucas", email: "lucas@example.org" };
   const tokenSelf: Principal = { kind: "admin", name: "CI", tokenName: "ci-publisher" };
 
   it("maps fields and stamps created date; active=1 → true", () => {
     const r = toUserRow(user(), adminSelf, undefined);
     expect(r).toMatchObject({
       id: 1,
-      displayName: "Bob",
-      email: "bob@example.com",
+      displayName: "Dani",
+      email: "dani@example.com",
       tokenName: null,
       role: "member",
       active: true,
@@ -162,7 +163,7 @@ describe("toUserRow — admin model v2 (stored role is the truth)", () => {
   });
 
   it("isSelf true on email match (case-insensitive)", () => {
-    const r = toUserRow(user({ email: "OWNER@EXAMPLE.COM" }), adminSelf, undefined);
+    const r = toUserRow(user({ email: "LUCAS@EXAMPLE.ORG" }), adminSelf, undefined);
     expect(r.isSelf).toBe(true);
   });
 
@@ -187,7 +188,7 @@ describe("toUserRow — admin model v2 (stored role is the truth)", () => {
   it("role='admin' in stored column → 'admin' chip (regardless of any adminEmail arg)", () => {
     expect(toUserRow(user({ role: "admin" }), adminSelf, undefined).role).toBe("admin");
     // adminEmail arg is ignored — stored column wins
-    expect(toUserRow(user({ role: "admin" }), adminSelf, "owner@example.com").role).toBe("admin");
+    expect(toUserRow(user({ role: "admin" }), adminSelf, "lucas@example.org").role).toBe("admin");
   });
 
   it("role='member' in stored column → 'member' chip", () => {
@@ -197,14 +198,14 @@ describe("toUserRow — admin model v2 (stored role is the truth)", () => {
   it("stored role=member row → member even if adminEmail matches (ADMIN_EMAIL ignored)", () => {
     // The admin email argument has NO effect on role derivation.
     expect(
-      toUserRow(user({ email: "owner@example.com", role: "member" }), adminSelf, "owner@example.com").role,
+      toUserRow(user({ email: "lucas@example.org", role: "member" }), adminSelf, "lucas@example.org").role,
     ).toBe("member"); // stored member wins
   });
 
   it("stored role=admin row → admin even if email doesn't match adminEmail", () => {
     // Stored admin wins over any email comparison.
     expect(
-      toUserRow(user({ email: "bob@example.com", role: "admin" }), adminSelf, "owner@example.com").role,
+      toUserRow(user({ email: "dani@example.com", role: "admin" }), adminSelf, "lucas@example.org").role,
     ).toBe("admin");
   });
 
@@ -222,16 +223,15 @@ describe("toUserRow — admin model v2 (stored role is the truth)", () => {
 
   // ── canToggleRole ──────────────────────────────────────────────────────────
   it("canToggleRole=true for a non-self admin row (can demote others)", () => {
-    const row = toUserRow(user({ email: "other@example.com", role: "admin" }), adminSelf, undefined, [], [], 2);
+    const row = toUserRow(user({ email: "other@example.com", role: "admin" }), adminSelf, undefined, [], 2);
     expect(row.canToggleRole).toBe(true);
   });
 
   it("canToggleRole=false only when isSelf && last active admin", () => {
     const self = toUserRow(
-      user({ email: "owner@example.com", role: "admin" }),
+      user({ email: "lucas@example.org", role: "admin" }),
       adminSelf,
       undefined,
-      [],
       [],
       1, // only one active admin
     );
@@ -241,10 +241,9 @@ describe("toUserRow — admin model v2 (stored role is the truth)", () => {
 
   it("canToggleRole=true when isSelf but NOT last admin", () => {
     const self = toUserRow(
-      user({ email: "owner@example.com", role: "admin" }),
+      user({ email: "lucas@example.org", role: "admin" }),
       adminSelf,
       undefined,
-      [],
       [],
       2, // two admins — can still demote self
     );
@@ -253,18 +252,18 @@ describe("toUserRow — admin model v2 (stored role is the truth)", () => {
   });
 
   it("canToggleRole=true for member rows (promote is always allowed)", () => {
-    const row = toUserRow(user({ email: "bob@example.com", role: "member" }), adminSelf, undefined, [], [], 1);
+    const row = toUserRow(user({ email: "dani@example.com", role: "member" }), adminSelf, undefined, [], 1);
     expect(row.canToggleRole).toBe(true);
   });
 
   // ── multiple emails per user ──────────────────────────────────────────────
   it("emails defaults to the primary when no set is passed", () => {
-    const r = toUserRow(user({ email: "bob@example.com" }), adminSelf, undefined);
-    expect(r.emails).toEqual([{ email: "bob@example.com", primary: true }]);
+    const r = toUserRow(user({ email: "dani@example.com" }), adminSelf, undefined);
+    expect(r.emails).toEqual([{ email: "dani@example.com", primary: true }]);
   });
 
   it("emails passes the explicit set through", () => {
-    const r = toUserRow(user({ email: "p@example.com" }), adminSelf, undefined, [], [
+    const r = toUserRow(user({ email: "p@example.com" }), adminSelf, undefined, [
       { email: "p@example.com", primary: true },
       { email: "alias@example.com", primary: false },
     ]);
@@ -275,18 +274,17 @@ describe("toUserRow — admin model v2 (stored role is the truth)", () => {
     // Principal carries the full email set (logged in via the secondary).
     const principal: Principal = {
       kind: "admin",
-      name: "Admin",
-      email: "owner@example.com",
-      emails: ["owner@example.com", "admin@example.com"],
+      name: "Lucas",
+      email: "lucas@example.org",
+      emails: ["lucas@example.org", "lucas@example.net"],
     };
     const r = toUserRow(
-      user({ email: "owner@example.com" }),
+      user({ email: "lucas@example.org" }),
       principal,
       undefined,
-      [],
       [
-        { email: "owner@example.com", primary: true },
-        { email: "admin@example.com", primary: false },
+        { email: "lucas@example.org", primary: true },
+        { email: "lucas@example.net", primary: false },
       ],
     );
     expect(r.isSelf).toBe(true);
@@ -297,7 +295,7 @@ describe("toAccessRequestRow", () => {
   function req(over: Partial<AccessRequestListItem> = {}): AccessRequestListItem {
     return {
       id: 7,
-      email: "bob.silva@example.com",
+      email: "dani.silva@example.com",
       firstSeenAt: new Date("2026-06-01T00:00:00Z"),
       lastSeenAt: new Date("2026-06-09T00:00:00Z"),
       hits: 3,
@@ -309,7 +307,7 @@ describe("toAccessRequestRow", () => {
     const row = toAccessRequestRow(req());
     expect(row).toMatchObject({
       id: 7,
-      email: "bob.silva@example.com",
+      email: "dani.silva@example.com",
       firstSeen: "2026-06-01",
       lastSeen: "2026-06-09",
       hits: 3,
@@ -317,7 +315,7 @@ describe("toAccessRequestRow", () => {
   });
 
   it("default display name is the capitalized local-part", () => {
-    expect(toAccessRequestRow(req({ email: "alice@example.com" })).defaultDisplayName).toBe("Alice");
+    expect(toAccessRequestRow(req({ email: "pedro@example.com" })).defaultDisplayName).toBe("Pedro");
     expect(toAccessRequestRow(req({ email: "Ana.B@example.com" })).defaultDisplayName).toBe("Ana.B");
   });
 });

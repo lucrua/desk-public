@@ -22,10 +22,10 @@ const DOC = {
   slug: "test-doc",
   title: "Test Doc",
   sourcePath: "os/test.md",
-  audience: "external:alice",
+  audience: "external:pedro",
   format: "md" as const,
   content: "# Hello",
-  by: "admin",
+  by: "lucas",
 };
 
 describe("GET /api/shares/[id]/views", () => {
@@ -35,7 +35,7 @@ describe("GET /api/shares/[id]/views", () => {
   });
 
   it("admin → 200 with views (uaLabel applied, raw ip preserved)", async () => {
-    const share = await createShareOk("test-doc", "Alice", "admin");
+    const share = await createShareOk("test-doc", "Pedro", "lucas");
     const resolved = await resolveShare(share!.token);
     const versionId = resolved!.version!.id;
     await recordView(
@@ -58,7 +58,7 @@ describe("GET /api/shares/[id]/views", () => {
   });
 
   it("member → 403", async () => {
-    const share = await createShareOk("test-doc", "Alice", "admin");
+    const share = await createShareOk("test-doc", "Pedro", "lucas");
     const res = await GET(viewsReq(String(share!.id), "member"), {
       params: Promise.resolve({ id: String(share!.id) }),
     });
@@ -67,7 +67,7 @@ describe("GET /api/shares/[id]/views", () => {
   });
 
   it("anonymous → 403", async () => {
-    const share = await createShareOk("test-doc", "Alice", "admin");
+    const share = await createShareOk("test-doc", "Pedro", "lucas");
     const res = await GET(viewsReq(String(share!.id), "anonymous"), {
       params: Promise.resolve({ id: String(share!.id) }),
     });
@@ -91,7 +91,7 @@ describe("GET /api/shares/[id]/views", () => {
   });
 
   it("rawUa truncated to 80 chars; hostile UA stays inert text", async () => {
-    const share = await createShareOk("test-doc", "Alice", "admin");
+    const share = await createShareOk("test-doc", "Pedro", "lucas");
     const resolved = await resolveShare(share!.token);
     const versionId = resolved!.version!.id;
     const hostile = '<img src=x onerror=alert(1)>' + "A".repeat(200);

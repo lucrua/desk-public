@@ -10,7 +10,7 @@ const DOC = {
   audience: "team",
   format: "md" as const,
   content: "# v1",
-  by: "admin",
+  by: "lucas",
 };
 
 const OTHER = { ...DOC, slug: "other-doc", content: "# other" };
@@ -23,7 +23,7 @@ describe("pinned shares", () => {
 
   it("a pinned share resolves the pinned version even after the doc advances", async () => {
     const v1 = await publishDocOk(DOC);
-    const share = await createShareOk("pin-doc", "Pinned to v1", "admin", undefined, v1.versionId);
+    const share = await createShareOk("pin-doc", "Pinned to v1", "lucas", undefined, v1.versionId);
 
     // Advance the doc to v2.
     await publishDocOk({ ...DOC, content: "# v2" });
@@ -37,7 +37,7 @@ describe("pinned shares", () => {
 
   it("a live (unpinned) share follows the current version", async () => {
     await publishDocOk(DOC);
-    const share = await createShareOk("pin-doc", "Live", "admin");
+    const share = await createShareOk("pin-doc", "Live", "lucas");
     await publishDocOk({ ...DOC, content: "# v2" });
 
     const resolved = await resolveShare(share.token);
@@ -47,7 +47,7 @@ describe("pinned shares", () => {
 
   it("a pinned share of an UNPUBLISHED doc still 404s (unpublish kills links)", async () => {
     const v1 = await publishDocOk(DOC);
-    const share = await createShareOk("pin-doc", "Pinned", "admin", undefined, v1.versionId);
+    const share = await createShareOk("pin-doc", "Pinned", "lucas", undefined, v1.versionId);
     await unpublishDoc("pin-doc");
 
     const resolved = await resolveShare(share.token);
@@ -58,22 +58,22 @@ describe("pinned shares", () => {
     await publishDocOk(DOC);
     const otherV = await publishDocOk(OTHER);
 
-    const out = await createShare("pin-doc", "Bad pin", "admin", undefined, otherV.versionId);
+    const out = await createShare("pin-doc", "Bad pin", "lucas", undefined, otherV.versionId);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.error).toBe("pinned-version-not-found");
   });
 
   it("createShare with a non-existent version id → error", async () => {
     await publishDocOk(DOC);
-    const out = await createShare("pin-doc", "Bad pin", "admin", undefined, 99999);
+    const out = await createShare("pin-doc", "Bad pin", "lucas", undefined, 99999);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.error).toBe("pinned-version-not-found");
   });
 
   it("listSharesForDoc surfaces pinnedVersionId (for the per-doc panel chip)", async () => {
     const v1 = await publishDocOk(DOC);
-    await createShareOk("pin-doc", "Pinned", "admin", undefined, v1.versionId);
-    await createShareOk("pin-doc", "Live", "admin");
+    await createShareOk("pin-doc", "Pinned", "lucas", undefined, v1.versionId);
+    await createShareOk("pin-doc", "Live", "lucas");
 
     const rows = await listSharesForDoc("pin-doc");
     const pinned = rows.find((r) => r.label === "Pinned");

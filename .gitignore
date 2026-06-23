@@ -19,7 +19,6 @@
 
 # production
 /build
-/data
 
 # misc
 .DS_Store
@@ -37,6 +36,10 @@ yarn-error.log*
 
 # vercel
 .vercel
+
+# document-host on-disk state (bare git repos — the canon; backed up off-box,
+# never committed into THIS repo). Override the root via DESK_DATA_DIR.
+/.desk-data
 
 # typescript
 *.tsbuildinfo

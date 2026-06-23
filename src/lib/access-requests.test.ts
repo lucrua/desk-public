@@ -45,14 +45,14 @@ describe("access-requests service", () => {
 
   describe("approveAccessRequest", () => {
     it("creates a member user + deletes the request → ok", async () => {
-      const req = await seedRequest("bob@example.com");
+      const req = await seedRequest("dani@example.com");
       const result = await approveAccessRequest(req.id);
       expect(result.status).toBe("ok");
 
       const users = await listUsers();
       expect(users).toHaveLength(1);
       expect(users[0]).toMatchObject({
-        email: "bob@example.com",
+        email: "dani@example.com",
         role: "member",
         active: 1,
       });
@@ -61,9 +61,9 @@ describe("access-requests service", () => {
     });
 
     it("defaults displayName to the capitalized email local-part", async () => {
-      const req = await seedRequest("alice.silva@example.com");
+      const req = await seedRequest("pedro.silva@example.com");
       await approveAccessRequest(req.id);
-      expect((await listUsers())[0].displayName).toBe("Alice.silva");
+      expect((await listUsers())[0].displayName).toBe("Pedro.silva");
     });
 
     it("uses an explicit displayName when supplied (trimmed)", async () => {
@@ -104,8 +104,8 @@ describe("access-requests service", () => {
 
   describe("approveAccessRequest (alias of existing user)", () => {
     it("adds the email to the target user, creates NO new user, deletes the request", async () => {
-      const target = await createUser({ email: "owner@example.com", displayName: "Admin" });
-      const req = await seedRequest("admin@example.com");
+      const target = await createUser({ email: "lucas@example.org", displayName: "Lucas" });
+      const req = await seedRequest("lucas@example.net");
 
       const result = await approveAccessRequest(req.id, { aliasOfUserId: target!.id });
       expect(result).toEqual({ status: "ok", userId: target!.id });
@@ -115,11 +115,11 @@ describe("access-requests service", () => {
       // The email is now on the target.
       const emails = await listUserEmails(target!.id);
       expect(emails!.map((e) => e.email).sort()).toEqual([
-        "admin@example.com",
-        "owner@example.com",
+        "lucas@example.net",
+        "lucas@example.org",
       ]);
       // The primary is unchanged.
-      expect(emails!.find((e) => e.primary)!.email).toBe("owner@example.com");
+      expect(emails!.find((e) => e.primary)!.email).toBe("lucas@example.org");
       // The request is cleared.
       expect(await listAccessRequests()).toHaveLength(0);
       // user.email_added emitted (admin audit), not user.approved.

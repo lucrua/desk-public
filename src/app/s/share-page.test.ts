@@ -5,13 +5,13 @@ import { revokeShare } from "@/lib/shares";
 import { loadShareView, formatStamp, excerptFrom } from "./[token]/load-share";
 
 const BASE_DOC = {
-  slug: "notes-overview",
-  title: "Notes context",
-  sourcePath: "os/notes.md",
-  audience: "external:alice",
+  slug: "market-context",
+  title: "Market context",
+  sourcePath: "os/market.md",
+  audience: "external:pedro",
   format: "md" as const,
-  content: "# Notes context\n\nThe short version: consolidation worked.",
-  by: "admin",
+  content: "# Market context\n\nThe short version: consolidation worked.",
+  by: "lucas",
 };
 
 // Read share_views rows for a share id.
@@ -36,7 +36,7 @@ async function seedShareWithExpiry(docSlug: string, expiresAt: Date) {
       tokenHash: hashToken(token),
       docId: docRows[0].id,
       label: "expiry-test",
-      createdBy: "admin",
+      createdBy: "lucas",
       expiresAt,
     })
     .returning();
@@ -60,7 +60,7 @@ describe("loadShareView", () => {
   describe("valid share", () => {
     it("returns the md view model + writes a view row", async () => {
       // Pass null for expiresInDays so the share never expires (expiresSoon false).
-      const share = await createShareOk("notes-overview", "Alice", "admin", null);
+      const share = await createShareOk("market-context", "Pedro", "lucas", null);
       const view = await loadShareView(share!.token, {
         ip: "1.2.3.4",
         userAgent: "Mozilla/5.0",
@@ -68,9 +68,9 @@ describe("loadShareView", () => {
 
       expect(view).not.toBeNull();
       expect(view!.kind).toBe("md");
-      expect(view!.title).toBe("Notes context");
+      expect(view!.title).toBe("Market context");
       expect(view!.content).toBe(BASE_DOC.content);
-      expect(view!.createdBy).toBe("admin");
+      expect(view!.createdBy).toBe("lucas");
       expect(view!.expiresSoon).toBe(false);
       expect(view!.expiresStamp).toBeNull();
 
@@ -81,7 +81,7 @@ describe("loadShareView", () => {
     });
 
     it("writes a view row on EVERY render (two loads → two rows)", async () => {
-      const share = await createShareOk("notes-overview", "Alice", "admin", null);
+      const share = await createShareOk("market-context", "Pedro", "lucas", null);
       await loadShareView(share!.token);
       await loadShareView(share!.token);
       const rows = await viewRows(share!.id);
@@ -95,7 +95,7 @@ describe("loadShareView", () => {
         format: "html",
         content: "<h1>hi</h1>",
       });
-      const share = await createShareOk("html-doc", "Alice", "admin", null);
+      const share = await createShareOk("html-doc", "Pedro", "lucas", null);
       const view = await loadShareView(share!.token);
       expect(view!.kind).toBe("html");
       expect(view!.content).toBe("<h1>hi</h1>");
@@ -104,7 +104,7 @@ describe("loadShareView", () => {
 
   describe("recordView caps long ip/ua (enforced in recordView, observed in db)", () => {
     it("truncates ip to 64 and ua to 512 chars", async () => {
-      const share = await createShareOk("notes-overview", "Alice", "admin", null);
+      const share = await createShareOk("market-context", "Pedro", "lucas", null);
       await loadShareView(share!.token, {
         ip: "9".repeat(300),
         userAgent: "A".repeat(2000),
@@ -123,7 +123,7 @@ describe("loadShareView", () => {
     });
 
     it("revoked share → null, no view row", async () => {
-      const share = await createShareOk("notes-overview", "Alice", "admin");
+      const share = await createShareOk("market-context", "Pedro", "lucas");
       await revokeShare(share!.id);
       const view = await loadShareView(share!.token);
       expect(view).toBeNull();
@@ -133,7 +133,7 @@ describe("loadShareView", () => {
 
     it("expired share → null", async () => {
       const { token } = await seedShareWithExpiry(
-        "notes-overview",
+        "market-context",
         new Date(Date.now() - 60 * 60 * 1000),
       );
       const view = await loadShareView(token);
@@ -141,8 +141,8 @@ describe("loadShareView", () => {
     });
 
     it("unpublished doc → null", async () => {
-      const share = await createShareOk("notes-overview", "Alice", "admin");
-      await unpublishDoc("notes-overview");
+      const share = await createShareOk("market-context", "Pedro", "lucas");
+      await unpublishDoc("market-context");
       const view = await loadShareView(share!.token);
       expect(view).toBeNull();
     });
@@ -195,7 +195,7 @@ describe("loadShareView", () => {
 
     it("6 days away → true", async () => {
       const expiresAt = new Date(now.getTime() + 6 * 24 * 60 * 60 * 1000);
-      const { token } = await seedShareWithExpiry("notes-overview", expiresAt);
+      const { token } = await seedShareWithExpiry("market-context", expiresAt);
       const view = await loadShareView(token, { now });
       expect(view).not.toBeNull();
       expect(view!.expiresSoon).toBe(true);
@@ -204,7 +204,7 @@ describe("loadShareView", () => {
 
     it("8 days away → false", async () => {
       const expiresAt = new Date(now.getTime() + 8 * 24 * 60 * 60 * 1000);
-      const { token } = await seedShareWithExpiry("notes-overview", expiresAt);
+      const { token } = await seedShareWithExpiry("market-context", expiresAt);
       const view = await loadShareView(token, { now });
       expect(view).not.toBeNull();
       expect(view!.expiresSoon).toBe(false);

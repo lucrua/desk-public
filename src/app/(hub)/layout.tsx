@@ -164,7 +164,7 @@ export default async function HubLayout({
         }}
       >
         <Link
-          href="/docs"
+          href="/spaces"
           style={{
             display: "flex",
             alignItems: "center",

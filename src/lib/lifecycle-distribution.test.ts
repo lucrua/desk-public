@@ -7,15 +7,15 @@
  *      - Tombstone + content purge
  *      - CRITICAL read-path sweep: deleted doc 404s on EVERY public surface
  *      - Slug reuse via partial-unique index
- *   5. Distribution: byAudience, byUser, links
+ *   5. Distribution: bySpace, byUser, links (Gen-2 space-scoped; audiences retired)
  *   6. MCP parity (verify new tools exist in registry)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { eq, and, isNull, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
-import { docs, docVersions, shares, shareViews } from "@/db/schema";
-import { resetDb, publishDocOk, seedAudiences, seedUser, seedMembership, createShareOk } from "@/test/db";
+import { docs, docVersions, shares, shareViews, spaces, spaceMembers } from "@/db/schema";
+import { resetDb, publishDocOk, seedAudiences, seedUser, createShareOk } from "@/test/db";
 import {
   publishDoc,
   unpublishDoc,
@@ -42,7 +42,7 @@ import {
 } from "@/lib/shares";
 import { encryptToken, decryptToken } from "@/lib/crypto";
 import {
-  distributionByAudience,
+  distributionBySpace,
   distributionByUser,
   distributionLinks,
 } from "@/lib/distribution";
@@ -58,7 +58,7 @@ function docBase(over: Partial<Parameters<typeof publishDocOk>[0]> = {}) {
     audience: "team",
     format: "md" as const,
     content: "# Hello world content for search",
-    by: "admin",
+    by: "lucas",
     ...over,
   };
 }
@@ -145,14 +145,14 @@ describe("revealShareUrl", () => {
 
   it("reveal returns the SAME URL that resolves the share", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     const revealed = await revealShareUrl(created.id);
     expect(revealed).toBe(created.shareUrl);
   });
 
   it("reveal on a directory share returns the same URL", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const result = await createDirectoryShare("finance", "Folder", "admin");
+    const result = await createDirectoryShare("finance", "Folder", "lucas");
     expect(result.ok).toBe(true);
     const created = result as { ok: true; id: number; shareUrl: string };
     const revealed = await revealShareUrl(created.id);
@@ -174,21 +174,21 @@ describe("revealShareUrl", () => {
       tokenEnc: null, // simulate pre-migration
       docId: doc.id,
       label: "Old share",
-      createdBy: "admin",
+      createdBy: "lucas",
     }).returning({ id: shares.id });
     expect(await revealShareUrl(row.id)).toBeNull();
   });
 
   it("reveal on stage-2 deleted share → null", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await deleteShare(created.id);
     expect(await revealShareUrl(created.id)).toBeNull();
   });
 
   it("reveal on revoked (but not deleted) share → returns URL (admin wants to see which link was revoked)", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await revokeShare(created.id);
     const revealed = await revealShareUrl(created.id);
     expect(revealed).toBe(created.shareUrl);
@@ -197,7 +197,7 @@ describe("revealShareUrl", () => {
   it("DESK_TOKEN_KEY unset → create still works, canCopy=false, reveal null", async () => {
     delete process.env.DESK_TOKEN_KEY;
     await publishDocOk(docBase());
-    const result = await createShare("test-doc", "Alice", "admin");
+    const result = await createShare("test-doc", "Pedro", "lucas");
     expect(result.ok).toBe(true);
     // canCopy should be false (no token_enc stored)
     const list = await listSharesForDoc("test-doc");
@@ -226,7 +226,7 @@ describe("deleteShare (stage-2)", () => {
 
   it("revoke (stage 1) → link 404s, share still listed with status=revoked", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await revokeShare(created.id);
 
     // Link 404s
@@ -242,7 +242,7 @@ describe("deleteShare (stage-2)", () => {
 
   it("delete (stage 2) → link 404s AND gone from list", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await deleteShare(created.id);
 
     // Link 404s
@@ -259,7 +259,7 @@ describe("deleteShare (stage-2)", () => {
 
   it("delete sets deleted_at AND revokedAt when not already revoked", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await deleteShare(created.id);
 
     const [row] = await db
@@ -272,7 +272,7 @@ describe("deleteShare (stage-2)", () => {
 
   it("delete is idempotent (calling twice returns true)", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     expect(await deleteShare(created.id)).toBe(true);
     expect(await deleteShare(created.id)).toBe(true);
   });
@@ -283,7 +283,7 @@ describe("deleteShare (stage-2)", () => {
 
   it("row is KEPT after delete (share_views FK integrity)", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await deleteShare(created.id);
 
     // Row still exists in DB
@@ -296,7 +296,7 @@ describe("deleteShare (stage-2)", () => {
 
   it("delete implies revoke if not already revoked", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     // No explicit revoke first
     await deleteShare(created.id);
     const [row] = await db
@@ -308,7 +308,7 @@ describe("deleteShare (stage-2)", () => {
 
   it("delete after revoke keeps original revokedAt", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await revokeShare(created.id);
     const [before] = await db
       .select({ revokedAt: shares.revokedAt })
@@ -362,7 +362,7 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleteDoc sets deleted_at, purges content, emits doc.deleted", async () => {
     const { versionId } = await publishDocOk(docBase());
-    const result = await deleteDoc("test-doc", "admin");
+    const result = await deleteDoc("test-doc", "lucas");
     expect(result).toBe(true);
 
     // Tombstone set
@@ -391,19 +391,19 @@ describe("deleteDoc (stage-2)", () => {
   });
 
   it("deleteDoc returns false for unknown slug", async () => {
-    expect(await deleteDoc("ghost-doc", "admin")).toBe(false);
+    expect(await deleteDoc("ghost-doc", "lucas")).toBe(false);
   });
 
   it("deleteDoc returns false for already-deleted doc (idempotent false)", async () => {
     await publishDocOk(docBase());
-    await deleteDoc("test-doc", "admin");
-    expect(await deleteDoc("test-doc", "admin")).toBe(false);
+    await deleteDoc("test-doc", "lucas");
+    expect(await deleteDoc("test-doc", "lucas")).toBe(false);
   });
 
   it("deleteDoc works on unpublished doc too", async () => {
     await publishDocOk(docBase());
     await unpublishDoc("test-doc");
-    expect(await deleteDoc("test-doc", "admin")).toBe(true);
+    expect(await deleteDoc("test-doc", "lucas")).toBe(true);
 
     const [row] = await db
       .select({ deletedAt: docs.deletedAt })
@@ -414,10 +414,10 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleteDoc stage-2 deletes all doc-shares (revoked+deleted)", async () => {
     await publishDocOk(docBase());
-    const s1 = await createShareOk("test-doc", "Alice", "admin");
-    const s2 = await createShareOk("test-doc", "Team", "admin");
+    const s1 = await createShareOk("test-doc", "Pedro", "lucas");
+    const s2 = await createShareOk("test-doc", "Team", "lucas");
 
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
 
     const shareRows = await db
       .select({ id: shares.id, deletedAt: shares.deletedAt, revokedAt: shares.revokedAt })
@@ -434,7 +434,7 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleted doc 404s on getDocBySlug", async () => {
     await publishDocOk(docBase());
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
     expect(await getDocBySlug("test-doc")).toBeNull();
     expect(await getDocBySlug("test-doc", { includeUnpublished: true })).toBeNull();
   });
@@ -442,7 +442,7 @@ describe("deleteDoc (stage-2)", () => {
   it("deleted doc excluded from listDocs", async () => {
     await publishDocOk(docBase());
     await publishDocOk(docBase({ slug: "other-doc", title: "Other" }));
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
 
     const list = await listDocs({ includeUnpublished: true });
     expect(list.find((d) => d.slug === "test-doc")).toBeUndefined();
@@ -451,7 +451,7 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleted doc excluded from searchDocs / FTS", async () => {
     await publishDocOk(docBase({ content: "unique-searchterm-xyz hello world" }));
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
 
     const results = await searchDocs("unique-searchterm-xyz");
     expect(results.find((d) => d.slug === "test-doc")).toBeUndefined();
@@ -459,8 +459,8 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleted doc 404s on resolveShare (doc-share path)", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
-    await deleteDoc("test-doc", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
+    await deleteDoc("test-doc", "lucas");
 
     // Doc share resolves null (the share itself wasn't revoked, but doc is gone)
     const resolved = await resolveShare(created.token);
@@ -469,43 +469,43 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleted doc 404s on listDocsUnderShare (directory-share index)", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const dirShare = await createDirectoryShare("finance", "Folder", "admin");
+    const dirShare = await createDirectoryShare("finance", "Folder", "lucas");
     expect(dirShare.ok).toBe(true);
     const dirShareOk = dirShare as { ok: true; id: number; token: string };
 
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
     const listed = await listDocsUnderShare(dirShareOk.id);
     expect(listed.find((d) => d.slug === "test-doc")).toBeUndefined();
   });
 
   it("deleted doc 404s on resolveShareDoc (directory-share per-doc path)", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const dirShare = await createDirectoryShare("finance", "Folder", "admin");
+    const dirShare = await createDirectoryShare("finance", "Folder", "lucas");
     expect(dirShare.ok).toBe(true);
     const dirShareOk = dirShare as { ok: true; id: number; token: string };
 
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
     const resolved = await resolveShareDoc(dirShareOk.token, "test-doc");
     expect(resolved).toBeNull();
   });
 
   it("deleted doc 404s on listVersions", async () => {
     await publishDocOk(docBase());
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
     const versions = await listVersions("test-doc");
     expect(versions).toHaveLength(0);
   });
 
   it("deleted doc 404s on getVersionContent", async () => {
     const { versionId } = await publishDocOk(docBase());
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
     const content = await getVersionContent("test-doc", versionId);
     expect(content).toBeNull();
   });
 
   it("deleted doc excluded from audience scoping for admin", async () => {
     await publishDocOk(docBase({ audience: "team" }));
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
 
     const list = await listDocs({
       includeUnpublished: true,
@@ -517,7 +517,7 @@ describe("deleteDoc (stage-2)", () => {
   it("deleted doc excluded from audience scoping for member", async () => {
     await publishDocOk(docBase({ audience: "team" }));
     const userId = await seedUser({ displayName: "Alice", email: "alice@test.com" });
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
 
     const list = await listDocs({
       scope: { viewer: "member", userId },
@@ -540,7 +540,7 @@ describe("deleteDoc (stage-2)", () => {
     const origDocId = origRow.id;
 
     // Delete
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
 
     // Republish at the same slug
     const second = await publishDocOk(docBase({ content: "brand new content" }));
@@ -570,11 +570,11 @@ describe("deleteDoc (stage-2)", () => {
   it("partial unique index: allows one live + N deleted at same slug", async () => {
     // First doc at slug
     await publishDocOk(docBase());
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
 
     // Second doc at same slug
     await publishDocOk(docBase({ content: "v2" }));
-    await deleteDoc("test-doc", "admin");
+    await deleteDoc("test-doc", "lucas");
 
     // Third doc at same slug — should succeed (no unique constraint violation)
     const result = await publishDoc(docBase({ content: "v3" }));
@@ -610,85 +610,157 @@ describe("distribution", () => {
     delete process.env.DESK_TOKEN_KEY;
   });
 
-  // ── byAudience ──────────────────────────────────────────────────────────────
+  // ── helpers ───────────────────────────────────────────────────────────────
+  // publishDocOk attaches docs to the default `workspace` space. These helpers
+  // build extra spaces, move docs between them, and add memberships — all via
+  // direct drizzle (no audiences).
 
-  it("byAudience: correct doc counts + member lists", async () => {
-    await publishDocOk(docBase({ slug: "doc-a", audience: "team" }));
-    await publishDocOk(docBase({ slug: "doc-b", audience: "team" }));
-    await publishDocOk(docBase({ slug: "doc-c", audience: "alice" }));
+  async function createSpace(
+    slug: string,
+    visibility: "private" | "unlisted" | "public",
+    ownerUserId: number,
+  ): Promise<number> {
+    const [s] = await db
+      .insert(spaces)
+      .values({ slug, ownerUserId, visibility })
+      .returning({ id: spaces.id });
+    return s.id;
+  }
 
-    const userId = await seedUser({ displayName: "Alice", email: "alice@example.com" });
-    await seedMembership("alice", userId);
+  async function moveDocToSpace(slug: string, spaceId: number): Promise<void> {
+    await db.update(docs).set({ spaceId }).where(eq(docs.slug, slug));
+  }
 
-    const result = await distributionByAudience();
-    const team = result.find((a) => a.key === "team");
-    const alice = result.find((a) => a.key === "alice");
+  async function addMember(
+    spaceId: number,
+    userId: number,
+    role: "owner" | "writer" | "reader" = "reader",
+  ): Promise<void> {
+    await db.insert(spaceMembers).values({ spaceId, userId, role }).onConflictDoNothing();
+  }
 
-    expect(team).toBeDefined();
-    expect(team!.docCount).toBe(2);
+  // ── bySpace ─────────────────────────────────────────────────────────────────
 
-    expect(alice).toBeDefined();
-    expect(alice!.docCount).toBe(1);
-    expect(alice!.memberCount).toBe(1);
-    expect(alice!.members).toContain("Alice");
+  it("bySpace: correct doc counts + member lists with roles", async () => {
+    // Two docs in the default workspace space, one in a separate `pedro` space.
+    await publishDocOk(docBase({ slug: "doc-a" }));
+    await publishDocOk(docBase({ slug: "doc-b" }));
+    await publishDocOk(docBase({ slug: "doc-c" }));
+
+    const owner = await seedUser({ displayName: "Owner", email: "owner@example.com", role: "admin" });
+    const alice = await seedUser({ displayName: "Alice", email: "alice@example.com" });
+    const pedroSpace = await createSpace("pedro", "private", owner);
+    await moveDocToSpace("doc-c", pedroSpace);
+    await addMember(pedroSpace, alice, "reader");
+
+    const result = await distributionBySpace();
+    const workspace = result.find((s) => s.slug === "workspace");
+    const pedro = result.find((s) => s.slug === "pedro");
+
+    expect(workspace).toBeDefined();
+    expect(workspace!.docCount).toBe(2);
+
+    expect(pedro).toBeDefined();
+    expect(pedro!.visibility).toBe("private");
+    expect(pedro!.docCount).toBe(1);
+    expect(pedro!.memberCount).toBe(1);
+    expect(pedro!.members.map((m) => m.displayName)).toContain("Alice");
+    expect(pedro!.members.find((m) => m.displayName === "Alice")!.role).toBe("reader");
   });
 
-  it("byAudience: deleted docs excluded", async () => {
-    await publishDocOk(docBase({ slug: "doc-live", audience: "team" }));
-    await publishDocOk(docBase({ slug: "doc-dead", audience: "team" }));
-    await deleteDoc("doc-dead", "admin");
+  it("bySpace: deleted docs excluded", async () => {
+    await publishDocOk(docBase({ slug: "doc-live" }));
+    await publishDocOk(docBase({ slug: "doc-dead" }));
+    await deleteDoc("doc-dead", "lucas");
 
-    const result = await distributionByAudience();
-    const team = result.find((a) => a.key === "team");
-    expect(team!.docCount).toBe(1);
-    expect(team!.docs.find((d) => d.slug === "doc-dead")).toBeUndefined();
+    const result = await distributionBySpace();
+    const workspace = result.find((s) => s.slug === "workspace");
+    expect(workspace!.docCount).toBe(1);
+    expect(workspace!.docs.find((d) => d.slug === "doc-dead")).toBeUndefined();
   });
 
   // ── byUser ─────────────────────────────────────────────────────────────────
 
-  it("byUser: member visibleDocCount matches audiences-v2 scoping", async () => {
-    await publishDocOk(docBase({ slug: "team-doc", audience: "team" }));
-    await publishDocOk(docBase({ slug: "alice-doc", audience: "alice" }));
+  it("byUser: member visibleDocCount = open spaces ∪ membership", async () => {
+    // doc in a public space (visible to all) + doc in a private space Alice is in.
+    await publishDocOk(docBase({ slug: "open-doc" }));
+    await publishDocOk(docBase({ slug: "pedro-doc" }));
 
-    const userId = await seedUser({ displayName: "Alice", email: "alice@example.com" });
-    await seedMembership("alice", userId);
+    const owner = await seedUser({ displayName: "Owner", email: "owner@example.com", role: "admin" });
+    const alice = await seedUser({ displayName: "Alice", email: "alice@example.com" });
+
+    // Make the default workspace public so open-doc is visible to everyone.
+    await db.update(spaces).set({ visibility: "public" }).where(eq(spaces.slug, "workspace"));
+
+    const pedroSpace = await createSpace("pedro", "private", owner);
+    await moveDocToSpace("pedro-doc", pedroSpace);
+    await addMember(pedroSpace, alice, "reader");
 
     const result = await distributionByUser();
-    const alice = result.find((u) => u.displayName === "Alice");
-    expect(alice).toBeDefined();
-    // team (member_visible=1) + alice (member) → 2 docs
-    expect(alice!.visibleDocCount).toBe(2);
-    expect(alice!.audienceKeys).toContain("team");
-    expect(alice!.audienceKeys).toContain("alice");
+    const aliceRow = result.find((u) => u.displayName === "Alice");
+    expect(aliceRow).toBeDefined();
+    // workspace (public → open) has open-doc; pedro (member) has pedro-doc → 2
+    expect(aliceRow!.visibleDocCount).toBe(2);
+    expect(aliceRow!.visibleSpaces).toContain("workspace");
+    expect(aliceRow!.visibleSpaces).toContain("pedro");
+  });
+
+  it("byUser: member does NOT see a private space they are not in", async () => {
+    await publishDocOk(docBase({ slug: "secret-doc" }));
+
+    const owner = await seedUser({ displayName: "Owner", email: "owner@example.com", role: "admin" });
+    const bob = await seedUser({ displayName: "Bob", email: "bob@example.com" });
+
+    // Move the only doc into a private space Bob is NOT a member of.
+    const secretSpace = await createSpace("secret", "private", owner);
+    await moveDocToSpace("secret-doc", secretSpace);
+
+    // The default workspace is private and Bob is not a member.
+    const result = await distributionByUser();
+    const bobRow = result.find((u) => u.displayName === "Bob");
+    expect(bobRow!.visibleDocCount).toBe(0);
+    expect(bobRow!.visibleSpaces).not.toContain("secret");
+    expect(bobRow!.visibleSpaces).not.toContain("workspace");
   });
 
   it("byUser: deleted docs excluded from visibleDocCount", async () => {
-    await publishDocOk(docBase({ slug: "team-doc", audience: "team" }));
-    await publishDocOk(docBase({ slug: "dead-doc", audience: "team" }));
-    await deleteDoc("dead-doc", "admin");
+    await publishDocOk(docBase({ slug: "live-doc" }));
+    await publishDocOk(docBase({ slug: "dead-doc" }));
+    await deleteDoc("dead-doc", "lucas");
 
-    const userId = await seedUser({ displayName: "Alice", email: "alice@example.com" });
+    // Make workspace public so a member sees its live docs.
+    await db.update(spaces).set({ visibility: "public" }).where(eq(spaces.slug, "workspace"));
+
+    await seedUser({ displayName: "Alice", email: "alice@example.com" });
     const result = await distributionByUser();
     const alice = result.find((u) => u.displayName === "Alice");
     expect(alice!.visibleDocCount).toBe(1);
   });
 
-  it("byUser: admin sees all docs", async () => {
-    await publishDocOk(docBase({ slug: "doc-a", audience: "team" }));
-    await publishDocOk(docBase({ slug: "doc-b", audience: "alice" }));
+  it("byUser: admin sees all docs across all spaces", async () => {
+    await publishDocOk(docBase({ slug: "doc-a" }));
+    await publishDocOk(docBase({ slug: "doc-b" }));
 
-    const adminId = await seedUser({ displayName: "Admin", email: "admin@example.com", role: "admin" });
+    const admin = await seedUser({ displayName: "Admin", email: "admin@example.com", role: "admin" });
+    // doc-b lives in a private space the admin is not a member of — admin still sees it.
+    const other = await createSpace("other", "private", admin);
+    await moveDocToSpace("doc-b", other);
+    // remove admin's membership row that createSpace did NOT add (createSpace only
+    // inserts the space, not an owner member row), so admin relies on role=admin.
+
     const result = await distributionByUser();
-    const admin = result.find((u) => u.displayName === "Admin");
-    expect(admin!.visibleDocCount).toBe(2);
+    const adminRow = result.find((u) => u.displayName === "Admin");
+    expect(adminRow!.visibleDocCount).toBe(2);
+    expect(adminRow!.visibleSpaces).toContain("workspace");
+    expect(adminRow!.visibleSpaces).toContain("other");
   });
 
   // ── links ──────────────────────────────────────────────────────────────────
 
   it("links: includes doc shares and directory shares", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const docShare = await createShareOk("test-doc", "Alice", "admin");
-    const dirResult = await createDirectoryShare("finance", "Finance folder", "admin");
+    const docShare = await createShareOk("test-doc", "Pedro", "lucas");
+    const dirResult = await createDirectoryShare("finance", "Finance folder", "lucas");
     expect(dirResult.ok).toBe(true);
 
     const links = await distributionLinks();
@@ -705,7 +777,7 @@ describe("distribution", () => {
 
   it("links: deleted shares excluded", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await deleteShare(created.id);
 
     const links = await distributionLinks();
@@ -714,7 +786,7 @@ describe("distribution", () => {
 
   it("links: canCopy=true for active share with token_enc", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
 
     const links = await distributionLinks();
     const link = links.find((l) => l.id === created.id)!;
@@ -724,7 +796,7 @@ describe("distribution", () => {
 
   it("links: revoked share has status=revoked", async () => {
     await publishDocOk(docBase());
-    const created = await createShareOk("test-doc", "Alice", "admin");
+    const created = await createShareOk("test-doc", "Pedro", "lucas");
     await revokeShare(created.id);
 
     const links = await distributionLinks();
@@ -755,7 +827,7 @@ describe("MCP parity — 4 new tools registered", () => {
     expect(TOOLS.find((t) => t.name === "distribution_overview")).toBeDefined();
   });
 
-  it("total tool count is 63 (57 + 4 lifecycle + 2 doc-ownership)", () => {
-    expect(TOOLS.length).toBe(63);
+  it("total tool count is 40 (Slice-2 D6: catalog tools removed)", () => {
+    expect(TOOLS.length).toBe(40);
   });
 });

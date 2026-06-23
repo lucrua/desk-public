@@ -80,6 +80,19 @@ describe("principalFromDevHeaders — dev identity provider", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("does NOT throw in production when DESK_ALLOW_DEV_AUTH=1 — honours x-dev-role", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("DESK_ALLOW_DEV_AUTH", "1");
+    try {
+      const p = await principalFromDevHeaders(
+        new Headers({ "x-dev-role": "admin" }),
+      );
+      expect(p.kind).toBe("admin");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -118,50 +131,50 @@ describe("principalFromCfJwt — Cloudflare Access JWT verification", () => {
 
   it("row with stored role=admin → admin principal (stored column is truth)", async () => {
     await seedUser({
-      email: "owner@example.com",
-      displayName: "Admin",
+      email: "lucas@example.org",
+      displayName: "Lucas",
       role: "admin",
       active: 1,
     });
 
-    const jwt = await signJwt({ email: "owner@example.com" });
+    const jwt = await signJwt({ email: "lucas@example.org" });
     const p = await principalFromCfJwt(jwt, { key: publicKey, audience, issuer });
 
     expect(p.kind).toBe("admin");
     if (p.kind !== "admin") throw new Error("expected admin");
-    expect(p.name).toBe("Admin");
-    expect(p.email).toBe("owner@example.com");
+    expect(p.name).toBe("Lucas");
+    expect(p.email).toBe("lucas@example.org");
   });
 
   it("row with stored role=member → member (even if ADMIN_EMAIL matches — env ignored for live derivation)", async () => {
-    vi.stubEnv("ADMIN_EMAIL", "owner@example.com");
+    vi.stubEnv("ADMIN_EMAIL", "lucas@example.org");
     // Row stored as member — ADMIN_EMAIL must NOT override the stored column.
     await seedUser({
-      email: "owner@example.com",
-      displayName: "Admin",
+      email: "lucas@example.org",
+      displayName: "Lucas",
       role: "member",
       active: 1,
     });
 
-    const jwt = await signJwt({ email: "owner@example.com" });
+    const jwt = await signJwt({ email: "lucas@example.org" });
     const p = await principalFromCfJwt(jwt, { key: publicKey, audience, issuer });
 
     expect(p.kind).toBe("member");
     if (p.kind !== "member") throw new Error("expected member");
-    expect(p.name).toBe("Admin");
+    expect(p.name).toBe("Lucas");
     vi.unstubAllEnvs();
   });
 
   it("ADMIN_EMAIL is completely ignored for live derivation — random value has no effect", async () => {
     vi.stubEnv("ADMIN_EMAIL", "ignored@random.value");
     await seedUser({
-      email: "bob@example.com",
-      displayName: "Bob",
+      email: "dani@example.org",
+      displayName: "Dani",
       role: "member",
       active: 1,
     });
 
-    const jwt = await signJwt({ email: "bob@example.com" });
+    const jwt = await signJwt({ email: "dani@example.org" });
     const p = await principalFromCfJwt(jwt, { key: publicKey, audience, issuer });
 
     expect(p.kind).toBe("member"); // stored role wins
@@ -172,19 +185,19 @@ describe("principalFromCfJwt — Cloudflare Access JWT verification", () => {
     // A pure service-token row with role='admin' must be admin — this is how
     // an agent gets publish rights (promote its user row to admin).
     await seedUser({
-      tokenName: "admin-agent",
-      displayName: "Admin Agent",
+      tokenName: "lucas-agent",
+      displayName: "Lucas Agent",
       role: "admin",
       active: 1,
     });
 
-    const jwt = await signJwt({ common_name: "admin-agent" });
+    const jwt = await signJwt({ common_name: "lucas-agent" });
     const p = await principalFromCfJwt(jwt, { key: publicKey, audience, issuer });
 
     expect(p.kind).toBe("admin");
     if (p.kind !== "admin") throw new Error("expected admin");
-    expect(p.name).toBe("Admin Agent");
-    expect(p.tokenName).toBe("admin-agent");
+    expect(p.name).toBe("Lucas Agent");
+    expect(p.tokenName).toBe("lucas-agent");
   });
 
   it("service-token row with role=member → member", async () => {
@@ -467,16 +480,16 @@ describe("principalFromCfJwt — Cloudflare Access JWT verification", () => {
 
   it("JWT email claim with different casing → resolves to same user (case-insensitive lookup)", async () => {
     const { createUser } = await import("@/lib/users");
-    await createUser({ email: "Owner@Example.com", displayName: "Admin Mixed", role: "admin" });
+    await createUser({ email: "Lucas@Example.org", displayName: "Lucas Mixed", role: "admin" });
 
     // JWT carries a differently-cased version of the same address.
-    const jwt = await signJwt({ email: "OWNER@EXAMPLE.COM" });
+    const jwt = await signJwt({ email: "LUCAS@EXAMPLE.ORG" });
     const p = await principalFromCfJwt(jwt, { key: publicKey, audience, issuer });
 
     expect(p.kind).toBe("admin");
     if (p.kind !== "admin") throw new Error("expected admin");
-    expect(p.name).toBe("Admin Mixed");
-    expect(p.email).toBe("owner@example.com");
+    expect(p.name).toBe("Lucas Mixed");
+    expect(p.email).toBe("lucas@example.org");
   });
 
   // ── multiple emails per user (auth-critical matrix) ───────────────────────
@@ -523,19 +536,19 @@ describe("principalFromCfJwt — Cloudflare Access JWT verification", () => {
     });
 
     it("user with role=admin and multiple emails → admin via ANY email", async () => {
-      const id = await seedUser({ email: "owner@example.com", displayName: "Admin", role: "admin" });
-      await addEmail(id, "admin@example.com");
+      const id = await seedUser({ email: "lucas@example.org", displayName: "Lucas", role: "admin" });
+      await addEmail(id, "lucas@example.net");
 
       // Login via the primary → admin.
       const viaPrimary = await principalFromCfJwt(
-        await signJwt({ email: "owner@example.com" }),
+        await signJwt({ email: "lucas@example.org" }),
         { key: publicKey, audience, issuer },
       );
       expect(viaPrimary.kind).toBe("admin");
 
       // Login via the secondary → admin too.
       const viaSecondary = await principalFromCfJwt(
-        await signJwt({ email: "admin@example.com" }),
+        await signJwt({ email: "lucas@example.net" }),
         { key: publicKey, audience, issuer },
       );
       expect(viaSecondary.kind).toBe("admin");
@@ -588,54 +601,54 @@ describe("principalFromCfJwt — Cloudflare Access JWT verification", () => {
 
   it("wrong audience → anonymous", async () => {
     await seedUser({
-      email: "owner@example.com",
-      displayName: "Admin",
+      email: "lucas@example.org",
+      displayName: "Lucas",
       role: "admin",
       active: 1,
     });
 
-    const jwt = await signJwt({ email: "owner@example.com" }, { aud: "wrong-aud" });
+    const jwt = await signJwt({ email: "lucas@example.org" }, { aud: "wrong-aud" });
     const p = await principalFromCfJwt(jwt, { key: publicKey, audience, issuer });
     expect(p.kind).toBe("anonymous");
   });
 
   it("bad signature (different key pair) → anonymous", async () => {
     await seedUser({
-      email: "owner@example.com",
-      displayName: "Admin",
+      email: "lucas@example.org",
+      displayName: "Lucas",
       role: "admin",
       active: 1,
     });
 
     const { privateKey: otherPrivKey } = await generateKeyPair("RS256");
-    const jwt = await signJwt({ email: "owner@example.com" }, { key: otherPrivKey });
+    const jwt = await signJwt({ email: "lucas@example.org" }, { key: otherPrivKey });
     const p = await principalFromCfJwt(jwt, { key: publicKey, audience, issuer });
     expect(p.kind).toBe("anonymous");
   });
 
   it("inactive user (active=0) → anonymous", async () => {
     await seedUser({
-      email: "owner@example.com",
-      displayName: "Admin",
+      email: "lucas@example.org",
+      displayName: "Lucas",
       role: "admin",
       active: 0,
     });
 
-    const jwt = await signJwt({ email: "owner@example.com" });
+    const jwt = await signJwt({ email: "lucas@example.org" });
     const p = await principalFromCfJwt(jwt, { key: publicKey, audience, issuer });
     expect(p.kind).toBe("anonymous");
   });
 
   it("expired JWT → anonymous", async () => {
     await seedUser({
-      email: "owner@example.com",
-      displayName: "Admin",
+      email: "lucas@example.org",
+      displayName: "Lucas",
       role: "admin",
       active: 1,
     });
 
     // Set exp to 1 second in the past
-    const jwt = await new SignJWT({ email: "owner@example.com" })
+    const jwt = await new SignJWT({ email: "lucas@example.org" })
       .setProtectedHeader({ alg: "RS256" })
       .setAudience(audience)
       .setIssuer(issuer)
@@ -705,38 +718,38 @@ describe("ensureBootstrapAdmin — transitional backfill (admin model v2 upgrade
 
   it("ADMIN_EMAIL unset → no-op", async () => {
     vi.stubEnv("ADMIN_EMAIL", "");
-    await seedUser({ email: "owner@example.com", displayName: "Admin", role: "member" });
+    await seedUser({ email: "lucas@example.org", displayName: "Lucas", role: "member" });
     const { ensureBootstrapAdmin } = await import("./cloudflare");
     await ensureBootstrapAdmin();
-    const row = await db.query.users.findFirst({ where: eq(schema.users.email, "owner@example.com") });
+    const row = await db.query.users.findFirst({ where: eq(schema.users.email, "lucas@example.org") });
     expect(row!.role).toBe("member"); // unchanged
   });
 
   it("ADMIN_EMAIL set + user stored as member → promotes to admin", async () => {
-    vi.stubEnv("ADMIN_EMAIL", "owner@example.com");
-    await seedUser({ email: "owner@example.com", displayName: "Admin", role: "member" });
+    vi.stubEnv("ADMIN_EMAIL", "lucas@example.org");
+    await seedUser({ email: "lucas@example.org", displayName: "Lucas", role: "member" });
     const { ensureBootstrapAdmin } = await import("./cloudflare");
     await ensureBootstrapAdmin();
-    const row = await db.query.users.findFirst({ where: eq(schema.users.email, "owner@example.com") });
+    const row = await db.query.users.findFirst({ where: eq(schema.users.email, "lucas@example.org") });
     expect(row!.role).toBe("admin");
   });
 
   it("ADMIN_EMAIL set + user already admin → idempotent (no error, stays admin)", async () => {
-    vi.stubEnv("ADMIN_EMAIL", "owner@example.com");
-    await seedUser({ email: "owner@example.com", displayName: "Admin", role: "admin" });
+    vi.stubEnv("ADMIN_EMAIL", "lucas@example.org");
+    await seedUser({ email: "lucas@example.org", displayName: "Lucas", role: "admin" });
     const { ensureBootstrapAdmin } = await import("./cloudflare");
     await ensureBootstrapAdmin();
     await ensureBootstrapAdmin(); // second call must be safe
-    const row = await db.query.users.findFirst({ where: eq(schema.users.email, "owner@example.com") });
+    const row = await db.query.users.findFirst({ where: eq(schema.users.email, "lucas@example.org") });
     expect(row!.role).toBe("admin");
   });
 
   it("ADMIN_EMAIL set + email not in any user → no-op", async () => {
     vi.stubEnv("ADMIN_EMAIL", "notauser@example.com");
-    await seedUser({ email: "owner@example.com", displayName: "Admin", role: "member" });
+    await seedUser({ email: "lucas@example.org", displayName: "Lucas", role: "member" });
     const { ensureBootstrapAdmin } = await import("./cloudflare");
     await ensureBootstrapAdmin();
-    const row = await db.query.users.findFirst({ where: eq(schema.users.email, "owner@example.com") });
+    const row = await db.query.users.findFirst({ where: eq(schema.users.email, "lucas@example.org") });
     expect(row!.role).toBe("member"); // untouched
   });
 });

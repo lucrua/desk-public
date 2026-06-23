@@ -38,7 +38,7 @@ describe("POST /api/access-requests/[id]/approve", () => {
   });
 
   it("admin approves → 200 + member created + request gone", async () => {
-    const r = await seed("bob@example.com");
+    const r = await seed("dani@example.com");
     const res = await POST(approveReq(r.id, {}), ctx(r.id));
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -47,7 +47,7 @@ describe("POST /api/access-requests/[id]/approve", () => {
 
     const users = await listUsers();
     expect(users).toHaveLength(1);
-    expect(users[0]).toMatchObject({ email: "bob@example.com", role: "member" });
+    expect(users[0]).toMatchObject({ email: "dani@example.com", role: "member" });
     expect(await listAccessRequests()).toHaveLength(0);
   });
 
@@ -107,8 +107,8 @@ describe("POST /api/access-requests/[id]/approve", () => {
   });
 
   it("aliasOfUserId → 200, email added to existing user, no new user", async () => {
-    const target = await createUser({ email: "owner@example.com", displayName: "Admin" });
-    const r = await seed("admin@example.com");
+    const target = await createUser({ email: "lucas@example.org", displayName: "Lucas" });
+    const r = await seed("lucas@example.net");
     const res = await POST(approveReq(r.id, { aliasOfUserId: target!.id }), ctx(r.id));
     expect(res.status).toBe(200);
     expect((await res.json()).userId).toBe(target!.id);

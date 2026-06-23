@@ -7,20 +7,20 @@ const MD_DOC = {
   slug: "shared-doc",
   title: "Shared Doc",
   sourcePath: "os/s.md",
-  audience: "external:alice",
+  audience: "external:pedro",
   format: "md" as const,
   content: "# Hello\n\nbody",
-  by: "admin",
+  by: "lucas",
 };
 
 const HTML_DOC = {
   slug: "artifact",
   title: "Artifact",
   sourcePath: "os/a.html",
-  audience: "external:alice",
+  audience: "external:pedro",
   format: "html" as const,
   content: "<h1>Hi</h1>",
-  by: "admin",
+  by: "lucas",
 };
 
 const ctx = (token: string) => ({ params: Promise.resolve({ token }) });
@@ -28,7 +28,7 @@ const getReq = (token: string) =>
   new Request(`http://test/api/s/${token}/raw`, { method: "GET" });
 
 async function freshShare(slug: string, label = "Microsoft", pinnedVersionId?: number | null) {
-  const share = await createShareOk(slug, label, "admin", undefined, pinnedVersionId);
+  const share = await createShareOk(slug, label, "lucas", undefined, pinnedVersionId);
   const token = share.shareUrl.split("/").pop()!;
   return { id: share.id, token };
 }
@@ -85,7 +85,7 @@ describe("GET /api/s/[token]/raw — public download", () => {
     // Create a share that expired in the past by minting with 0-day expiry then
     // forcing the row's expiresAt into the past via a fresh share with negative
     // window — createShare uses days, so use a share + manual expiry below.
-    const share = await createShareOk("shared-doc", "X", "admin", -1);
+    const share = await createShareOk("shared-doc", "X", "lucas", -1);
     const token = share.shareUrl.split("/").pop()!;
     const res = await GET(getReq(token), ctx(token));
     expect(res.status).toBe(404);

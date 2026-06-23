@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
+import { resetDb, seedAudiences, seedSpace, seedUser, publishDocOk } from "@/test/db";
 import { unpublishDoc } from "@/lib/docs";
 import { GET } from "./route";
 
@@ -13,23 +13,29 @@ function req(url: string, role: string | null = "admin") {
   return new Request(`http://test${url}`, { method: "GET", headers: headers(role) });
 }
 
+// Read access is space-scoped. The dev `member` principal carries no
+// email/tokenName, so the events route resolves it to no users-row → it sees
+// only docs in PUBLIC/UNLISTED spaces. Place the member-visible doc in an
+// UNLISTED space and the hidden one in a PRIVATE space the member isn't in.
 const team = {
   slug: "team-doc",
   title: "Team",
   sourcePath: "os/t.md",
-  audience: "team", // visible
   format: "md" as const,
   content: "# t",
-  by: "admin",
+  by: "lucas",
 };
-const hidden = { ...team, slug: "hidden-doc", audience: "alice" }; // hidden
+const hidden = { ...team, slug: "hidden-doc" };
 
 describe("GET /api/events", () => {
   beforeEach(async () => {
     await resetDb();
     await seedAudiences();
-    await publishDocOk(team);
-    await publishDocOk(hidden);
+    const owner = await seedUser({ email: "owner@x.com", displayName: "Owner", role: "admin" });
+    const openSpace = await seedSpace({ slug: "open", ownerId: owner, visibility: "unlisted" });
+    const privSpace = await seedSpace({ slug: "private-space", ownerId: owner, visibility: "private" });
+    await publishDocOk({ ...team, spaceId: openSpace });
+    await publishDocOk({ ...hidden, spaceId: privSpace });
   });
 
   it("anonymous → 403", async () => {
@@ -37,7 +43,7 @@ describe("GET /api/events", () => {
     expect(res.status).toBe(403);
   });
 
-  it("admin sees events for both audiences", async () => {
+  it("admin sees events for both spaces", async () => {
     const res = await GET(req("/api/events", "admin"));
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -46,7 +52,7 @@ describe("GET /api/events", () => {
     expect(typeof json.nextCursor).toBe("number");
   });
 
-  it("member sees only member-visible audiences", async () => {
+  it("member sees only docs in member-visible spaces", async () => {
     const res = await GET(req("/api/events", "member"));
     const json = await res.json();
     const slugs = json.events.map((e: { payload: { slug: string } }) => e.payload.slug);

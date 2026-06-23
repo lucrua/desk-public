@@ -1,13 +1,19 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createHash } from "node:crypto";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
+import {
+  resetDb,
+  publishDocOk,
+  seedUser,
+  seedSpace,
+  seedSpaceMember,
+} from "@/test/db";
 import {
   publishDoc,
   unpublishDoc,
   getDocBySlug,
   listDocs,
   listVersions,
-  canSeeAudience,
+  canSeeDocSpace,
   type PublishInput,
 } from "./docs";
 
@@ -19,10 +25,9 @@ const base: PublishInput = {
   slug: "test-doc",
   title: "Test Doc",
   sourcePath: "os/test.md",
-  audience: "team",
   format: "md",
   content: "# Hello\nWorld",
-  by: "admin",
+  by: "lucas",
 };
 
 describe("docs service", () => {
@@ -156,8 +161,8 @@ describe("docs service", () => {
     expect(published[0].slug).toBe("test-doc");
     expect(published[0]).toHaveProperty("versionCount");
     expect(published[0]).toHaveProperty("updatedAt");
-    expect(published[0]).toHaveProperty("audience");
     expect(published[0]).toHaveProperty("format");
+    expect(published[0]).toHaveProperty("spaceSlug");
 
     const all = await listDocs({ includeUnpublished: true });
     expect(all).toHaveLength(2);
@@ -188,13 +193,12 @@ describe("docs service", () => {
     expect(versions[0].contentHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("publish updates title/sourcePath/audience/format on re-publish", async () => {
+  it("publish updates title/sourcePath/format on re-publish", async () => {
     await publishDocOk(base);
-    await publishDocOk({ ...base, content: "new content", title: "Updated Title", audience: "alice" });
+    await publishDocOk({ ...base, content: "new content", title: "Updated Title" });
 
     const doc = await getDocBySlug("test-doc");
     expect(doc!.doc.title).toBe("Updated Title");
-    expect(doc!.doc.audience).toBe("alice");
   });
 
   it("getDocBySlug returns doc + currentVersion row", async () => {
@@ -208,151 +212,158 @@ describe("docs service", () => {
   });
 });
 
-// ── Audience scoping — canSeeAudience predicate ───────────────────────────────
+// ── Space scoping — canSeeDocSpace predicate ──────────────────────────────────
+//
+// Read access is space-scoped (Gen-2 consolidation): a doc is visible iff the
+// principal is an admin, a member of the doc's space, the space is public/
+// unlisted, or a capability share carries it. `canSeeDocSpace` is the single-doc
+// predicate; the matrix below proves it fail-closed.
 
-describe("canSeeAudience (DB-driven)", () => {
+describe("canSeeDocSpace (space-scoped)", () => {
+  let adminId: number;
+  let memberId: number;
+  let outsiderId: number;
+  let privateSpace: number;
+  let publicSpace: number;
+  let unlistedSpace: number;
+
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
+    adminId = await seedUser({ email: "admin@x", displayName: "Admin", role: "admin" });
+    memberId = await seedUser({ email: "member@x", displayName: "Member", role: "member" });
+    outsiderId = await seedUser({ email: "outsider@x", displayName: "Outsider", role: "member" });
+    privateSpace = await seedSpace({ slug: "private-space", ownerId: adminId, visibility: "private" });
+    publicSpace = await seedSpace({ slug: "public-space", ownerId: adminId, visibility: "public" });
+    unlistedSpace = await seedSpace({ slug: "unlisted-space", ownerId: adminId, visibility: "unlisted" });
+    // The member belongs to the private space; the outsider does not.
+    await seedSpaceMember(privateSpace, memberId, "reader");
   });
 
-  it("admin sees every audience", async () => {
-    for (const aud of ["team", "alice", "bob", "external:Acme", "any-string"]) {
-      expect(await canSeeAudience("admin", aud)).toBe(true);
+  it("admin sees every space's docs", async () => {
+    for (const s of [privateSpace, publicSpace, unlistedSpace]) {
+      expect(await canSeeDocSpace("admin", s)).toBe(true);
     }
   });
 
-  it("member sees only member-visible audiences (team by default)", async () => {
-    expect(await canSeeAudience("member", "team")).toBe(true);
-    expect(await canSeeAudience("member", "alice")).toBe(false);
-    expect(await canSeeAudience("member", "bob")).toBe(false);
-    expect(await canSeeAudience("member", "external:Acme")).toBe(false);
-    expect(await canSeeAudience("member", "unknown-key")).toBe(false);
+  it("member sees a private space they belong to", async () => {
+    expect(await canSeeDocSpace("member", privateSpace, memberId)).toBe(true);
   });
 
-  it("flipping member_visible exposes/hides an audience for members", async () => {
-    const { setAudienceMemberVisible, listAudiences } = await import("./audiences");
-    const alice = (await listAudiences()).find((a) => a.key === "alice")!;
+  it("non-member does NOT see a private space they're not in", async () => {
+    expect(await canSeeDocSpace("member", privateSpace, outsiderId)).toBe(false);
+  });
 
-    expect(await canSeeAudience("member", "alice")).toBe(false);
-    await setAudienceMemberVisible(alice.id, true);
-    expect(await canSeeAudience("member", "alice")).toBe(true);
-    await setAudienceMemberVisible(alice.id, false);
-    expect(await canSeeAudience("member", "alice")).toBe(false);
+  it("any member sees a public or unlisted space (no membership needed)", async () => {
+    expect(await canSeeDocSpace("member", publicSpace, outsiderId)).toBe(true);
+    expect(await canSeeDocSpace("member", unlistedSpace, outsiderId)).toBe(true);
+  });
+
+  it("a member with no users row (userId null) sees only public/unlisted spaces", async () => {
+    expect(await canSeeDocSpace("member", privateSpace, null)).toBe(false);
+    expect(await canSeeDocSpace("member", publicSpace, null)).toBe(true);
+    expect(await canSeeDocSpace("member", unlistedSpace, null)).toBe(true);
+  });
+
+  it("an unknown space id is fail-closed for a member", async () => {
+    expect(await canSeeDocSpace("member", 999999, memberId)).toBe(false);
   });
 });
 
-// ── Audience scoping — service layer (listDocs + getDocBySlug with scope) ────
+// ── Space scoping — service layer (listDocs + getDocBySlug with scope) ────────
 
-describe("docs service: audience scoping via scope option", () => {
+describe("docs service: space scoping via scope option", () => {
+  let adminId: number;
+  let memberId: number;
+  let outsiderId: number;
+  let privSpace: number;
+  let pubSpace: number;
+
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
+    adminId = await seedUser({ email: "admin@x", displayName: "Admin", role: "admin" });
+    memberId = await seedUser({ email: "member@x", displayName: "Member", role: "member" });
+    outsiderId = await seedUser({ email: "outsider@x", displayName: "Outsider", role: "member" });
+    privSpace = await seedSpace({ slug: "priv", ownerId: adminId, visibility: "private" });
+    pubSpace = await seedSpace({ slug: "pub", ownerId: adminId, visibility: "public" });
+    await seedSpaceMember(privSpace, memberId, "reader");
+    // A doc in the private space, a doc in the public space.
+    await publishDocOk({ ...base, slug: "priv-doc", spaceId: privSpace });
+    await publishDocOk({ ...base, slug: "pub-doc", spaceId: pubSpace });
   });
 
-  it("listDocs with member scope excludes alice / bob / external docs", async () => {
-    await publishDocOk({ ...base, slug: "team-doc", audience: "team" });
-    await publishDocOk({ ...base, slug: "alice-doc", audience: "alice" });
-    await publishDocOk({ ...base, slug: "bob-doc", audience: "bob" });
-    await publishDocOk({ ...base, slug: "ext-doc", audience: "external:Acme" });
-
-    const memberDocs = await listDocs({ scope: { viewer: "member" } });
-    expect(memberDocs.map((d) => d.slug)).toEqual(["team-doc"]);
+  it("listDocs with a member-of-private scope sees BOTH the private + public docs", async () => {
+    const docs = await listDocs({ scope: { viewer: "member", userId: memberId } });
+    expect(docs.map((d) => d.slug).sort()).toEqual(["priv-doc", "pub-doc"]);
   });
 
-  it("listDocs with admin scope returns all docs regardless of audience", async () => {
-    await publishDocOk({ ...base, slug: "team-doc", audience: "team" });
-    await publishDocOk({ ...base, slug: "alice-doc", audience: "alice" });
-    await publishDocOk({ ...base, slug: "bob-doc", audience: "bob" });
+  it("listDocs with an outsider scope sees ONLY the public doc (private excluded)", async () => {
+    const docs = await listDocs({ scope: { viewer: "member", userId: outsiderId } });
+    expect(docs.map((d) => d.slug)).toEqual(["pub-doc"]);
+  });
 
-    const adminDocs = await listDocs({ scope: { viewer: "admin" } });
-    expect(adminDocs).toHaveLength(3);
+  it("listDocs with userId null sees only public/unlisted docs (fail-closed)", async () => {
+    const docs = await listDocs({ scope: { viewer: "member", userId: null } });
+    expect(docs.map((d) => d.slug)).toEqual(["pub-doc"]);
+  });
+
+  it("listDocs with admin scope returns every doc regardless of space", async () => {
+    const docs = await listDocs({ scope: { viewer: "admin" } });
+    expect(docs.map((d) => d.slug).sort()).toEqual(["priv-doc", "pub-doc"]);
   });
 
   it("listDocs without scope returns all published docs (backwards compatible)", async () => {
-    await publishDocOk({ ...base, slug: "team-doc", audience: "team" });
-    await publishDocOk({ ...base, slug: "alice-doc", audience: "alice" });
-
-    const allDocs = await listDocs();
-    expect(allDocs).toHaveLength(2);
+    const docs = await listDocs();
+    expect(docs).toHaveLength(2);
   });
 
-  it("getDocBySlug with member scope returns null for a alice doc (no existence signal)", async () => {
-    await publishDocOk({ ...base, slug: "alice-doc", audience: "alice" });
-
-    const result = await getDocBySlug("alice-doc", { scope: { viewer: "member" } });
+  it("getDocBySlug: outsider gets null on a private-space doc (no existence signal)", async () => {
+    const result = await getDocBySlug("priv-doc", { scope: { viewer: "member", userId: outsiderId } });
     expect(result).toBeNull();
   });
 
-  it("getDocBySlug with member scope returns null for a bob doc", async () => {
-    await publishDocOk({ ...base, slug: "bob-doc", audience: "bob" });
-
-    const result = await getDocBySlug("bob-doc", { scope: { viewer: "member" } });
-    expect(result).toBeNull();
-  });
-
-  it("getDocBySlug with member scope returns null for an external doc", async () => {
-    await publishDocOk({ ...base, slug: "ext-doc", audience: "external:Acme" });
-
-    const result = await getDocBySlug("ext-doc", { scope: { viewer: "member" } });
-    expect(result).toBeNull();
-  });
-
-  it("getDocBySlug with member scope returns the doc for a team doc", async () => {
-    await publishDocOk({ ...base, slug: "team-doc", audience: "team" });
-
-    const result = await getDocBySlug("team-doc", { scope: { viewer: "member" } });
+  it("getDocBySlug: member-of-the-space sees the private-space doc", async () => {
+    const result = await getDocBySlug("priv-doc", { scope: { viewer: "member", userId: memberId } });
     expect(result).not.toBeNull();
-    expect(result!.doc.slug).toBe("team-doc");
+    expect(result!.doc.slug).toBe("priv-doc");
   });
 
-  it("getDocBySlug with admin scope returns alice doc", async () => {
-    await publishDocOk({ ...base, slug: "alice-doc", audience: "alice" });
-
-    const result = await getDocBySlug("alice-doc", { scope: { viewer: "admin" } });
+  it("getDocBySlug: any member sees a public-space doc", async () => {
+    const result = await getDocBySlug("pub-doc", { scope: { viewer: "member", userId: outsiderId } });
     expect(result).not.toBeNull();
-    expect(result!.doc.slug).toBe("alice-doc");
+    expect(result!.doc.slug).toBe("pub-doc");
   });
 
-  it("getDocBySlug with member scope: null is indistinguishable from missing slug (same null)", async () => {
-    await publishDocOk({ ...base, slug: "alice-doc", audience: "alice" });
+  it("getDocBySlug: admin sees the private-space doc", async () => {
+    const result = await getDocBySlug("priv-doc", { scope: { viewer: "admin" } });
+    expect(result).not.toBeNull();
+    expect(result!.doc.slug).toBe("priv-doc");
+  });
 
-    // Both audience-denied and missing-slug return null — no existence signal.
-    const denied = await getDocBySlug("alice-doc", { scope: { viewer: "member" } });
-    const missing = await getDocBySlug("no-such-slug", { scope: { viewer: "member" } });
+  it("getDocBySlug: a denied private doc is indistinguishable from a missing slug (both null)", async () => {
+    const denied = await getDocBySlug("priv-doc", { scope: { viewer: "member", userId: outsiderId } });
+    const missing = await getDocBySlug("no-such-slug", { scope: { viewer: "member", userId: outsiderId } });
     expect(denied).toBeNull();
     expect(missing).toBeNull();
   });
 
-  it("member scope composes with includeUnpublished (member + unpublished alice doc stays null)", async () => {
-    await publishDocOk({ ...base, slug: "alice-doc", audience: "alice" });
-    await unpublishDoc("alice-doc");
-
-    // Even with includeUnpublished: true, member cannot see alice docs.
-    const result = await getDocBySlug("alice-doc", {
+  it("space scope composes with includeUnpublished (outsider + unpublished private doc stays null)", async () => {
+    await unpublishDoc("priv-doc");
+    const result = await getDocBySlug("priv-doc", {
       includeUnpublished: true,
-      scope: { viewer: "member" },
+      scope: { viewer: "member", userId: outsiderId },
     });
     expect(result).toBeNull();
   });
 
-  it("flipping member_visible exposes/hides a doc for members (listDocs + getDocBySlug)", async () => {
-    const { setAudienceMemberVisible, listAudiences } = await import("./audiences");
-    await publishDocOk({ ...base, slug: "alice-doc", audience: "alice" });
-    const alice = (await listAudiences()).find((a) => a.key === "alice")!;
+  it("adding the outsider to the private space exposes the doc (list + getDocBySlug)", async () => {
+    // Hidden before membership.
+    expect((await listDocs({ scope: { viewer: "member", userId: outsiderId } })).map((d) => d.slug)).toEqual(["pub-doc"]);
+    expect(await getDocBySlug("priv-doc", { scope: { viewer: "member", userId: outsiderId } })).toBeNull();
 
-    // Hidden by default.
-    expect((await listDocs({ scope: { viewer: "member" } })).map((d) => d.slug)).toEqual([]);
-    expect(await getDocBySlug("alice-doc", { scope: { viewer: "member" } })).toBeNull();
+    await seedSpaceMember(privSpace, outsiderId, "reader");
 
-    // Flip ON → member now sees it.
-    await setAudienceMemberVisible(alice.id, true);
-    expect((await listDocs({ scope: { viewer: "member" } })).map((d) => d.slug)).toEqual(["alice-doc"]);
-    expect(await getDocBySlug("alice-doc", { scope: { viewer: "member" } })).not.toBeNull();
-
-    // Flip OFF → hidden again.
-    await setAudienceMemberVisible(alice.id, false);
-    expect((await listDocs({ scope: { viewer: "member" } })).map((d) => d.slug)).toEqual([]);
-    expect(await getDocBySlug("alice-doc", { scope: { viewer: "member" } })).toBeNull();
+    // Visible after membership.
+    expect((await listDocs({ scope: { viewer: "member", userId: outsiderId } })).map((d) => d.slug).sort()).toEqual(["priv-doc", "pub-doc"]);
+    expect(await getDocBySlug("priv-doc", { scope: { viewer: "member", userId: outsiderId } })).not.toBeNull();
   });
 });

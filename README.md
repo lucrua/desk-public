@@ -1,25 +1,57 @@
 # Desk
 
-Desk is a self-hosted doc publishing and capability-link sharing service. It gives teams a lightweight way to share documents and HTML artifacts — with stable, revocable URLs — without file-drop tools or manual attachment management. Publishing is a deliberate act: unpublishing kills every link instantly, and source files are never exposed directly.
+Desk is a **self-hosted git host for document _spaces_** with a render + access + feedback layer on top. Documents live as files in git repos Desk hosts; Desk renders them, scopes who can see which, and holds the feedback (comments, proposed revisions, share links). You publish by pushing — `git push … HEAD:main` — and Desk re-renders within seconds. Source files are never exposed directly; unpublishing a doc kills its page and every share link instantly.
+
+## The one principle — one source, many doors
+
+**Desk is a render + access + feedback layer over a source. It is never a second place the content lives.**
+
+- **Truth = files, in git repos Desk hosts.** A **space** is one such repo — the unit of write/clone access and the security boundary.
+- **Desk's Postgres = a derived _projection_** of those files: the render cache, the catalog/board indexes, resolved cross-links — **plus** Desk's own native data that has no file (comments, approvals, shares, view-tracking, access requests).
+- **The projection is rebuildable from the repos.** Lose it and you lose feedback + access config + cache — never a document.
+
+The filesystem, the web UI, and the API/MCP are all windows onto that one copy. There is exactly **one** of every document.
 
 ## Architecture
 
-Desk runs as a single Next.js 16 app behind two hostnames, with all authentication handled by Cloudflare Access (optional in dev, required in production):
+Desk runs as a single Next.js 16 app behind two hostnames, with authentication handled by Cloudflare Access (optional in dev, required in production):
 
-- **`desk.<domain>`** — CF Access-protected. Full app: docs reader, admin dashboard, REST API. Only staff (users with active rows in the DB) can reach this host.
-- **`share.<domain>`** — No CF Access. Only `/s/*` capability-link pages are reachable; the middleware hard-blocks everything else with a real HTTP 404. The capability token in the URL is the credential — no accounts, no guest sign-ups, no app registrations for external recipients.
+- **`desk.<domain>`** — CF Access-protected. The full app: docs reader, spaces, board, catalog, admin dashboard, the REST API, the MCP endpoint, and the **git transport** (`/api/git/<owner>/<space>.git`). Only staff (users with active rows in the DB) reach this host.
+- **`share.<domain>`** — No CF Access. Only `/s/*` capability-link pages are reachable; the middleware hard-blocks everything else with a real HTTP 404. The capability token in the URL is the credential — no accounts, no guest sign-ups for external recipients.
 
-Capability tokens are ≥128-bit random values stored hashed. Revoking a token (or unpublishing the underlying doc) makes every share URL that references it return 404 immediately.
+Capability tokens and principal (git) tokens are ≥128-bit random values stored hashed. Revoking a share token (or unpublishing the underlying doc) makes every share URL that references it return 404 immediately.
 
 ## Access model
 
-**Operator surfaces** (`desk.<domain>`) use Cloudflare Access for authentication. The CF Access JWT carries an email or service-token name; the app resolves it against the `users` table.
+Write and read have **different natural granularities**:
 
-**First-login-admin + multi-admin model.** The first CF-verified email principal to sign in on a fresh deployment is automatically seeded as admin (no manual DB seed or env var required). From that point, admins can promote any member to admin (or demote them back) from the Users page — it is a stored, mutable column. Multiple admins are fully supported; the only invariant is that at least one active admin must always remain (the last-admin guard blocks demote/deactivate). Service-token rows can also be promoted to admin, giving an agent publish rights.
+| | Unit | Granularity |
+|---|---|---|
+| **WRITE** (change the truth) | a **space** (a git repo, with owner + members) | coarse — by space membership |
+| **READ / SHARE** (view a rendered doc/folder) | a capability **share** over a subset | fine — per doc, per directory |
 
-**Members** see published docs whose audience is a real **group** they can see: either the audience is marked *member-visible* (all signed-in members) **or** the member has been added to that audience's membership list. Admins see everything, manage users and audiences (incl. group membership), view the share log, and create/revoke capability links.
+**A doc is a file inside a space; you see it because you are a member of that space, or the space's visibility is public/unlisted, or someone shared a capability link.** There is no second per-doc access tag — read access is **space-scoped**, fail-closed (anonymous or non-member on a `private` space → uniform 404, no existence leak).
 
-**Capability links** (`share.<domain>/s/<token>`) are accessible without any login. The raw token is the credential; it is shown exactly once on creation. Anyone with the URL can read the doc until the link is revoked or the doc is unpublished.
+- **The git transport** (`/api/git/...`) enforces the write boundary: a **reader** token may clone/fetch, a **writer**/**owner** token may push. A push to `main` fires a re-projection (re-index the changed paths).
+- **Operator surfaces** (`desk.<domain>`) authenticate via Cloudflare Access. The CF Access JWT carries an email or service-token name; the app resolves it against the `users` table.
+- **First-login-admin + multi-admin model.** The first CF-verified email to sign in on a fresh deployment is automatically seeded as admin (no env var or manual seed). From there, admins promote/demote others from the Users page; at least one active admin must always remain (the last-admin guard). Service-token (agent) rows can be promoted to admin.
+- **Capability links** (`share.<domain>/s/<token>`) need no login. The raw token is the credential, shown exactly once on creation. Anyone with the URL reads the doc until the link is revoked or the doc is unpublished.
+
+## What's built vs. not
+
+| Capability | State |
+|---|---|
+| Spaces (hosted git repos) + per-space membership/roles, space-scoped read | 🟢 built |
+| Git transport (smart-HTTP, token→ACL, post-receive re-index) + push-to-publish | 🟢 built |
+| Principal tokens (the git Basic-auth credential, self-serve) | 🟢 built |
+| Projection: render cache, catalog/board indexes, doc rows as an index of repo files | 🟢 built |
+| Capability + directory shares, view-tracking, comments, proposed revisions / approvals | 🟢 built |
+| Board (kanban) | 🟢 built — native coordination |
+| Catalog (projection of a space directory's frontmatter; optional `.desk.collection.yml` schema + views + drift validation) | 🟢 built — read/render-only (web-editing frontmatter lands with web-commit) |
+| Hierarchical file view (collapsible folder tree by doc `path` on a space) | 🟢 built |
+| **Web-commit** (a web edit → a real commit, CAS-on-ref) | 🔴 not built — publishing is `git push` / CLI / MCP for now |
+| **Headless-agent loop** (`card.assigned` → runner → propose → review → publish) | 🔴 not built — the event + revision primitives exist; the runner does not |
+| **Packs** (manifest-defined view-repos for scoped agent inputs) | 🔴 not built |
 
 ---
 
@@ -47,16 +79,35 @@ pnpm dev
 # → http://localhost:3000
 ```
 
-**Auth in dev.** `AUTH_MODE=dev` bypasses CF Access and activates a role switcher in the bottom-right corner of the app. Switch between `admin`, `member`, and `anonymous` to test all surfaces. The switcher is hidden in `AUTH_MODE=cloudflare` (production).
+**Auth in dev.** `AUTH_MODE=dev` bypasses CF Access and activates a role switcher in the bottom-right corner of the app. Switch between `admin`, `member`, and `anonymous` to test all surfaces. The switcher is hidden in `AUTH_MODE=cloudflare` (production). The first CF-verified email sign-in on a fresh deployment automatically becomes admin (first-login bootstrap) — no manual DB seed.
 
-No manual DB seed is required: the first CF-verified email sign-in on a fresh deployment automatically creates the admin row (first-login-admin bootstrap).
+---
+
+## Publishing — push to a space
+
+Publishing is `git push`. Get a **principal token** (the git credential), then push to the space's `main` branch:
+
+```bash
+# Mint a principal token in the UI: /settings/tokens (shown ONCE) — or POST /api/tokens.
+
+# clone (reader, writer, or owner)
+git clone https://git:<token>@<host>/api/git/<owner>/<space>.git
+
+# push from an existing repo (writer or owner)
+git remote add desk https://git:<token>@<host>/api/git/<owner>/<space>.git
+git push desk HEAD:main
+```
+
+**Desk renders the `main` branch.** It indexes only that ref, so always push with `HEAD:main` explicitly — a bare `git push desk HEAD` from a local `master` branch is accepted but renders nothing (the `main` ref never moves). A push re-renders the affected docs within seconds (the projection re-indexes the changed paths). A reader token can clone but a push is rejected; a writer/owner token can push. The `desk` CLI (`desk publish ./file.md`) and the MCP `publish_doc` tool are equivalent publish paths.
+
+> Web creation of a brand-new doc is **not yet built** (it lands with web-commit). Editing an existing markdown doc in the browser goes through the propose-revision / approval flow.
 
 ---
 
 ## Tests and typecheck
 
 ```bash
-pnpm vitest run          # run the full test suite (expects 235+ tests green)
+pnpm vitest run          # run the full test suite
 pnpm vitest              # watch mode
 pnpm typecheck           # tsc --noEmit
 ```
@@ -65,14 +116,14 @@ pnpm typecheck           # tsc --noEmit
 
 ## CLI
 
-The `desk` CLI publishes docs, creates share links, revokes them, and checks drift between local files and published versions. See [`cli/README.md`](cli/README.md) for commands and examples.
+The `desk` CLI publishes docs, creates/revokes share links, and checks drift between local files and published versions. See [`cli/README.md`](cli/README.md) for commands and examples.
 
 ```bash
 # One-time alias setup (adjust path to match where you cloned the repo)
 alias desk='node /path/to/desk/cli/desk.mjs'
 
 # Quick examples (local dev)
-desk publish ~/docs/overview.md --audience team
+desk publish ~/docs/overview.md
 desk share overview --label "Partner review" --expires 7
 desk revoke "Partner review"
 desk list
@@ -83,11 +134,13 @@ desk status
 
 ## Connecting an agent (MCP)
 
-Desk exposes a **Model Context Protocol** server at **`/mcp`** so external agents (Claude Code, etc.) can call Desk tools directly. It speaks the MCP **Streamable HTTP** transport in stateless mode (each request is self-contained — no session to keep alive), and reuses the exact same authentication and authorization as the REST API: the Cloudflare Access wall in front of `desk.<domain>` authenticates the request, `getPrincipal` resolves it to a principal, and each tool enforces the same admin-vs-staff rules as its REST counterpart.
+Desk exposes a **Model Context Protocol** server at **`/mcp`** so external agents (Claude Code, etc.) can call Desk tools directly. It speaks the MCP **Streamable HTTP** transport in stateless mode (each request is self-contained — no session to keep alive), and reuses the exact same authentication and authorization as the web app: the Cloudflare Access wall authenticates the request, `getPrincipal` resolves it to a principal, and each tool enforces space-scoped reads + admin/owner mutation rules.
+
+**MCP is the agent surface; REST is the UI surface — deliberately not 1:1.** MCP exposes what a headless agent actually drives. Pure web-UI admin actions (user & multi-email management, access-request triage, board-bucket lifecycle, a share's view-log / comment-toggle) are **REST-only and have no MCP tool**; an agent that needs the "who can see what" audit uses `distribution_overview` + `list_shares`.
 
 - **URL:** `https://desk.<domain>/mcp` (also reachable at `/api/mcp`; `/mcp` is the canonical public path).
 - **Auth:** the same CF Access service-token headers the CLI uses (`CF-Access-Client-Id` / `CF-Access-Client-Secret`). An unauthenticated request gets a JSON-RPC `401`. On `share.<domain>` the endpoint is unreachable (the host middleware 404s everything outside `/s/*`).
-- **Access:** **members** get read-only, audience-scoped access (the same docs they'd see in the reader); **admins** get the full management surface — publish/unpublish, shares, audiences, users, and access requests — i.e. everything the browser admin can do. Calling an admin tool as a member returns a tool error result, not a crash. The REST API and `desk` CLI remain fully available alongside MCP.
+- **Access:** **members** get read-only, space-scoped access (the same docs they'd see in the reader); **admins** (and a doc's **owner**, for its own doc) get the mutation surface. Calling an admin tool as a member returns a tool error result, not a crash. The REST API and `desk` CLI remain fully available alongside MCP.
 
 ### Add it to Claude Code
 
@@ -104,61 +157,54 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
   --header "x-dev-role: admin"
 ```
 
-### Tools
+### Tools (40)
 
 | Tool | Role | Description |
 |---|---|---|
-| `list_docs` | staff | List docs visible to the caller (members: member-visible audiences only). Optional `q` substring filter. |
+| `list_docs` | staff | List docs visible to the caller (members: docs in spaces they can see). Optional `q` full-text search, `path_prefix` folder filter. |
+| `search_docs` | staff | Full-text search over title + content, ranked, with snippets. Space-scoped. |
 | `get_doc` | staff | One doc by `slug`: metadata, current content, version list. Viewer-scoped. |
-| `get_version` | staff | Raw content of a specific `version_id` of a doc (`slug`). Viewer-scoped; cross-doc version ids are rejected as not-found. |
-| `publish_doc` | admin | Create/update a doc (`slug`, `title`, `source_path`, `audience`, `format`, `content`). Audience must exist; content capped at 2 MB. |
+| `get_version` | staff | Raw content of a specific `version_id` of a doc (`slug`). Viewer-scoped; cross-doc ids rejected. |
+| `publish_doc` | admin / owner | Create (admin) or update (admin or owner) a doc (`slug`, `title`, `source_path`, `format`, `content`, optional `path`). Content capped at 2 MB. |
+| `update_doc` | admin | Move a doc to a folder (`path`) and/or reassign its owner (`owner_user_id`) — without publishing a new version. |
 | `unpublish_doc` | admin | Unpublish a doc by `slug` — kills the hub page and every share instantly. |
-| `create_share` | admin | Mint a capability link for a doc (`doc_slug`, `label`, optional `expires_in_days`). Returns the one-time share URL. |
-| `create_directory_share` | admin | Mint a capability link for a whole folder (`path_prefix`, `label`, optional `expires_in_days` / `allow_comments`). Exposes every published doc under the prefix (boundary-safe; root disallowed); new docs appear automatically, one revoke kills the lot. Returns the one-time share URL. |
-| `list_shares` | admin | All shares (doc + directory) with view stats (count, last-viewed, expiry, revocation). Each row carries `mode` (`doc`/`directory`) + `docSlug` or `pathPrefix`. |
-| `list_doc_shares` | admin | Shares for one doc (`slug`), newest-first, with view stats. Unknown slug → not-found. |
+| `delete_doc` | admin | Stage-2 destructive delete: purges content, deletes its share links, frees the slug. |
+| `list_events` | staff | The append-only event log (cursor on `since`, optional `kinds`). Space-scoped for members. |
+| `create_share` | admin | Mint a capability link for a doc (`doc_slug`, `label`, optional `expires_in_days` / `pinned_version_id`). Returns the one-time URL. |
+| `create_directory_share` | admin | Mint a capability link for a whole folder (`path_prefix`, …). Exposes every published doc under the prefix; one revoke kills the lot. |
+| `list_shares` | admin | All shares (doc + directory) with view stats. Each row carries `mode` + `docSlug`/`pathPrefix`. |
+| `list_doc_shares` | admin | Shares for one doc (`slug`), newest-first, with view stats. |
 | `revoke_share` | admin | Revoke a share by numeric `id`. |
-| `set_share_comments` | admin | Toggle whether link visitors may comment on a share (`id`, `allow`). |
-| `list_share_views` | admin | Raw view log for a share (`id`): `viewedAt`, `ip`, `uaLabel`, `rawUa`, `docVersionId`. |
-| `list_audiences` | staff | All audiences (key, label, member-visibility, doc count). |
-| `create_audience` | admin | Create an audience (`key` matching `^[a-z0-9][a-z0-9-]*$`, `label`, optional `member_visible`). |
-| `update_audience` | admin | Toggle an audience's `member_visible` flag by `id`. |
-| `delete_audience` | admin | Delete an audience by `id` — refused while any doc still uses it. |
-| `list_audience_members` | staff | List the members of an audience by `id` (the users who see its docs via group membership). |
-| `add_audience_member` | admin | Add a user to an audience (`id`, `user_id`) — makes the audience a group; idempotent. |
-| `remove_audience_member` | admin | Remove a user from an audience (`id`, `user_id`). |
-| `list_comments` | staff | Comments on a doc you can see (slug → thread, audience-scoped). |
+| `reveal_share` | admin | Reconstruct an existing share's URL by `id` (requires `DESK_TOKEN_KEY`). |
+| `delete_share` | admin | Stage-2 delete a share link by `id` (after revoke). |
+| `distribution_overview` | admin | The "who can see what" audit in three lenses: `bySpace`, `byUser`, `links`. |
+| `list_comments` | staff | Comments on a doc you can see (slug → thread, space-scoped). |
 | `add_comment` | staff | Add a comment to a doc you can see (author = your principal). |
 | `resolve_comment` | admin | Mark a comment resolved by `id`. |
 | `delete_comment` | admin | Hard-delete a comment by `id`. |
 | `propose_revision` | staff | Propose an edit to a markdown doc you can see (`slug`, full `content`, optional `note`) — queues an open revision. |
 | `list_revisions` | staff | Proposed revisions on a doc (`slug`), newest-first, optional `status` filter. |
-| `decide_revision` | admin | Accept (`accept: true` → publishes a new version) or reject (`accept: false`) a revision by `id`. |
-| `list_users` | admin | All users (id, email, tokenName, displayName, role, active, createdAt). |
-| `create_user` | admin | Create a member user (`display_name` + ≥1 of `email` / `token_name`). |
-| `update_user` | admin | Update a user (`id` + `display_name?` / `token_name?` (null clears) / `active?`); enforces the self-deactivation guard. |
-| `list_access_requests` | admin | Pending access requests (id, email, first/last seen, hits). |
-| `approve_access_request` | admin | Approve a request by `id` (optional `display_name`) — creates the user, clears the request. |
-| `dismiss_access_request` | admin | Dismiss a request by `id` without creating a user. |
+| `decide_revision` | admin / owner | Accept (`accept: true` → publishes a new version) or reject a revision by `id`. |
+| `list_open_revisions` | staff | The central approval queue — admin sees all open revisions, an owner sees those on docs they own. |
 | `list_buckets` | staff | The board's buckets (columns) in order, with live card counts. |
-| `create_bucket` | admin | Create a bucket (`label`, optional `key`) at the end of the column order. |
-| `update_bucket` | admin | Rename a bucket by `id` (label only; the key is immutable). |
-| `delete_bucket` | admin | Delete a bucket by `id` — refused while any card (live or archived) references it. |
 | `list_cards` | staff | Board cards (filters: `bucket_id`, `owner_user_id`, `owner: "me"`, `include_archived`). |
 | `get_card` | staff | One card by `id` plus its activity trail (card.* events, oldest-first). |
-| `create_card` | staff | Create a card (`title`, `bucket_id`/`bucket_key`, optional `body`/`doc_slug`/`checklist`/`owner_user_id`). Members own their own card. |
-| `update_card` | staff (owner/admin) | Edit a card's `title`/`body`/`doc_slug`/`checklist`. Members may edit only cards they own. |
-| `move_card` | staff (owner/admin) | Move a card to a `bucket_id` at a slot (`index`). Members move only their own cards. |
+| `create_card` | staff | Create a card (`title`, `bucket_id`/`bucket_key`, optional `body`/`doc_slug`/`checklist`/`owner_user_id`). |
+| `update_card` | staff (owner/admin) | Edit a card's `title`/`body`/`doc_slug`/`checklist`. |
+| `move_card` | staff (owner/admin) | Move a card to a `bucket_id` at a slot (`index`). |
 | `assign_card` | admin | Assign (or clear) a card's owner — admin-only reassignment. |
-| `archive_card` | staff (owner/admin) | Archive (`archived: true`) or restore a card. Members act only on cards they own. |
-| `list_catalog_kinds` | staff | Every catalog kind (schema-as-data registry) with its label, idPattern, JSON Schema, and item count. |
-| `get_catalog_schema` | staff | One kind's schema by `kind` slug. Unknown kind → error. |
-| `upsert_catalog_schema` | admin | Create/update a kind (`kind`, `label`, `id_pattern` regex, `schema` JSON Schema). idPattern + schema must compile. |
-| `list_catalog_items` | staff | Items in a kind, newest-updated first. Optional `status` (exact) + `q` (substring over id/title). |
-| `get_catalog_item` | staff | One item (`kind`, `item_id`) plus its outbound + inbound typed links. |
-| `upsert_catalog_item` | admin | Create/update an item. `item_id` is client-proposed (validated against the kind's idPattern); `data` validated against the schema; links auto-derived. |
-| `delete_catalog_item` | admin | Delete an item (`kind`, `item_id`) — cascades its links both directions. |
+| `archive_card` | staff (owner/admin) | Archive (`archived: true`) or restore a card. |
+| `list_spaces` | staff | Spaces visible to the caller (admins: all; members: theirs + public/unlisted). |
+| `create_space` | admin | Create a space (`slug`, optional `visibility` / `owner_user_id`). |
+| `set_space_member` | admin / owner | Set (`writer`/`reader`) or remove (`null`) a user's role on a space. |
+| `create_token` | staff | Mint a principal (git) token for the caller. Returns the raw token ONCE. |
+| `list_tokens` | staff | List the caller's tokens (admin: `all=true` lists everyone's). |
+| `revoke_token` | staff | Revoke a token by `id` (own token, or any for an admin). |
 | `whoami` | staff | The resolved principal (kind, name, masked email/token) — "is my token wired right?" |
+
+> **REST-only admin actions** (no MCP tool): user CRUD + multi-email (`/api/users/**`), access-request triage (`/api/access-requests/**`), board-bucket lifecycle (`/api/buckets/**`), and a share's view-log / comment-toggle (`GET /api/shares/[id]/views`, `PATCH /api/shares/[id]`).
+>
+> **No catalog tools.** The catalog was reframed (D6) from a Desk-authored registry into a **read-only projection of a space directory's doc frontmatter** (+ an optional `.desk.collection.yml` schema). Its truth is the repo, so an agent "writes" a catalog by committing frontmatter — there is no catalog MCP/REST authoring surface. The dormant `catalog_*` tables are retained.
 
 ### Verify with curl
 
@@ -204,13 +250,17 @@ All configuration is via environment variables. Copy `.env.example` to `.env.loc
 | `AUTH_MODE` | Yes | `dev` | Identity provider. `dev` — role-switcher UI, no real auth, must not be used with `NODE_ENV=production`. `cloudflare` — Cloudflare Access JWT verification. |
 | `DATABASE_URL` | Yes | `postgres://hub:hub@127.0.0.1:5433/hub` | PostgreSQL 16 connection string for the main database. |
 | `TEST_DATABASE_URL` | Test only | `postgres://hub:hub@127.0.0.1:5433/hub_test` | Separate database used by the Vitest test suite. Keep isolated from the dev/prod DB. |
-| `ADMIN_EMAIL` | No (upgrade aid only) | — | **Transitional backfill only — not used for live role derivation.** If set at boot, the app idempotently promotes that email's user to `role='admin'` (preserves your admin across the v2 upgrade). Remove it from the environment after the first post-upgrade deploy confirms you're still admin. On a fresh deployment with no prior data, leave this unset — the first CF-verified sign-in automatically becomes admin. |
+| `DESK_DATA_DIR` | Prod (recommended) | `<cwd>/.desk-data` (gitignored) | Root directory for the bare space repos (`<DESK_DATA_DIR>/spaces/<owner>/<space>.git`). **These bare repos are the canon** — point this at a backed-up, off-box volume in production (the NO-BACKUPS standing risk). |
+| `GIT_HTTP_BACKEND_BIN` | No | `/usr/lib/git-core/git-http-backend` | Path to the system `git-http-backend` CGI the git transport wraps. Override if it lives elsewhere on the host. System `git` must be on `PATH`. |
+| `ADMIN_EMAIL` | No (upgrade aid only) | — | **Transitional backfill only.** If set at boot, the app idempotently promotes that email's user to `role='admin'`. On a fresh deployment leave unset — the first CF-verified sign-in becomes admin. |
 | `HUB_BASE_URL` | Yes | `http://localhost:3000` | Absolute base URL of the `desk.<domain>` host (no trailing slash). Used for absolute URL generation in API responses and the CLI. |
 | `SHARE_BASE_URL` | Yes | `http://localhost:3000` | Absolute base URL of the `share.<domain>` host (no trailing slash). Used when minting capability share link URLs. |
 | `SHARE_HOST` | Prod only | *(unset)* | Bare hostname of the share host, no scheme or port (e.g. `share.example.com`). When set, the middleware blocks all paths except `/s/*`, `/_next/*`, and `/robots.txt` on this hostname, returning a real HTTP 404. Unset in dev — the middleware becomes a no-op. |
-| `DESK_TOKEN_KEY` | Optional | *(unset)* | 32-byte key for AES-256-GCM at-rest encryption of share tokens. Required to enable the **copy/reveal link** feature (admin can re-copy an existing share URL). Generate with `openssl rand -base64 32` and set in Coolify prod env. Accepts base64 (44 chars) or hex (64 chars). When unset, shares still work normally — the raw token is hashed for lookup — but `canCopy` is false and reveal returns 404. **Key rotation:** rotating this key makes existing `token_enc` values undecryptable (the links still work — hash lookup is unaffected — but they can no longer be copied/revealed via the admin UI until new shares are created). |
-| `CF_TEAM_DOMAIN` | Prod only (`cloudflare` mode) | — | Your Cloudflare Access team domain, e.g. `your-team.cloudflareaccess.com`. Find it in the Cloudflare Zero Trust dashboard → Settings → Custom Pages → Team Domain. |
-| `CF_AUD` | Prod only (`cloudflare` mode) | — | The Audience Tag (AUD) for the `desk.<domain>` Access application. Find it in Cloudflare Zero Trust → Access → Applications → your app → Overview → Application Audience. Used to verify the `aud` claim in CF JWTs. |
+| `DESK_TOKEN_KEY` | Optional | *(unset)* | 32-byte key for AES-256-GCM at-rest encryption of share tokens. Required to enable the **copy/reveal link** feature. Generate with `openssl rand -base64 32`. Accepts base64 (44 chars) or hex (64 chars). When unset, shares still work — the raw token is hashed for lookup — but `canCopy` is false and reveal returns 404. Rotating it makes existing `token_enc` values un-revealable (the links still work). |
+| `CF_TEAM_DOMAIN` | Prod only (`cloudflare` mode) | — | Your Cloudflare Access team domain, e.g. `your-team.cloudflareaccess.com`. CF Zero Trust → Settings → Team Domain. |
+| `CF_AUD` | Prod only (`cloudflare` mode) | — | The Audience Tag (AUD) for the `desk.<domain>` Access application. CF Zero Trust → Access → Applications → your app → Overview → Application Audience. |
+
+> **Cloudflare Access + the git transport.** CF Access fronts the hub and expects a CF-Access JWT, but a `git` CLI sends HTTP Basic (the principal token). In production, CF Access must be configured to let `/api/git/*` reach the app's token gate (e.g. a bypass/service-auth policy for that path), or the transport must be reached on a path/host CF Access doesn't gate. This is the one integration point not testable headlessly.
 
 ### CLI env vars (`desk` CLI)
 
@@ -219,20 +269,20 @@ The CLI reads these from the shell environment, not from `.env.local`.
 | Variable | Default | Description |
 |---|---|---|
 | `HUB_URL` | `http://localhost:3000` | API base URL the CLI calls. Set to `https://desk.<domain>` in production. |
-| `HUB_DEV_ROLE` | `admin` | Dev-mode role sent via the `x-dev-role` header when CF headers are absent. Only effective when the server is running in `AUTH_MODE=dev`. |
-| `DESK_SOURCE_ROOT` | _(unset)_ | Optional root directory `desk status` uses as a fallback when resolving a doc's `sourcePath` (after trying the current working directory). |
-| `CF_ACCESS_CLIENT_ID` | — | Cloudflare Access service token client ID. If both CF vars are set, the CLI sends CF Access headers instead of the dev role header. Obtain from CF Zero Trust → Access → Service Auth → your token. |
+| `HUB_DEV_ROLE` | `admin` | Dev-mode role sent via the `x-dev-role` header when CF headers are absent. Only effective in `AUTH_MODE=dev`. |
+| `DESK_SOURCE_ROOT` | _(unset)_ | Optional root directory `desk status` uses as a fallback when resolving a doc's `sourcePath`. |
+| `CF_ACCESS_CLIENT_ID` | — | Cloudflare Access service token client ID. If both CF vars are set, the CLI sends CF Access headers instead of the dev role header. |
 | `CF_ACCESS_CLIENT_SECRET` | — | Cloudflare Access service token secret (shown once on creation). |
 
 ### Deploy platform
 
 | Variable | Where to set | Description |
 |---|---|---|
-| `NIXPACKS_NODE_VERSION` | Coolify / Railway / Nixpacks build config | Node.js version to use during the Nixpacks build. Set to `20` to match the `engines` field in `package.json`. |
+| `NIXPACKS_NODE_VERSION` | Coolify / Railway / Nixpacks build config | Node.js version for the Nixpacks build. Set to `20` to match `engines` in `package.json`. |
 
 ## Deploy
 
-The app deploys as a standard Next.js standalone build behind any Node.js host (Coolify, Railway, a container, etc.). Provision a Postgres 16 database, set the environment variables above, run `pnpm drizzle-kit migrate`, and start with `pnpm build && pnpm start`. For production auth, put the app behind Cloudflare Access and set `AUTH_MODE=cloudflare` with the `CF_*` variables.
+See [`docs/cutover-checklist.md`](docs/cutover-checklist.md) for the full supervised cloud cutover runbook (Coolify app + Postgres 16, Cloudflare tunnel hostnames, CF Access policy, service tokens, the git-transport bypass, the `DESK_DATA_DIR` backup cron, smoke tests).
 
 ---
 
@@ -242,32 +292,38 @@ The app deploys as a standard Next.js standalone build behind any Node.js host (
 desk/
 ├── src/
 │   ├── app/
-│   │   ├── (hub)/          # Operator surfaces (docs list, admin) — CF Access-protected
-│   │   │   ├── admin/      # Admin dashboard: all docs, shares, view log, drift
-│   │   │   └── docs/       # Docs reader for authenticated internal users
-│   │   ├── api/            # REST API endpoints (docs CRUD, shares, revoke, views) + /api/mcp
-│   │   ├── mcp/            # Public /mcp alias → MCP Streamable HTTP server (re-exports api/mcp)
-│   │   ├── host-404/       # Route handler: real HTTP 404 for share-host guard
-│   │   ├── s/[token]/      # Public capability-link reader (no auth, token = credential)
-│   │   ├── layout.tsx      # Root layout (fonts, theme init script)
-│   │   └── robots.ts       # Disallow all (nothing in Desk is publicly indexable)
-│   ├── components/         # Shared UI components (Markdown, AudienceBadge, etc.)
+│   │   ├── (hub)/          # Operator surfaces — CF Access-protected
+│   │   │   ├── spaces/      # Spaces home: my spaces + shared-with-me; per-space docs (folder tree), members, visibility
+│   │   │   ├── docs/        # Doc reader/editor (reached from a space)
+│   │   │   ├── board/       # Kanban board
+│   │   │   ├── catalog/     # Projection of a space directory's frontmatter (auto + `.desk.collection.yml` schema)
+│   │   │   ├── distribution/# "Who can see what" audit (by space / user / links)
+│   │   │   ├── settings/    # Principal (git) tokens
+│   │   │   └── admin/       # Users, access requests, share log
+│   │   ├── api/             # REST API (docs, shares, spaces, tokens, board, users) + /api/mcp + /api/git
+│   │   ├── mcp/             # Public /mcp alias → MCP Streamable HTTP server (re-exports api/mcp)
+│   │   ├── s/[token]/       # Public capability-link reader (no auth, token = credential)
+│   │   ├── host-404/        # Route handler: real HTTP 404 for share-host guard
+│   │   └── robots.ts        # Disallow all (nothing in Desk is publicly indexable)
+│   ├── components/         # Shared UI components (Markdown, badges, etc.)
 │   ├── db/                 # Drizzle schema + DB client
 │   ├── lib/
 │   │   ├── auth/           # Pluggable identity middleware (cloudflare / dev modes)
-│   │   ├── constants.ts    # Shared copy constants (uniform 404 text, etc.)
-│   │   ├── host-routing.ts # Pure decideRoute() function (share-host middleware logic)
-│   │   ├── mcp/            # MCP tool registry (tools.ts) + per-request server builder (server.ts)
-│   │   ├── docs.ts         # Docs domain logic
+│   │   ├── git/            # Git transport (token→ACL gate in front of git-http-backend) + indexer.ts (the projection builder)
+│   │   ├── spaces.ts       # Spaces + membership + principal tokens
+│   │   ├── docs.ts         # Docs domain logic + space-scoped read path
 │   │   ├── shares.ts       # Capability token mint/hash/resolve/revoke/view-log
-│   │   └── tokens.ts       # Cryptographic token primitives
+│   │   ├── distribution.ts # The space-scoped "who sees what" lenses
+│   │   └── mcp/            # MCP tool registry (tools.ts) + per-request server builder (server.ts)
 │   ├── middleware.ts       # Host-based routing guard (share host → block non-/s/* paths)
 │   └── test/               # Vitest global setup and test DB helpers
-├── cli/                    # hub CLI (zero-dependency Node.js 20+)
+├── cli/                    # desk CLI (zero-dependency Node.js 20+)
+├── docs/
+│   ├── cutover-checklist.md  # Supervised cloud cutover runbook
+│   ├── account-merge-runbook.md
+│   └── plans/              # Implementation phase plans
 ├── drizzle/                # Generated migration SQL files
 ├── docker-compose.dev.yml  # Local Postgres 16 for development
 ├── drizzle.config.ts       # Drizzle Kit config
 └── next.config.ts          # Next.js config
 ```
-
-**Design.** The visual design (tokens, typography, component layout) lives in `src/app/globals.css` and the component styles. Theme tokens (light/dark, badge colors) are defined as CSS custom properties there.

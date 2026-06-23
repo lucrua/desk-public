@@ -3,6 +3,7 @@ import { after } from "next/server";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import Markdown from "@/components/Markdown";
+import SandboxedHtml from "@/components/SandboxedHtml";
 import {
   resolveShare,
   resolveDirectoryShare,
@@ -408,15 +409,12 @@ function HtmlArtifact({ view, comments }: { view: ShareView; comments?: React.Re
       />
 
       <div style={{ flex: 1, display: "flex" }}>
-        {/*
-          allow-scripts ONLY — no allow-same-origin, so the stored HTML runs in an
-          opaque origin and can never touch this site's cookies / storage / DOM.
-        */}
-        <iframe
-          sandbox="allow-scripts"
-          srcDoc={view.content}
+        {/* Sandbox policy lives in SandboxedHtml (allow-scripts only, opaque
+            origin). The hub viewer renders through the same component. */}
+        <SandboxedHtml
+          content={view.content}
           title={view.title}
-          style={{ flex: 1, width: "100%", border: "none", minHeight: "85vh" }}
+          style={{ flex: 1, minHeight: "85vh" }}
         />
       </div>
 

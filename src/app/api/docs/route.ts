@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPrincipal, isStaff } from "@/lib/auth";
 import { publishDoc, listDocs, searchDocs, scopeForPrincipal } from "@/lib/docs";
-import { audienceExists } from "@/lib/audiences";
 import { normalizePath } from "@/lib/path";
 
 import { SLUG_RE, MAX_CONTENT_CHARS } from "@/lib/limits";
@@ -28,7 +27,7 @@ export async function POST(req: Request) {
 
   const b = body as Record<string, unknown>;
 
-  const { slug, title, sourcePath, audience, format, content, path, baseVersionId } = b;
+  const { slug, title, sourcePath, format, content, path, baseVersionId } = b;
 
   if (!slug || typeof slug !== "string" || !SLUG_RE.test(slug)) {
     return err(400, "Missing or invalid slug (must match ^[a-z0-9][a-z0-9-]*$)");
@@ -39,17 +38,9 @@ export async function POST(req: Request) {
   if (!sourcePath || typeof sourcePath !== "string") {
     return err(400, "Missing sourcePath");
   }
-  // Audience is OPTIONAL now (Audiences v2): absent → `private` (the default
-  // group — only the author/admins + explicitly-added members see it). When
-  // provided it must be a string; existence is validated below as before.
-  let audienceKey: string;
-  if (audience === undefined || audience === null) {
-    audienceKey = "private";
-  } else if (typeof audience === "string" && audience.trim().length > 0) {
-    audienceKey = audience.trim();
-  } else {
-    return err(400, "audience must be a non-empty string when provided");
-  }
+  // Audience is VESTIGIAL (Gen-2 consolidation) — read access is space-scoped,
+  // so a doc's visibility follows its space, not a per-doc tag. The field is no
+  // longer accepted or validated here.
   if (!format || !VALID_FORMATS.includes(format as (typeof VALID_FORMATS)[number])) {
     return err(400, "Missing or invalid format (must be 'md' or 'html')");
   }
@@ -77,17 +68,10 @@ export async function POST(req: Request) {
     }
     base = baseVersionId;
   }
-  // Audiences are data now — the key must already exist (created in /admin).
-  // `private` is seeded by migration 0010, so the default always resolves.
-  if (!(await audienceExists(audienceKey))) {
-    return err(400, "unknown audience — create it in /admin first");
-  }
-
   const result = await publishDoc({
     slug,
     title,
     sourcePath,
-    audience: audienceKey,
     format: format as "md" | "html",
     content,
     by: principal.name,

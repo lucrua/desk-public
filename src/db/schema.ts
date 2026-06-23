@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, text, timestamp, integer, doublePrecision, jsonb, pgEnum, uniqueIndex, customType, index, check } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, text, timestamp, integer, doublePrecision, jsonb, pgEnum, uniqueIndex, customType, index, check, primaryKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // Postgres `tsvector` — there is no built-in drizzle column type for it. The
@@ -14,6 +14,27 @@ const tsvector = customType<{ data: string; driverData: string }>({
 export const roleEnum = pgEnum("role", ["admin", "member"]);
 export const formatEnum = pgEnum("doc_format", ["md", "html"]);
 
+// ── Document-host (Phase 1) enums ────────────────────────────────────────────
+// A space's listing visibility. PRIVATE is the only state that exists in
+// Phase 1 (single owner-only space); `unlisted`/`public` are laid down now so
+// Phase-2 multi-tenancy is purely additive. Visibility governs DISCOVERY only —
+// it never relaxes the git-transport ACL, which is membership-driven and
+// fail-closed (a private space is uniform-404 to non-members; see the git
+// route). See specs/desk/design-document-host.md §14.
+export const spaceVisibilityEnum = pgEnum("space_visibility", [
+  "private",
+  "unlisted",
+  "public",
+]);
+
+// A principal's role WITHIN a space (the coarse, repo-grained WRITE boundary —
+// §3). `reader` may clone/fetch (git-upload-pack); `writer` and `owner` may also
+// push (git-receive-pack). Exactly one `owner` row exists per space (the space's
+// ownerUserId, mirrored as a member row on create). Distinct from the global
+// `role` enum (admin|member), which governs the hub app — a space role is local
+// to one repo.
+export const spaceRoleEnum = pgEnum("space_role", ["owner", "writer", "reader"]);
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").unique(),          // humans (CF-verified email) — PRIMARY/display email; every email (incl. this one) is mirrored into user_emails
@@ -25,7 +46,7 @@ export const users = pgTable("users", {
 });
 
 // Multiple emails per user. A user can own several CF-verified email addresses
-// (owner@example.com + admin@example.com = one account); login by ANY of
+// (lucas@example.org + lucas@example.net = one account); login by ANY of
 // them resolves the same users row, same derived role. `email` is globally
 // unique across ALL users — a given address belongs to exactly one user (no
 // silent steal). The user's PRIMARY email (users.email) is ALSO mirrored here as
@@ -56,7 +77,7 @@ export const accessRequests = pgTable("access_requests", {
 export const audiences = pgTable("audiences", {
   id: serial("id").primaryKey(),
   key: text("key").notNull().unique(),       // ^[a-z0-9][a-z0-9-]*$ — the value stored on docs.audience
-  label: text("label").notNull(),            // human-facing name, e.g. "Team", "Acme"
+  label: text("label").notNull(),            // human-facing name, e.g. "Team", "PartnerCo"
   memberVisible: integer("member_visible").notNull().default(0), // 1|0 — members see docs in this audience
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -77,12 +98,77 @@ export const audienceMembers = pgTable("audience_members", {
   index("audience_members_user_idx").on(t.userId),
 ]);
 
+// ── Spaces (Phase-1 document host) ───────────────────────────────────────────
+// A SPACE is an owned, access-controlled git repo that Desk hosts — the unit of
+// write/clone access and the security boundary (§3). Truth = the bare repo on
+// disk at <DATA_DIR>/spaces/<owner-slug>/<space-slug>.git; Desk's Postgres is a
+// derived projection (§2). Phase 1 has a single owner-only space; the table is
+// built so Phase-2 multi-tenancy is purely additive. `slug` is globally unique
+// (Phase 1 single-owner; a Phase-2 migration may relax to per-owner uniqueness).
+export const spaces = pgTable("spaces", {
+  id: serial("id").primaryKey(),
+  slug: text("slug").notNull().unique(), // ^[a-z0-9][a-z0-9-]*$ — the <space> path segment
+  ownerUserId: integer("owner_user_id")
+    .notNull()
+    .references(() => users.id),
+  visibility: spaceVisibilityEnum("visibility").notNull().default("private"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Space membership — the coarse WRITE/clone ACL (§3). One row per (space, user)
+// with a space-local role. The owner is ALSO mirrored as an `owner` member row
+// on space creation, so the git auth middleware resolves access through this one
+// table (token → user → space_members.role) without special-casing the owner.
+// PK(spaceId, userId): a user holds at most one role per space. FAIL-CLOSED: no
+// row = no access (uniform-404 on a private space).
+export const spaceMembers = pgTable("space_members", {
+  spaceId: integer("space_id")
+    .notNull()
+    .references(() => spaces.id),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id),
+  role: spaceRoleEnum("role").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.spaceId, t.userId] }),
+  index("space_members_user_idx").on(t.userId),
+]);
+
+// Principal tokens — the credential for the git smart-HTTP transport (§13.5).
+// The token is the Basic-auth PASSWORD (username ignored); it resolves to a
+// users row, whose space_members role on the target space gates upload-pack /
+// receive-pack. Only the sha256 HASH is stored — the raw token is shown once on
+// mint and never recoverable (mirrors the `shares` capability-token model). A
+// token belongs to exactly one user (human or agent/service principal).
+// Revoking (revokedAt set) makes every git request with it fail-closed (404 on
+// a private space). Distinct from CF-Access JWTs (the hub-app credential): this
+// token authenticates the FILE transport, which CF Access does not gate.
+export const principalTokens = pgTable("principal_tokens", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id),
+  tokenHash: text("token_hash").notNull().unique(), // sha256 hex — raw token never stored
+  label: text("label").notNull(),                   // human-facing name ("agent CI", "Lucas laptop")
+  lastUsedAt: timestamp("last_used_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("principal_tokens_user_idx").on(t.userId),
+]);
+
 export const docs = pgTable("docs", {
   id: serial("id").primaryKey(),
   slug: text("slug").notNull(),
   title: text("title").notNull(),
   sourcePath: text("source_path").notNull(),   // e.g. os/CONTEXT.md — provenance stamp
-  audience: text("audience").notNull(),        // alice | bob | team | external:<label>
+  // VESTIGIAL (Gen-2 consolidation, migration 0016): read access is now
+  // space-scoped (member of the doc's space, OR space.visibility public/unlisted,
+  // OR a capability share) — `audience` no longer gates any read path. Made
+  // NULLABLE so publish/projection need not supply it; the `audiences` /
+  // `audience_members` tables are left dormant (dropped in a later cleanup slice).
+  audience: text("audience"),
   // Implicit folder path: slash-joined segments, each ^[a-z0-9][a-z0-9-]*$, max
   // depth 6; '' = root. Organizational only — identity stays the slug, and
   // member visibility is audience-based (path is orthogonal). No folder entities.
@@ -102,12 +188,31 @@ export const docs = pgTable("docs", {
   // publish). Admins may reassign via setDocOwner. The owner may publish new
   // versions directly (no approval queue) and decide revisions on their doc.
   ownerUserId: integer("owner_user_id").references(() => users.id),
+  // ── Document-host projection columns (Phase 1) ────────────────────────────
+  // Every doc belongs to exactly one SPACE; its canonical bytes live in that
+  // space's bare git repo at `path` (`sourcePath` is the repo-relative file
+  // path). These columns make `docs` a PROJECTION INDEX of the repo (§14):
+  //   - spaceId        the owning space (NOT NULL; backfilled to the imported
+  //                    space by migration 0015 for pre-existing rows).
+  //   - currentCommit  the git commit sha the projection was built from (the
+  //                    space ref tip at index time). Null until first indexed.
+  //   - renderedCache  the pre-rendered output (HTML/markdown) for the current
+  //                    commit — refreshed by the indexer on push. Null = render
+  //                    lazily / not yet built.
+  //   - parsedFrontmatter  the doc's parsed YAML frontmatter (jsonb), or {} when
+  //                    none. Feeds catalog/board projections (Phase 2).
+  // contentHash already lives on doc_versions (the per-commit content fingerprint).
+  spaceId: integer("space_id").notNull().references(() => spaces.id),
+  currentCommit: text("current_commit"),
+  renderedCache: text("rendered_cache"),
+  parsedFrontmatter: jsonb("parsed_frontmatter").notNull().default({}),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   // PARTIAL unique index: only one LIVE doc may hold a given slug.
   // Deleted docs (deletedAt IS NOT NULL) are excluded, freeing the slug for reuse.
   uniqueIndex("docs_slug_idx").on(t.slug).where(sql`${t.deletedAt} IS NULL`),
   index("docs_search_tsv_idx").using("gin", t.searchTsv),
+  index("docs_space_idx").on(t.spaceId),
 ]);
 
 // TODO(P1+): add indexes on doc_versions.doc_id, share_views.share_id when query volume justifies
@@ -138,7 +243,7 @@ export const shares = pgTable("shares", {
   // Null on a doc share. Root ('') is disallowed at create — a root share would
   // expose everything.
   pathPrefix: text("path_prefix"),
-  label: text("label").notNull(),              // "Alice", "Acme intro"
+  label: text("label").notNull(),              // "Pedro", "PartnerCo intro"
   createdBy: text("created_by").notNull(),
   allowComments: integer("allow_comments").notNull().default(1), // 1|0 — link visitors may comment
   // null = live (always resolves the doc's current version). Set = pinned: the

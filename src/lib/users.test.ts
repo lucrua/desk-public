@@ -25,11 +25,11 @@ describe("users service", () => {
 
   describe("createUser", () => {
     it("creates a human user (email only) → row with member default role", async () => {
-      const u = await createUser({ email: "bob@example.com", displayName: "Bob", role: "member" });
+      const u = await createUser({ email: "dani@example.org", displayName: "Dani", role: "member" });
       expect(u).not.toBeNull();
-      expect(u!.email).toBe("bob@example.com");
+      expect(u!.email).toBe("dani@example.org");
       expect(u!.tokenName).toBeNull();
-      expect(u!.displayName).toBe("Bob");
+      expect(u!.displayName).toBe("Dani");
       expect(u!.role).toBe("member");
       expect(u!.active).toBe(1);
       expect(typeof u!.id).toBe("number");
@@ -52,9 +52,9 @@ describe("users service", () => {
     });
 
     it("normalizes email: lowercase + trim", async () => {
-      const u = await createUser({ email: "  Alice@Example.COM  ", displayName: "Alice", role: "member" });
+      const u = await createUser({ email: "  Pedro@Example.COM  ", displayName: "Pedro", role: "member" });
       expect(u).not.toBeNull();
-      expect(u!.email).toBe("alice@example.com");
+      expect(u!.email).toBe("pedro@example.com");
     });
 
     it("returns null when NEITHER email nor tokenName provided", async () => {

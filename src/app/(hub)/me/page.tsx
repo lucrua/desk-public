@@ -135,9 +135,9 @@ export default async function MePage() {
           {visibleDocs.length} {visibleDocs.length === 1 ? "doc is" : "docs are"} visible to you.{" "}
           {role === "admin"
             ? "As the admin you see every doc, including unpublished ones."
-            : "Members see published docs in member-visible audiences."}{" "}
-          <Link href="/docs" style={{ color: "var(--accent)", textDecoration: "none" }}>
-            Open docs →
+            : "Members see published docs in spaces they belong to (plus public/unlisted spaces)."}{" "}
+          <Link href="/spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>
+            Open spaces →
           </Link>
         </p>
       </div>

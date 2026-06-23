@@ -1,106 +1,183 @@
 import { createHash } from "node:crypto";
 import { eq, and, desc, ilike, or, sql, inArray, like, isNull } from "drizzle-orm";
 import { db, schema } from "@/db";
-import { docs, docVersions, audiences, audienceMembers, comments, shares, users } from "@/db/schema";
+import { docs, docVersions, comments, shares, users, spaces, spaceMembers } from "@/db/schema";
 import { emitEvent } from "@/lib/events";
-import { resolveMemberUserId } from "@/lib/cards";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 import type { Principal } from "@/lib/auth";
 import { normalizePath } from "@/lib/path";
 import { SNIPPET_START, SNIPPET_STOP } from "@/lib/snippet-delim";
+import { DEFAULT_SPACE_SLUG } from "@/lib/spaces";
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
- * Audience visibility (Audiences v2 — audiences are real GROUPS). Admins see
- * every doc. A member sees a doc iff:
- *
- *   audience.member_visible = 1            (the "all members" switch)
- *   OR the member's user row is in that audience's membership list.
- *
- * Both halves are admin-configurable. Anonymous never reaches this layer (routes
- * gate them first). The predicate is computed ONCE — `memberVisibleAudienceKeys`
- * resolves the full set of audience keys a given member may see (flag-visible ∪
- * keys-they're-a-member-of) and every read surface (listDocs / searchDocs /
- * getDocBySlug / canSeeAudience / the events feed) scopes through it.
- *
- * Fail-closed: a member with no users row (dev mode / brand-new principal) has
- * `userId == null` → no memberships → only the flag-visible keys (the v1
- * behaviour), never another member's targeted docs.
+ * Resolve (and, if absent, create) the Phase-1 default space's id on the GIVEN
+ * transaction handle. Mirrors lib/spaces.ensureDefaultSpace but inlined onto an
+ * open `tx` so publishDoc never nests db.transaction (which would open a second
+ * connection and risk deadlock). Owner = supplied id, else lowest-id active
+ * admin, else lowest-id user. The owner is mirrored as an `owner` member row.
+ * Throws only when there is genuinely no user to own a space — a state no real
+ * publish reaches (a publishing principal implies a user).
  */
+async function ensureDefaultSpaceTx(tx: Tx, ownerUserId?: number): Promise<number> {
+  const [existing] = await tx
+    .select({ id: spaces.id })
+    .from(spaces)
+    .where(eq(spaces.slug, DEFAULT_SPACE_SLUG))
+    .limit(1);
+  if (existing) return existing.id;
 
-/**
- * The set of audience keys a member may see: keys marked member_visible=1 UNION
- * keys whose audience has the member (userId) in its membership list. Used to
- * scope member queries DB-side rather than per-row. `userId` null → membership
- * half is empty (fail-closed to flag-only). Admins never call this.
- */
-async function memberVisibleAudienceKeys(
-  userId: number | null | undefined,
-): Promise<string[]> {
-  // Flag-visible keys (everyone signed in).
-  const flagRows = await db
-    .select({ key: audiences.key })
-    .from(audiences)
-    .where(eq(audiences.memberVisible, 1));
+  let owner = ownerUserId;
+  if (owner == null) {
+    const [admin] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.role, "admin"), eq(users.active, 1)))
+      .orderBy(users.id)
+      .limit(1);
+    owner = admin?.id;
+    if (owner == null) {
+      const [any] = await tx.select({ id: users.id }).from(users).orderBy(users.id).limit(1);
+      owner = any?.id;
+    }
+  }
+  if (owner == null) {
+    // No user exists yet (a degenerate state — a real publishing principal
+    // always implies a user). A space needs an owner FK, so materialize a
+    // reserved `system` user to own it. Idempotent via the unique tokenName.
+    const existingSys = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.tokenName, "system"))
+      .limit(1);
+    if (existingSys[0]) {
+      owner = existingSys[0].id;
+    } else {
+      const [sys] = await tx
+        .insert(users)
+        .values({ tokenName: "system", displayName: "System", role: "member", active: 1 })
+        .returning({ id: users.id });
+      owner = sys.id;
+    }
+  }
 
-  // Membership-visible keys (this specific member belongs to the audience).
-  // Skip the query entirely when there's no user row — nothing can match.
-  const memberRows =
-    userId != null
-      ? await db
-          .select({ key: audiences.key })
-          .from(audienceMembers)
-          .innerJoin(audiences, eq(audiences.id, audienceMembers.audienceId))
-          .where(eq(audienceMembers.userId, userId))
-      : [];
-
-  // Dedup (a key can be both flag-visible AND have an explicit membership).
-  const keys = new Set<string>();
-  for (const r of flagRows) keys.add(r.key);
-  for (const r of memberRows) keys.add(r.key);
-  return [...keys];
+  const [s] = await tx
+    .insert(spaces)
+    .values({ slug: DEFAULT_SPACE_SLUG, ownerUserId: owner, visibility: "private" })
+    .returning({ id: spaces.id, slug: spaces.slug });
+  await tx
+    .insert(spaceMembers)
+    .values({ spaceId: s.id, userId: owner, role: "owner" })
+    .onConflictDoNothing();
+  await emitEvent(tx, {
+    kind: "space.created",
+    payload: { slug: s.slug, ownerUserId: owner, visibility: "private" },
+    actorName: "system",
+  });
+  return s.id;
 }
 
 /**
- * DB-driven audience check for a single doc. Admins see everything; a member
- * sees a doc iff its audience is flag-visible OR the member belongs to it.
- * `userId` is the member's resolved users-row id (null → flag-only). Async
- * because the answer lives in the audiences / audience_members tables.
+ * Space-scoped read visibility (Gen-2 consolidation, D2 — replaces Audiences).
+ *
+ * A doc lives inside exactly one SPACE (a git repo Desk hosts; `docs.spaceId`).
+ * Read access is drawn from the space, never a per-doc tag. Admins see every
+ * doc. A member sees a doc iff:
+ *
+ *   the member belongs to the doc's space   (a space_members row)
+ *   OR the doc's space.visibility ∈ {public, unlisted}   (discoverable spaces).
+ *
+ * A `private` space the member is not in is invisible: excluded from lists and a
+ * uniform not-found on direct fetch (no existence leak). Capability shares are a
+ * SEPARATE door — the public /s/[token] surface resolves via lib/shares
+ * (resolveShare), which bypasses this scope by design; the admin chose to expose
+ * that doc. So the scope here governs the HUB read path only.
+ *
+ * The predicate is computed ONCE — `memberVisibleSpaceIds` resolves the full set
+ * of space ids a given member may see (member-of ∪ public/unlisted) and every
+ * read surface (listDocs / searchDocs / getDocBySlug / the events feed) scopes
+ * through `inArray(docs.spaceId, …)`.
+ *
+ * Fail-closed: a member with no users row (`userId == null`) has no memberships,
+ * so they see ONLY public/unlisted spaces' docs — never a private space's docs.
  */
-export async function canSeeAudience(
+
+/**
+ * The set of space ids a member may see: spaces the member belongs to (a
+ * space_members row) UNION spaces whose visibility is public or unlisted. Used to
+ * scope member queries DB-side rather than per-row. `userId` null → membership
+ * half empty (fail-closed: only public/unlisted spaces). Admins never call this.
+ */
+async function memberVisibleSpaceIds(
+  userId: number | null | undefined,
+): Promise<number[]> {
+  // Discoverable spaces (visible to everyone signed in, regardless of membership).
+  const openRows = await db
+    .select({ id: spaces.id })
+    .from(spaces)
+    .where(inArray(spaces.visibility, ["public", "unlisted"]));
+
+  // Spaces this specific member belongs to. Skip the query when there's no user
+  // row — nothing can match (fail-closed to the open set only).
+  const memberRows =
+    userId != null
+      ? await db
+          .select({ spaceId: spaceMembers.spaceId })
+          .from(spaceMembers)
+          .where(eq(spaceMembers.userId, userId))
+      : [];
+
+  const ids = new Set<number>();
+  for (const r of openRows) ids.add(r.id);
+  for (const r of memberRows) ids.add(r.spaceId);
+  return [...ids];
+}
+
+/**
+ * Single-doc space check. Admins see everything; a member sees a doc iff they
+ * belong to its space OR the space is public/unlisted. `spaceId` is the doc's
+ * owning space; `userId` is the member's resolved users-row id (null → only
+ * public/unlisted). Fail-closed: any uncertainty resolves to not-visible.
+ */
+export async function canSeeDocSpace(
   viewer: "admin" | "member",
-  audience: string,
+  spaceId: number,
   userId?: number | null,
 ): Promise<boolean> {
   if (viewer === "admin") return true;
-  // Flag-visible?
-  const flag = await db.query.audiences.findFirst({
-    where: and(eq(audiences.key, audience), eq(audiences.memberVisible, 1)),
+  // Public/unlisted space → visible to any signed-in member.
+  const space = await db.query.spaces.findFirst({
+    where: eq(spaces.id, spaceId),
   });
-  if (flag != null) return true;
-  // Membership-visible? (only when we resolved a user row)
+  if (!space) return false; // a doc with no resolvable space — fail-closed
+  if (space.visibility === "public" || space.visibility === "unlisted") return true;
+  // Private space → membership required.
   if (userId == null) return false;
   const member = await db
-    .select({ id: audienceMembers.id })
-    .from(audienceMembers)
-    .innerJoin(audiences, eq(audiences.id, audienceMembers.audienceId))
-    .where(and(eq(audiences.key, audience), eq(audienceMembers.userId, userId)))
+    .select({ spaceId: spaceMembers.spaceId })
+    .from(spaceMembers)
+    .where(and(eq(spaceMembers.spaceId, spaceId), eq(spaceMembers.userId, userId)))
     .limit(1);
   return member.length > 0;
 }
 
 /**
- * Viewer scope passed to service functions that enforce audience visibility.
- * `userId` is the member's resolved users-row id (Audiences v2) — it decides
- * which membership-targeted audiences this viewer can see. Absent/null on
- * admins (they see all) and on members with no users row (flag-only, fail-
- * closed). Build it with `scopeForPrincipal`.
+ * Viewer scope passed to service functions that enforce space-scoped read
+ * visibility. `userId` is the member's resolved users-row id — it decides which
+ * spaces the viewer is a member of. Absent/null on admins (they see all) and on
+ * members with no users row (public/unlisted only, fail-closed). Build it with
+ * `scopeForPrincipal`.
  */
 export type ViewerScope = { viewer: "admin" | "member"; userId?: number | null };
 
 /**
  * Resolve a request principal to the ViewerScope the read surfaces expect.
  * Admin → { viewer: "admin" } (sees everything; userId irrelevant). Member →
- * { viewer: "member", userId } with userId resolved via resolveMemberUserId
- * (null when there's no users row — fail-closed to flag-only visibility).
+ * { viewer: "member", userId } with userId resolved via resolvePrincipalUserId
+ * (the SAME id space-membership rows are keyed on, including the dev-mode stub —
+ * so a dev member added to a space actually sees it). Null when there's no
+ * users row → fail-closed to public/unlisted spaces only.
  *
  * This is the ONE place that turns a principal into a membership-aware scope, so
  * every call site stays a single `await scopeForPrincipal(principal)`.
@@ -110,11 +187,11 @@ export async function scopeForPrincipal(
 ): Promise<ViewerScope> {
   if (principal.kind === "admin") return { viewer: "admin" };
   if (principal.kind === "member") {
-    return { viewer: "member", userId: await resolveMemberUserId(principal) };
+    return { viewer: "member", userId: await resolvePrincipalUserId(principal) };
   }
   // Anonymous never reaches a scoped read (routes gate first), but be explicit:
-  // treat as a member with no memberships (flag-only). Callers gate anonymous
-  // before this anyway.
+  // treat as a member with no memberships (public/unlisted only). Callers gate
+  // anonymous before this anyway.
   return { viewer: "member", userId: null };
 }
 
@@ -122,7 +199,12 @@ export type PublishInput = {
   slug: string;
   title: string;
   sourcePath: string;
-  audience: string;
+  /**
+   * VESTIGIAL (Gen-2 consolidation). Read access is space-scoped now — `audience`
+   * no longer gates any read. Optional: when omitted it is stored as null. Kept
+   * on the input only so existing callers compile; new code should not set it.
+   */
+  audience?: string | null;
   format: "md" | "html";
   content: string;
   by: string;
@@ -146,6 +228,13 @@ export type PublishInput = {
    * initial owner; ignored on UPDATE (owner never changes via publish).
    */
   ownerUserId?: number;
+  /**
+   * The space this doc belongs to (document-host Phase 1). Set on CREATE only.
+   * When omitted, publishDoc attaches the Phase-1 default space lazily
+   * (ensureDefaultSpace) — every doc belongs to exactly one space. Ignored on
+   * UPDATE (a doc never changes space via publish).
+   */
+  spaceId?: number;
 };
 
 export type PublishResult =
@@ -187,7 +276,9 @@ async function refreshSearchTsv(
 
 export async function publishDoc(input: PublishInput): Promise<PublishResult> {
   return db.transaction(async (tx) => {
-    const { slug, title, sourcePath, audience, format, content, by } = input;
+    const { slug, title, sourcePath, format, content, by } = input;
+    // Vestigial — stored as-is (default null). Never read by the access layer.
+    const audience = input.audience ?? null;
     const contentHash = sha256(content);
 
     // Look up the LIVE doc (deleted_at IS NULL) by slug.
@@ -207,6 +298,13 @@ export async function publishDoc(input: PublishInput): Promise<PublishResult> {
       // Insert new doc — apply path if supplied (else column default '').
       // On CREATE, set owner_user_id = the creating user (input.ownerUserId).
       // Never change the owner on update.
+      //
+      // Every doc belongs to exactly one SPACE (document-host Phase 1). Use the
+      // caller's spaceId when given, else attach the Phase-1 default space,
+      // creating it inline on THIS transaction if it doesn't exist yet (no
+      // nested db.transaction — that would open a second connection).
+      const spaceId =
+        input.spaceId ?? (await ensureDefaultSpaceTx(tx, input.ownerUserId));
       const [inserted] = await tx
         .insert(docs)
         .values({
@@ -215,6 +313,7 @@ export async function publishDoc(input: PublishInput): Promise<PublishResult> {
           sourcePath,
           audience,
           format,
+          spaceId,
           ...(input.path !== undefined ? { path: input.path } : {}),
           ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : {}),
         })
@@ -522,35 +621,6 @@ export async function setDocOwner(
   });
 }
 
-export type SetDocAudienceResult = "ok" | "noop" | "not-found";
-
-/**
- * Change a doc's audience (Audiences v2 — its visibility group). The caller must
- * have validated that `audience` is an existing audience key. Returns:
- *   - "ok" when the audience changed.
- *   - "noop" when it already equals the doc's current audience (no event).
- *   - "not-found" when the slug is unknown.
- *
- * Emits doc.published? No — this is metadata only (no new version). We don't
- * emit a dedicated event for an audience change (the doc.* event set is
- * version-scoped); the membership/flag model decides visibility on read.
- */
-export async function setDocAudience(
-  slug: string,
-  audience: string,
-  _by: string,
-): Promise<SetDocAudienceResult> {
-  const [doc] = await db
-    .select({ id: docs.id, audience: docs.audience })
-    .from(docs)
-    .where(and(eq(docs.slug, slug), isNull(docs.deletedAt)))
-    .limit(1);
-  if (!doc) return "not-found";
-  if (doc.audience === audience) return "noop";
-  await db.update(docs).set({ audience }).where(eq(docs.id, doc.id));
-  return "ok";
-}
-
 type DocRow = typeof docs.$inferSelect;
 type VersionRow = typeof docVersions.$inferSelect;
 
@@ -573,12 +643,13 @@ export async function getDocBySlug(
     return null;
   }
 
-  // Audience scoping: if a viewer scope is provided, members may only see docs
-  // whose audience is member-visible. Return null (indistinguishable from
-  // not-found) so no existence signal leaks.
+  // Space scoping: if a viewer scope is provided, a member may see this doc only
+  // when they belong to its space OR the space is public/unlisted. Return null
+  // (indistinguishable from not-found) so no existence signal leaks for a private
+  // space the member isn't in.
   if (
     opts?.scope &&
-    !(await canSeeAudience(opts.scope.viewer, doc.audience, opts.scope.userId))
+    !(await canSeeDocSpace(opts.scope.viewer, doc.spaceId, opts.scope.userId))
   ) {
     return null;
   }
@@ -599,7 +670,8 @@ export async function getDocBySlug(
 export type DocListItem = {
   slug: string;
   title: string;
-  audience: string;
+  /** VESTIGIAL (Gen-2 consolidation) — no longer gates visibility. Nullable. */
+  audience: string | null;
   format: "md" | "html";
   /** Folder path ('' = root). */
   path: string;
@@ -611,6 +683,9 @@ export type DocListItem = {
   unpublishedAt: Date | null;
   /** The owner's users.id, or null for docs created before ownership was added. */
   ownerUserId: number | null;
+  /** The slug of the space this doc is projected into (document-host). Always
+   * set for indexed docs; the space badge on the docs list reads it. */
+  spaceSlug: string | null;
 };
 
 export async function listDocs(opts?: {
@@ -644,19 +719,20 @@ export async function listDocs(opts?: {
         )
       : undefined;
 
-  // Audience scoping (DB-side): a member sees only docs whose audience is in
-  // the member-visible set. Build the filter before the query so it lands in
-  // the WHERE clause (no N+1, no per-row post-filter). Admins get no filter.
-  let audienceFilter = undefined;
+  // Space scoping (DB-side): a member sees only docs whose space is in their
+  // visible set (member-of ∪ public/unlisted). Build the filter before the query
+  // so it lands in the WHERE clause (no N+1, no per-row post-filter). Admins get
+  // no filter.
+  let spaceFilter = undefined;
   if (opts?.scope && opts.scope.viewer === "member") {
-    const keys = await memberVisibleAudienceKeys(opts.scope.userId);
-    // No visible audiences → match nothing (inArray([]) is unsafe in SQL).
-    audienceFilter = keys.length > 0 ? inArray(docs.audience, keys) : sql`false`;
+    const ids = await memberVisibleSpaceIds(opts.scope.userId);
+    // No visible spaces → match nothing (inArray([]) is unsafe in SQL).
+    spaceFilter = ids.length > 0 ? inArray(docs.spaceId, ids) : sql`false`;
   }
 
   // Always exclude deleted docs (deleted_at IS NOT NULL).
   const deletedFilter = isNull(docs.deletedAt);
-  const whereParts = [deletedFilter, searchFilter, pathFilter, audienceFilter].filter(Boolean);
+  const whereParts = [deletedFilter, searchFilter, pathFilter, spaceFilter].filter(Boolean);
   const where = whereParts.length > 0 ? and(...whereParts) : undefined;
 
   // Build the query with versionCount via subquery/join
@@ -671,6 +747,7 @@ export async function listDocs(opts?: {
       createdAt: docs.createdAt,
       docId: docs.id,
       ownerUserId: docs.ownerUserId,
+      spaceSlug: spaces.slug,
       versionCount: sql<number>`cast(count(${docVersions.id}) as int)`,
       latestPublishedAt: sql<Date>`max(${docVersions.publishedAt})`,
       // Correlated subquery (not a join) so the doc_versions fan-out doesn't
@@ -682,8 +759,9 @@ export async function listDocs(opts?: {
     })
     .from(docs)
     .leftJoin(docVersions, eq(docVersions.docId, docs.id))
+    .leftJoin(spaces, eq(spaces.id, docs.spaceId))
     .where(where)
-    .groupBy(docs.id);
+    .groupBy(docs.id, spaces.slug);
 
   const filtered = opts?.includeUnpublished
     ? rows
@@ -700,6 +778,7 @@ export async function listDocs(opts?: {
     unresolvedComments: r.unresolvedComments,
     unpublishedAt: r.unpublishedAt,
     ownerUserId: r.ownerUserId ?? null,
+    spaceSlug: r.spaceSlug ?? null,
   }));
 }
 
@@ -735,13 +814,13 @@ export type DocSearchItem = DocListItem & {
 
 /**
  * Full-text search over docs (title weight 'A' + current-version content
- * weight 'B'), audience-scoped IDENTICALLY to listDocs. Ranked by ts_rank
+ * weight 'B'), space-scoped IDENTICALLY to listDocs. Ranked by ts_rank
  * (title matches outrank body matches via the weights baked into search_tsv),
  * with a ts_headline snippet per row.
  *
  * Unpublished handling mirrors listDocs exactly: admins (includeUnpublished)
- * see unpublished docs; everyone else has them filtered out. Audience scoping
- * is the same member-visible join. An empty / whitespace `q` returns [].
+ * see unpublished docs; everyone else has them filtered out. Space scoping is
+ * the same member-visible space-id filter. An empty / whitespace `q` returns [].
  */
 export async function searchDocs(
   q: string,
@@ -764,11 +843,11 @@ export async function searchDocs(
         )
       : undefined;
 
-  // Audience scoping (DB-side) — identical to listDocs.
-  let audienceFilter = undefined;
+  // Space scoping (DB-side) — identical to listDocs.
+  let spaceFilter = undefined;
   if (opts?.scope && opts.scope.viewer === "member") {
-    const keys = await memberVisibleAudienceKeys(opts.scope.userId);
-    audienceFilter = keys.length > 0 ? inArray(docs.audience, keys) : sql`false`;
+    const ids = await memberVisibleSpaceIds(opts.scope.userId);
+    spaceFilter = ids.length > 0 ? inArray(docs.spaceId, ids) : sql`false`;
   }
 
   // The FTS match predicate: the doc's vector must match the query.
@@ -776,7 +855,7 @@ export async function searchDocs(
 
   // Always exclude deleted docs (deleted_at IS NOT NULL).
   const deletedFilter = isNull(docs.deletedAt);
-  const whereParts = [matchFilter, deletedFilter, pathFilter, audienceFilter].filter(Boolean);
+  const whereParts = [matchFilter, deletedFilter, pathFilter, spaceFilter].filter(Boolean);
   const where = and(...(whereParts as NonNullable<typeof pathFilter>[]));
 
   const rows = await db
@@ -790,6 +869,7 @@ export async function searchDocs(
       createdAt: docs.createdAt,
       docId: docs.id,
       ownerUserId: docs.ownerUserId,
+      spaceSlug: spaces.slug,
       versionCount: sql<number>`cast(count(${docVersions.id}) as int)`,
       latestPublishedAt: sql<Date>`max(${docVersions.publishedAt})`,
       unresolvedComments: sql<number>`(
@@ -810,8 +890,9 @@ export async function searchDocs(
     })
     .from(docs)
     .leftJoin(docVersions, eq(docVersions.docId, docs.id))
+    .leftJoin(spaces, eq(spaces.id, docs.spaceId))
     .where(where)
-    .groupBy(docs.id)
+    .groupBy(docs.id, spaces.slug)
     // Highest rank first; stable secondary by id so equal ranks are
     // deterministic across runs.
     .orderBy(sql`ts_rank(${docs.searchTsv}, ${tsquery}) desc`, desc(docs.id));
@@ -831,6 +912,7 @@ export async function searchDocs(
     unresolvedComments: r.unresolvedComments,
     unpublishedAt: r.unpublishedAt,
     ownerUserId: r.ownerUserId ?? null,
+    spaceSlug: r.spaceSlug ?? null,
     snippet: r.snippet,
     rank: r.rank,
   }));

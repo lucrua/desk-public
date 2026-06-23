@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences } from "@/test/db";
+import {
+  resetDb,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+} from "@/test/db";
 import { publishDoc, getDocBySlug, listVersions, getVersionContent } from "@/lib/docs";
 import { docIdForSlug } from "@/lib/comments";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 import {
   createRevision,
   listRevisions,
@@ -13,20 +19,25 @@ import {
 } from "./revisions";
 import { MAX_CONTENT_CHARS, MAX_REVISION_NOTE_CHARS } from "@/lib/limits";
 
+// Gen-2: read access is SPACE-scoped. BASE_DOC + HTML_DOC land in the default
+// `workspace` space (the dev member is seeded as a reader of it). HIDDEN_DOC
+// lives in a SEPARATE private space the member is NOT in — the "member cannot
+// see it" case (the audience-era `pedro` hidden doc).
 const BASE_DOC = {
   slug: "test-doc",
   title: "Test Doc",
   sourcePath: "os/test.md",
-  audience: "team",
   format: "md" as const,
   content: "# Hello\n\noriginal body\n",
-  by: "admin",
+  by: "lucas",
 };
-const HIDDEN_DOC = { ...BASE_DOC, slug: "alice-doc", audience: "alice" };
+const HIDDEN_DOC = { ...BASE_DOC, slug: "pedro-doc" };
 const HTML_DOC = { ...BASE_DOC, slug: "html-doc", format: "html" as const, content: "<p>hi</p>" };
 
 const adminScope = { viewer: "admin" as const };
-const memberScope = { viewer: "member" as const };
+// memberScope.userId is the dev member's resolved users-row id (filled in setup),
+// so the space-scope read path can see workspace docs the member is a reader of.
+let memberScope: { viewer: "member"; userId: number };
 
 async function currentVersionId(slug: string): Promise<number> {
   const r = await getDocBySlug(slug, { includeUnpublished: true });
@@ -36,10 +47,19 @@ async function currentVersionId(slug: string): Promise<number> {
 describe("revisions service", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    // Dev member becomes a reader of the default `workspace` space, so member-
+    // scoped reads of workspace docs (test-doc, html-doc) succeed.
+    await seedDevMemberInDefaultSpace();
+    const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
+    memberScope = { viewer: "member", userId: memberId! };
+
     await publishDoc(BASE_DOC);
-    await publishDoc(HIDDEN_DOC);
     await publishDoc(HTML_DOC);
+
+    // pedro-doc goes into a SEPARATE private space the dev member is NOT in.
+    const adminId = await seedUser({ email: "rev-admin@test.com", displayName: "Admin", role: "admin" });
+    const hiddenSpace = await seedSpace({ slug: "priv", ownerId: adminId, visibility: "private" });
+    await publishDoc({ ...HIDDEN_DOC, spaceId: hiddenSpace });
   });
 
   describe("createRevision", () => {
@@ -84,9 +104,9 @@ describe("revisions service", () => {
       expect(rev).toBeNull();
     });
 
-    it("returns null for a member on a hidden-audience doc (uniform, no leak)", async () => {
+    it("returns null for a member on a doc in a space they're not in (uniform, no leak)", async () => {
       const rev = await createRevision({
-        slug: "alice-doc",
+        slug: "pedro-doc",
         authorName: "Member",
         authorKind: "member",
         scope: memberScope,
@@ -95,9 +115,9 @@ describe("revisions service", () => {
       expect(rev).toBeNull();
     });
 
-    it("admin CAN propose on the hidden-audience doc", async () => {
+    it("admin CAN propose on the out-of-space doc", async () => {
       const rev = await createRevision({
-        slug: "alice-doc",
+        slug: "pedro-doc",
         authorName: "Admin",
         authorKind: "admin",
         scope: adminScope,
@@ -211,9 +231,9 @@ describe("revisions service", () => {
 
     it("scopes by docId", async () => {
       const docId = (await docIdForSlug("test-doc"))!;
-      const otherId = (await docIdForSlug("alice-doc"))!;
+      const otherId = (await docIdForSlug("pedro-doc"))!;
       await createRevision({ slug: "test-doc", authorName: "A", authorKind: "admin", scope: adminScope, content: "on first" });
-      await createRevision({ slug: "alice-doc", authorName: "A", authorKind: "admin", scope: adminScope, content: "on other" });
+      await createRevision({ slug: "pedro-doc", authorName: "A", authorKind: "admin", scope: adminScope, content: "on other" });
       expect((await listRevisions(docId)).map((r) => r.content)).toEqual(["on first"]);
       expect((await listRevisions(otherId)).map((r) => r.content)).toEqual(["on other"]);
     });
@@ -247,14 +267,13 @@ describe("revisions service", () => {
       expect(persisted!.authorName).toBe("Alex");
     });
 
-    it("does not change title / audience / sourcePath (content only)", async () => {
+    it("does not change title / sourcePath / format (content only)", async () => {
       const rev = await createRevision({
         slug: "test-doc", authorName: "A", authorKind: "admin", scope: adminScope, content: "# new",
       });
       await acceptRevision(rev!.id, { by: "Admin" });
       const doc = (await getDocBySlug("test-doc", { includeUnpublished: true }))!.doc;
       expect(doc.title).toBe("Test Doc");
-      expect(doc.audience).toBe("team");
       expect(doc.sourcePath).toBe("os/test.md");
       expect(doc.format).toBe("md");
     });

@@ -1,75 +1,76 @@
 import { headers } from "next/headers";
 import { getPrincipal } from "@/lib/auth";
-import { listKinds, listItems, getItem } from "@/lib/catalogs";
-import CatalogClient from "./CatalogClient";
-import type { CatalogItemDTO, CatalogKindDTO } from "./view-model";
+import { scopeForPrincipal } from "@/lib/docs";
+import {
+  catalogSpaces,
+  directoriesInSpace,
+  catalogDocs,
+  readCollectionConfig,
+} from "@/lib/catalog/source";
+import { projectCatalog } from "@/lib/catalog/projection";
+import CatalogProjectionClient, { type SchemaDTO } from "./CatalogProjectionClient";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The catalog surface (replaces the disabled "Findings" nav stub). Staff-only
- * (the layout gates anonymous; catalogs are internal — no audience scoping).
- * The server resolves every kind + the active kind's items (with per-item link
- * counts), then hands them to the client island which owns tab switching,
- * status/text filters, the schema editor, and the new-kind form. Mutations go
- * through /api/catalogs; the island re-fetches after each.
+ * The catalog surface — Gen-2 reframe (D6): a PROJECTION of a space directory's
+ * frontmatter, not a Desk-authored registry.
+ *
+ * The reader picks a space + (optional) directory via ?space=&dir=. The server
+ * resolves the docs under that prefix (scope-filtered so a member never sees a
+ * private space's docs), reads their parsed frontmatter, and — when a
+ * `.desk.collection.yml` exists in that directory (read from the space's bare git
+ * repo at the current commit) — parses it into a schema (fields/enums/views) and
+ * validates each doc, surfacing drift. With no schema it falls back to AUTO mode
+ * (the union of frontmatter fields). View/group/sort/filter are display-only
+ * client state; the catalog is READ/RENDER-ONLY (no file or DB writes).
  */
 export default async function CatalogPage({
   searchParams,
 }: {
-  searchParams: Promise<{ kind?: string }>;
+  searchParams: Promise<{ space?: string; dir?: string }>;
 }) {
-  const [principal, { kind: kindParam }] = await Promise.all([
+  const [principal, sp] = await Promise.all([
     getPrincipal(await headers()),
     searchParams,
   ]);
-  const isAdmin = principal.kind === "admin";
+  const scope = await scopeForPrincipal(principal);
 
-  const kindRows = await listKinds();
-  const kinds: CatalogKindDTO[] = kindRows.map((k) => ({
-    kind: k.kind,
-    label: k.label,
-    idPattern: k.idPattern,
-    schema: k.schema,
-    itemCount: k.itemCount,
-  }));
+  const spaces = await catalogSpaces(scope);
+  // Default the space to the chosen one, else the first visible space.
+  const space = (sp.space && spaces.find((s) => s.slug === sp.space)?.slug) ?? spaces[0]?.slug ?? null;
+  const dir = sp.dir ?? "";
 
-  // Active kind = the ?kind= param if it exists, else the first kind.
-  const activeKind =
-    (kindParam && kinds.find((k) => k.kind === kindParam)?.kind) ?? kinds[0]?.kind ?? null;
+  let dirs: Array<{ path: string; count: number }> = [];
+  let projection = projectCatalog([], null);
+  let schema: SchemaDTO = null;
 
-  let items: CatalogItemDTO[] = [];
-  let linkCounts: Record<string, { outbound: number; inbound: number }> = {};
-  if (activeKind) {
-    const rows = await listItems({ kind: activeKind });
-    items = rows.map((r) => ({
-      kind: r.kind,
-      itemId: r.itemId,
-      title: r.title,
-      status: r.status,
-      body: r.body,
-      data: (r.data ?? {}) as Record<string, unknown>,
-      updatedAt: r.updatedAt.toISOString(),
-    }));
-    // Per-item link counts for the row summary. Cheap for a registry page.
-    const counts: Record<string, { outbound: number; inbound: number }> = {};
-    for (const it of rows) {
-      const full = await getItem(activeKind, it.itemId);
-      counts[it.itemId] = {
-        outbound: full?.outbound.length ?? 0,
-        inbound: full?.inbound.length ?? 0,
+  if (space) {
+    dirs = (await directoriesInSpace(space, scope)) ?? [];
+    // Clamp the requested dir to one that exists (else root).
+    const effectiveDir = dirs.some((d) => d.path === dir) ? dir : "";
+    const docs = (await catalogDocs(space, effectiveDir, scope)) ?? [];
+    const cfg = await readCollectionConfig(space, effectiveDir);
+    projection = projectCatalog(docs, cfg?.config ?? null);
+    if (cfg && cfg.config.fields.length > 0) {
+      schema = {
+        fields: cfg.config.fields,
+        views: cfg.config.views,
+        defaultView: cfg.config.defaultView,
+        notes: cfg.config.notes,
+        rawPath: cfg.rawPath,
       };
     }
-    linkCounts = counts;
   }
 
   return (
-    <CatalogClient
-      isAdmin={isAdmin}
-      initialKinds={kinds}
-      initialActiveKind={activeKind}
-      initialItems={items}
-      initialLinkCounts={linkCounts}
+    <CatalogProjectionClient
+      spaces={spaces}
+      dirs={dirs}
+      space={space}
+      dir={dirs.some((d) => d.path === dir) ? dir : ""}
+      projection={projection}
+      schema={schema}
     />
   );
 }

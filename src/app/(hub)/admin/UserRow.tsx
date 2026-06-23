@@ -13,8 +13,6 @@ export type UserRowView = {
   created: string; // YYYY-MM-DD stamp
   /** True when this row is the signed-in admin's own row. */
   isSelf: boolean;
-  /** Audiences this user belongs to (read-only chips; managed from Audiences). */
-  audiences: Array<{ key: string; label: string }>;
   /** All of the user's emails (multi-email) — chips + add/remove control. */
   emails: Array<{ email: string; primary: boolean }>;
   /**
@@ -325,28 +323,6 @@ export default function UserRow({ row }: { row: UserRowView }) {
               ✎
             </button>
           </span>
-          {row.audiences.length > 0 && (
-            <span style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-              {row.audiences.map((a) => (
-                <span
-                  key={a.key}
-                  title={`Member of ${a.label} (${a.key}) — manage in Audiences`}
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 9.5,
-                    fontWeight: 400,
-                    padding: "1px 6px",
-                    borderRadius: 999,
-                    border: "1px solid var(--hairline-strong)",
-                    background: "var(--surface-alt)",
-                    color: "var(--muted)",
-                  }}
-                >
-                  {a.label}
-                </span>
-              ))}
-            </span>
-          )}
         </span>
         {/* email cell — chips (primary flagged) + add control. */}
         <span

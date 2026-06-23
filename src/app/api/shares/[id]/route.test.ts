@@ -7,10 +7,10 @@ const DOC = {
   slug: "patch-doc",
   title: "Patch Doc",
   sourcePath: "os/p.md",
-  audience: "external:alice",
+  audience: "external:pedro",
   format: "md" as const,
   content: "# Hi",
-  by: "admin",
+  by: "lucas",
 };
 
 type Role = "admin" | "member" | "anonymous";
@@ -35,7 +35,7 @@ describe("PATCH /api/shares/[id]", () => {
   });
 
   async function shareId() {
-    return (await createShareOk("patch-doc", "Alice", "admin")).id;
+    return (await createShareOk("patch-doc", "Pedro", "lucas")).id;
   }
 
   it("admin toggles allowComments off → 200 and persists", async () => {

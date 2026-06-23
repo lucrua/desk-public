@@ -23,11 +23,17 @@ function parseCookie(cookieHeader: string, name: string): string | undefined {
  * Only the values `admin` and `member` produce staff principals;
  * anything else (including absent) → anonymous.
  *
- * @throws if NODE_ENV === "production" — the dev provider must never
- *         be reachable in production.
+ * @throws if NODE_ENV === "production" — the dev provider must never be
+ *         reachable in production, UNLESS DESK_ALLOW_DEV_AUTH=1 is set to
+ *         explicitly opt a non-production (e.g. staging) box into dev-auth.
+ *         Only set that flag where the host is otherwise access-controlled or
+ *         holds disposable fixtures: open URL + dev-auth = anyone is admin.
  */
 export async function principalFromDevHeaders(headers: Headers): Promise<Principal> {
-  if (process.env.NODE_ENV === "production") {
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.DESK_ALLOW_DEV_AUTH !== "1"
+  ) {
     throw new Error("Dev identity provider must not be used in production");
   }
 

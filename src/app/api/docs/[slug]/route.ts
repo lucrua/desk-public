@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPrincipal, isStaff } from "@/lib/auth";
-import { getDocBySlug, listVersions, unpublishDoc, deleteDoc, setDocPath, setDocAudience, scopeForPrincipal } from "@/lib/docs";
-import { audienceExists } from "@/lib/audiences";
+import { getDocBySlug, listVersions, deleteDoc, setDocPath, scopeForPrincipal } from "@/lib/docs";
 import { normalizePath } from "@/lib/path";
 
 function err(status: number, message: string) {
@@ -37,12 +36,12 @@ export async function GET(req: Request, { params }: RouteContext) {
 }
 
 /**
- * PATCH /api/docs/[slug] — admin-only mutable-metadata edits. Supports two
- * mutually-exclusive shapes:
+ * PATCH /api/docs/[slug] — admin-only mutable-metadata edit. Supports:
  *   - { path: "<canonical path>" }  — the folder-path "Move…" action (orga-
  *     nizational only; visibility untouched).
- *   - { audience: "<key>" }         — the Sharing-panel visibility control
- *     (Audiences v2). The key must already exist.
+ *
+ * Read visibility is space-scoped now (Gen-2 consolidation) — there is no
+ * per-doc audience to set here; a doc's visibility follows its space.
  */
 export async function PATCH(req: Request, { params }: RouteContext) {
   const principal = await getPrincipal(req.headers as unknown as Headers);
@@ -60,24 +59,8 @@ export async function PATCH(req: Request, { params }: RouteContext) {
   }
   const b = body as Record<string, unknown>;
 
-  // Audience change (Sharing panel). Validate the key exists before applying.
-  if ("audience" in b) {
-    if (typeof b.audience !== "string" || b.audience.trim().length === 0) {
-      return err(400, "audience must be a non-empty string");
-    }
-    const key = b.audience.trim();
-    if (!(await audienceExists(key))) {
-      return err(400, "unknown audience — create it in /admin first");
-    }
-    const result = await setDocAudience(slug, key, principal.name);
-    if (result === "not-found") {
-      return err(404, `Doc '${slug}' not found`);
-    }
-    return NextResponse.json({ ok: true, slug, audience: key, changed: result === "ok" });
-  }
-
   if (!("path" in b)) {
-    return err(400, "Missing path or audience — PATCH supports { path } or { audience }");
+    return err(400, "Missing path — PATCH supports { path }");
   }
   const np = normalizePath(b.path);
   if (np === null) {

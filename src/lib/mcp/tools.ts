@@ -8,13 +8,20 @@
  * means the authorization + behaviour of every tool is unit-testable without
  * standing up a transport.
  *
- * Authorization mirrors the REST API exactly (the single source of truth being
- * the routes under `src/app/api/**`):
- *   - reads (list_docs, get_doc, list_audiences, whoami) → any staff principal;
- *     members are viewer-scoped (audience-visibility) the same way GET routes
- *     scope them.
+ * MCP is the AGENT surface, REST is the UI surface — deliberately NOT 1:1.
+ * MCP exposes what a headless agent drives (docs, versions, events, shares +
+ * distribution, comments, revisions/approvals, board cards, spaces,
+ * tokens, whoami). Pure web-UI admin actions (user/email CRUD, access-request
+ * triage, board-bucket lifecycle, per-share view-log/comment-toggle) are
+ * REST-only and have no MCP tool. See the "MCP surface policy" note next to the
+ * TOOLS registry at the bottom of this file.
+ *
+ * Authorization mirrors the matching REST route for each tool:
+ *   - reads (list_docs, get_doc, whoami) → any staff principal; members are
+ *     viewer-scoped by SPACE membership/visibility the same way GET routes do.
  *   - mutations + share management (publish_doc, unpublish_doc, create_share,
- *     list_shares, revoke_share) → admin only.
+ *     list_shares, revoke_share) → admin only (a doc's owner may also publish
+ *     versions to / decide revisions on their own doc).
  *
  * A principal that fails the authz check gets a tool *error result*
  * (`isError: true`) rather than a thrown exception — MCP clients render that as
@@ -41,16 +48,6 @@ import { snippetToMarkdown } from "@/app/(hub)/docs/view-model";
 import { listEvents, EVENT_KINDS } from "@/lib/events";
 import { normalizePath } from "@/lib/path";
 import {
-  audienceExists,
-  listAudiences,
-  createAudience,
-  setAudienceMemberVisible,
-  deleteAudience,
-  listAudienceMembers,
-  addAudienceMember,
-  removeAudienceMember,
-} from "@/lib/audiences";
-import {
   createShare,
   createDirectoryShare,
   listShares,
@@ -58,12 +55,10 @@ import {
   revealShareUrl,
   deleteShare,
   listSharesForDoc,
-  setShareComments,
-  listViews,
 } from "@/lib/shares";
 import { deleteDoc } from "@/lib/docs";
 import {
-  distributionByAudience,
+  distributionBySpace,
   distributionByUser,
   distributionLinks,
 } from "@/lib/distribution";
@@ -85,31 +80,10 @@ import { db } from "@/db";
 import { docs } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { canPublishVersion, canDecideRevision } from "@/lib/permissions";
-import {
-  listUsers,
-  createUser,
-  setUserDisplayName,
-  setUserTokenName,
-  applyAdminMutation,
-  getUserById,
-  listUserEmails,
-  addUserEmail,
-  removeUserEmail,
-  isLastAdminOperation,
-} from "@/lib/users";
-import {
-  listAccessRequests,
-  approveAccessRequest,
-  dismissAccessRequest,
-} from "@/lib/access-requests";
-import { uaLabel } from "@/lib/ua";
-import { isSelfDeactivation } from "@/app/api/users/[id]/route";
-import {
-  listBuckets,
-  createBucket,
-  renameBucket,
-  deleteBucket,
-} from "@/lib/buckets";
+// User CRUD, access-request triage, and board-bucket lifecycle are web-UI-only
+// (REST), so their service helpers are no longer imported here — see the MCP
+// surface policy note at the bottom of this file.
+import { listBuckets } from "@/lib/buckets";
 import {
   listCards,
   getCard,
@@ -123,14 +97,18 @@ import {
   resolveMemberUserId,
 } from "@/lib/cards";
 import {
-  listKinds,
-  getSchema,
-  upsertSchema,
-  listItems,
-  getItem,
-  upsertItem,
-  deleteItem,
-} from "@/lib/catalogs";
+  listSpaces,
+  createSpace,
+  setSpaceMemberRole,
+  canManageSpace,
+  getSpaceBySlug,
+  mintPrincipalToken,
+  listTokensForUser,
+  listAllTokens,
+  revokePrincipalToken,
+  tokenOwnerUserId,
+} from "@/lib/spaces";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 
 // ── Shared result shape ────────────────────────────────────────────────────────
 
@@ -194,15 +172,12 @@ function defineTool<Shape extends ZodRawShape>(def: ToolDef<Shape>): ToolDef<Sha
 const ADMIN_ONLY = "Forbidden — admin only";
 const STAFF_ONLY = "Forbidden — staff only";
 
-// Mirror GET /api/shares/[id]/views — raw UA truncated to 80 chars for a tooltip.
-const RAW_UA_TOOLTIP_MAX = 80;
-
 // ── Tools ──────────────────────────────────────────────────────────────────────
 
 const listDocsTool = defineTool({
   name: "list_docs",
   description:
-    "List published docs visible to the caller. Admins see every doc (including unpublished); members see only docs whose audience is member-visible. Optional `q` runs a full-text search over title + current-version content (ranked, title matches first) — each row then carries a `snippet` (matched terms wrapped in **bold**) and `rank`. Optional `path_prefix` restricts to a folder and its descendants (e.g. 'os' matches docs at path 'os' and 'os/canon').",
+    "List published docs visible to the caller. Admins see every doc (including unpublished); members see only docs in spaces they can see (member-of, or public/unlisted). Optional `q` runs a full-text search over title + current-version content (ranked, title matches first) — each row then carries a `snippet` (matched terms wrapped in **bold**) and `rank`. Optional `path_prefix` restricts to a folder and its descendants (e.g. 'os' matches docs at path 'os' and 'os/canon').",
   inputSchema: {
     q: z
       .string()
@@ -247,7 +222,7 @@ const listDocsTool = defineTool({
 const searchDocsTool = defineTool({
   name: "search_docs",
   description:
-    "Full-text search over docs (staff only, audience-scoped exactly like list_docs). Matches the query against each doc's title (weighted highest) and current-version content, ranked by relevance. Returns the matching docs newest-relevance-first, each with a `snippet` (the matched passage, with matched terms wrapped in **bold**) and a numeric `rank`. Members only see member-visible audiences; admins also see unpublished docs. An empty query returns no results. Snippets are plain text (matched terms bolded) — never raw HTML, safe to render as-is.",
+    "Full-text search over docs (staff only, space-scoped exactly like list_docs). Matches the query against each doc's title (weighted highest) and current-version content, ranked by relevance. Returns the matching docs newest-relevance-first, each with a `snippet` (the matched passage, with matched terms wrapped in **bold**) and a numeric `rank`. Members only see docs in spaces they can see; admins also see unpublished docs. An empty query returns no results. Snippets are plain text (matched terms bolded) — never raw HTML, safe to render as-is.",
   inputSchema: {
     q: z.string().describe("The full-text query (websearch syntax: bare words, \"quoted phrases\", -exclusions)."),
     limit: z
@@ -275,7 +250,7 @@ const searchDocsTool = defineTool({
 const getDocTool = defineTool({
   name: "get_doc",
   description:
-    "Fetch one doc by slug: its metadata, current version content, and the full version list. Viewer-scoped like list_docs — members only see member-visible audiences; an out-of-scope or missing slug returns a not-found error (no existence signal leaks).",
+    "Fetch one doc by slug: its metadata, current version content, and the full version list. Viewer-scoped like list_docs — members only see docs in spaces they can see; an out-of-scope or missing slug returns a not-found error (no existence signal leaks).",
   inputSchema: {
     slug: z.string().describe("The doc slug."),
   },
@@ -299,7 +274,7 @@ const getDocTool = defineTool({
 const publishDocTool = defineTool({
   name: "publish_doc",
   description:
-    "Publish (create or update) a doc. CREATING a new slug is admin-only. UPDATING an existing slug: admin OR the doc's owner (direct publish, no approval). Same validations as POST /api/docs: slug must match ^[a-z0-9][a-z0-9-]*$, format is 'md' or 'html', and content is capped at 2,000,000 chars. `audience` is OPTIONAL — omit it to default to `private` (only the author/admins + explicitly-added members see it); when provided it must already exist (create it in /admin first). Identical content to the current version is a no-op (mutable fields still update). Returns the slug, versionId, whether a new version was created, and the hub URL.",
+    "Publish (create or update) a doc. CREATING a new slug is admin-only. UPDATING an existing slug: admin OR the doc's owner (direct publish, no approval). Same validations as POST /api/docs: slug must match ^[a-z0-9][a-z0-9-]*$, format is 'md' or 'html', and content is capped at 2,000,000 chars. `audience` is OPTIONAL and VESTIGIAL — read access is space-scoped now, so the value is stored unread; omit it to default to `private`. Identical content to the current version is a no-op (mutable fields still update). Returns the slug, versionId, whether a new version was created, and the hub URL.",
   inputSchema: {
     slug: z.string().describe("Doc slug (^[a-z0-9][a-z0-9-]*$)."),
     title: z.string().describe("Human-readable title."),
@@ -307,7 +282,7 @@ const publishDocTool = defineTool({
     audience: z
       .string()
       .optional()
-      .describe("Audience key — must already exist. Omit to default to `private`."),
+      .describe("Audience key — vestigial (stored unread). Omit to default to `private`."),
     format: z.enum(["md", "html"]).describe("Content format."),
     content: z.string().describe("Doc body (md or html)."),
     path: z
@@ -352,9 +327,9 @@ const publishDocTool = defineTool({
       }
       normalizedPath = np;
     }
-    if (!(await audienceExists(audienceKey))) {
-      return fail("unknown audience — create it in /admin first");
-    }
+    // Audience is VESTIGIAL under Gen-2 (read access is space-scoped); the value
+    // is passed through unread and no longer validated against the dormant
+    // `audiences` table.
 
     // Permission check: is the slug an existing doc or a new one?
     const existingDoc = await getDocBySlug(args.slug, {
@@ -404,23 +379,57 @@ const publishDocTool = defineTool({
   },
 });
 
-const setDocPathTool = defineTool({
-  name: "set_doc_path",
+const updateDocTool = defineTool({
+  name: "update_doc",
   description:
-    "Move a doc to a folder path (admin only). The path is organizational only — identity stays the slug, audience/visibility unchanged. Path: slash-joined segments ^[a-z0-9][a-z0-9-]*$, max depth 6; '' = root. Emits a doc.moved event. An unknown slug returns a not-found error.",
+    "Update a doc's mutable metadata WITHOUT publishing a new version (admin only). One consolidated tool for the doc's organizational fields — pass any combination of:\n" +
+    "  • `path` — move the doc to a folder (slash-joined segments ^[a-z0-9][a-z0-9-]*$, max depth 6; '' = root). Organizational only — identity stays the slug, visibility unchanged. Emits doc.moved.\n" +
+    "  • `owner_user_id` — reassign the owner (must be an active users-row id). The owner may publish new versions directly and decide revisions on their doc. Emits doc.owner_changed.\n" +
+    "To change a doc's CONTENT, use publish_doc (or propose_revision). At least one field must be supplied. An unknown slug, or an inactive owner, returns a not-found / invalid error.",
   inputSchema: {
-    slug: z.string().describe("The doc slug to move."),
-    path: z.string().describe("Destination folder path ('' = root)."),
+    slug: z.string().describe("The doc slug to update."),
+    path: z
+      .string()
+      .optional()
+      .describe("Destination folder path ('' = root). Omit to leave the folder unchanged."),
+    owner_user_id: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("New owner's users-row id (active). Omit to leave the owner unchanged."),
   },
   handler: async (principal, args) => {
     if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const np = normalizePath(args.path);
-    if (np === null) {
-      return fail("Invalid path — segments must match ^[a-z0-9][a-z0-9-]*$, max depth 6");
+    if (args.path === undefined && args.owner_user_id === undefined) {
+      return fail("Nothing to update — provide at least one of path, owner_user_id");
     }
-    const result = await setDocPath(args.slug, np, principal.name);
-    if (result === "not-found") return fail(`Doc '${args.slug}' not found`);
-    return ok({ ok: true, slug: args.slug, path: np, moved: result === "ok" });
+
+    let movedPath: string | undefined;
+    if (args.path !== undefined) {
+      const np = normalizePath(args.path);
+      if (np === null) {
+        return fail("Invalid path — segments must match ^[a-z0-9][a-z0-9-]*$, max depth 6");
+      }
+      const result = await setDocPath(args.slug, np, principal.name);
+      if (result === "not-found") return fail(`Doc '${args.slug}' not found`);
+      movedPath = np;
+    }
+
+    if (args.owner_user_id !== undefined) {
+      const result = await setDocOwner(args.slug, args.owner_user_id, principal.name);
+      if (result === "not-found") return fail(`Doc '${args.slug}' not found`);
+      if (result === "invalid-user") {
+        return fail(`User ${args.owner_user_id} does not exist or is inactive`);
+      }
+    }
+
+    return ok({
+      ok: true,
+      slug: args.slug,
+      ...(movedPath !== undefined ? { path: movedPath } : {}),
+      ...(args.owner_user_id !== undefined ? { ownerUserId: args.owner_user_id } : {}),
+    });
   },
 });
 
@@ -558,22 +567,10 @@ const revokeShareTool = defineTool({
   },
 });
 
-const listAudiencesTool = defineTool({
-  name: "list_audiences",
-  description:
-    "List all audiences (key, label, member-visibility flag, live doc-count). Staff only. Useful before publish_doc to pick a valid existing audience key.",
-  inputSchema: {},
-  handler: async (principal) => {
-    if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const audiences = await listAudiences();
-    return ok({ audiences });
-  },
-});
-
 const listCommentsTool = defineTool({
   name: "list_comments",
   description:
-    "List the comment thread on a doc by slug (staff only, viewer-scoped exactly like get_doc — a member only sees member-visible audiences; an out-of-scope or missing slug returns a not-found error). Returns the full thread including resolved comments, oldest-first. Comment bodies are markdown; authorName / authorKind are data — render as plain text.",
+    "List the comment thread on a doc by slug (staff only, viewer-scoped exactly like get_doc — a member only sees docs in spaces they can see; an out-of-scope or missing slug returns a not-found error). Returns the full thread including resolved comments, oldest-first. Comment bodies are markdown; authorName / authorKind are data — render as plain text.",
   inputSchema: {
     slug: z.string().describe("The doc slug."),
   },
@@ -658,470 +655,179 @@ function maskContact(value: string | undefined): string | null {
   return `${value.slice(0, 1)}${"*".repeat(value.length - 2)}${value.slice(-1)}`;
 }
 
-// ── Admin: user management ──────────────────────────────────────────────────────
+// ── Spaces (document-host Phase 1) ──────────────────────────────────────────────
+// Both-channels parity with the REST surface under /api/spaces. A SPACE is the
+// owned, access-controlled git repo Desk hosts (the WRITE boundary). Reads are
+// staff-scoped (admins see all, members see theirs); mutations are admin-only.
 
-const listUsersTool = defineTool({
-  name: "list_users",
+const listSpacesTool = defineTool({
+  name: "list_spaces",
   description:
-    "List all users (id, email, tokenName, displayName, role, active flag, createdAt), newest-first. Same projection as GET /api/users. Admin only.",
+    "List spaces visible to the caller (document-host). Admins see every space; members see only spaces they belong to. Each row carries slug, ownerUserId, visibility, memberCount, createdAt. Mirrors GET /api/spaces. Staff only.",
   inputSchema: {},
   handler: async (principal) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const users = await listUsers();
-    return ok({ users });
+    if (!isStaff(principal)) return fail(STAFF_ONLY);
+    const isAdmin = principal.kind === "admin";
+    const userId = isAdmin ? null : await resolveMemberUserId(principal);
+    const spaces = await listSpaces({ isAdmin, userId });
+    return ok({ spaces });
   },
 });
 
-const createUserTool = defineTool({
-  name: "create_user",
+const createSpaceTool = defineTool({
+  name: "create_space",
   description:
-    "Create a member user (admin only). Mirrors POST /api/users: requires a non-empty display_name and at least one identifier (email or token_name); email is normalized (trim + lowercase). A duplicate email or token_name returns an error result. Every new user is created as a member; use update_user with role:'admin' to promote them afterwards.",
+    "Create a space — an owned, access-controlled git repo Desk hosts (admin only). Mirrors POST /api/spaces: slug must match ^[a-z0-9][a-z0-9-]*$ and be unique; visibility is private|unlisted|public (default private); owner_user_id defaults to the calling admin. The owner is added as an `owner` member. A duplicate slug returns an error result.",
   inputSchema: {
-    display_name: z.string().describe("Human display name (non-empty after trim)."),
-    email: z.string().optional().describe("Email — normalized to trimmed lowercase."),
-    token_name: z
-      .string()
+    slug: z.string().describe("Space slug (^[a-z0-9][a-z0-9-]*$)."),
+    visibility: z
+      .enum(["private", "unlisted", "public"])
       .optional()
-      .describe("Service-token Client ID (common_name) to bind this user to."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    if (args.display_name.trim().length === 0) {
-      return fail("Missing or invalid displayName — must be a non-empty string");
-    }
-    const hasIdentifier =
-      (args.email != null && args.email.trim().length > 0) ||
-      (args.token_name != null && args.token_name.trim().length > 0);
-    if (!hasIdentifier) {
-      return fail("Provide at least one of email or service-token Client ID");
-    }
-    const user = await createUser({
-      email: args.email,
-      tokenName: args.token_name,
-      displayName: args.display_name.trim(),
-    });
-    // hasIdentifier is true here, so a null result means a duplicate.
-    if (user === null) {
-      return fail("A user with that email or token name already exists");
-    }
-    return ok({ user });
-  },
-});
-
-const updateUserTool = defineTool({
-  name: "update_user",
-  description:
-    "Update a user (admin only). Mirrors PATCH /api/users/[id] exactly: provide at least one of display_name (non-empty), token_name (string or explicit null to clear), active (boolean), or role ('admin'|'member'). email is immutable and is NOT accepted. Enforces the self-deactivation guard — an admin cannot set its own row inactive (matched by email or tokenName). Enforces the last-admin guard — the only active admin cannot be demoted or deactivated. A duplicate token_name and an unknown id return error results.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric user id."),
-    display_name: z.string().optional().describe("New display name (non-empty after trim)."),
-    token_name: z
-      .string()
-      .nullable()
-      .optional()
-      .describe("New service-token Client ID; pass null to clear it."),
-    active: z.boolean().optional().describe("Active flag — false deactivates the user."),
-    role: z
-      .enum(["admin", "member"])
-      .optional()
-      .describe("Role to assign. Admin-only. Guarded by the last-admin invariant."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-
-    const hasDisplayName = args.display_name !== undefined;
-    const hasTokenName = args.token_name !== undefined;
-    const hasActive = args.active !== undefined;
-    const hasRole = args.role !== undefined;
-
-    if (!hasDisplayName && !hasTokenName && !hasActive && !hasRole) {
-      return fail(
-        "Provide at least one of: active (boolean), role ('admin'|'member'), tokenName (string|null), displayName (string)",
-      );
-    }
-    if (hasDisplayName && args.display_name!.trim().length === 0) {
-      return fail("displayName must be a non-empty string");
-    }
-
-    // Load the target so the self-lockout guard can match on identity and so an
-    // unknown id 404s before any mutation (mirrors the route's ordering).
-    const target = await getUserById(args.id);
-    if (target === null) return fail(`User ${args.id} not found`);
-
-    if (isSelfDeactivation(principal, target, args.active)) {
-      return fail("You can't deactivate yourself — ask another admin to do it.");
-    }
-
-    // Last-admin guard for demote — fires for both self-demotion and other-demotion.
-    if (hasRole && args.role === "member") {
-      const lastAdmin = await isLastAdminOperation(args.id, { newRole: "member" });
-      if (lastAdmin) {
-        // Detect self vs other for a more helpful message.
-        const pEmails = (principal.emails ?? (principal.email ? [principal.email] : [])).map(
-          (e) => e.trim().toLowerCase(),
-        );
-        const selfMatch =
-          (target.email != null && pEmails.includes(target.email.toLowerCase())) ||
-          (principal.tokenName != null &&
-            target.tokenName != null &&
-            principal.tokenName === target.tokenName);
-        if (selfMatch) {
-          return fail(
-            "You are the only active admin — promote another user to admin before changing your own role.",
-          );
-        }
-        return fail(
-          "Cannot demote the only active admin — promote another user to admin first.",
-        );
-      }
-    }
-
-    // Last-admin deactivation guard.
-    if (hasActive && args.active === false) {
-      const lastAdmin = await isLastAdminOperation(args.id, { activeChange: false });
-      if (lastAdmin) {
-        return fail(
-          "Cannot deactivate the only active admin — promote another user to admin first.",
-        );
-      }
-    }
-
-    if (hasDisplayName) {
-      await setUserDisplayName(args.id, args.display_name!);
-    }
-    // Apply role and/or active atomically under the admin-set advisory lock so the
-    // last-admin invariant can't be raced (TOCTOU). The pre-flight guards above
-    // give specific messages on the common path; this re-checks INSIDE the lock and
-    // catches a mutation that only loses the invariant under a concurrent race.
-    if (hasRole || hasActive) {
-      const result = await applyAdminMutation(args.id, {
-        newRole: hasRole ? args.role : undefined,
-        active: hasActive ? args.active : undefined,
-      });
-      if (result === "last-admin") {
-        if (args.active === false) {
-          return fail(
-            "Cannot deactivate the only active admin — promote another user to admin first.",
-          );
-        }
-        // Demote path: detect self vs other for the matching message.
-        const pEmails = (principal.emails ?? (principal.email ? [principal.email] : [])).map(
-          (e) => e.trim().toLowerCase(),
-        );
-        const selfMatch =
-          (target.email != null && pEmails.includes(target.email.toLowerCase())) ||
-          (principal.tokenName != null &&
-            target.tokenName != null &&
-            principal.tokenName === target.tokenName);
-        if (selfMatch) {
-          return fail(
-            "You are the only active admin — promote another user to admin before changing your own role.",
-          );
-        }
-        return fail(
-          "Cannot demote the only active admin — promote another user to admin first.",
-        );
-      }
-    }
-    if (hasTokenName) {
-      const result = await setUserTokenName(args.id, args.token_name!);
-      if (result === "duplicate") {
-        return fail("tokenName already in use by another user");
-      }
-    }
-
-    return ok({ ok: true, id: args.id });
-  },
-});
-
-// ── Admin: user emails (multiple emails per user) ───────────────────────────────
-
-const listUserEmailsTool = defineTool({
-  name: "list_user_emails",
-  description:
-    "List a user's emails (id, email, primary flag, createdAt), oldest-first. Mirrors GET /api/users/[id]/emails. `primary` flags the user's display email. Admin only. An unknown id returns an error result.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric user id."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const emails = await listUserEmails(args.id);
-    if (emails === null) return fail(`User ${args.id} not found`);
-    return ok({ emails });
-  },
-});
-
-const addUserEmailTool = defineTool({
-  name: "add_user_email",
-  description:
-    "Add an email to a user (admin only). Mirrors POST /api/users/[id]/emails: the address is normalized (trim + lowercase). Login by any of a user's emails resolves the same account. A duplicate (the email already belongs to ANY user) or an unknown id returns an error result. The user's primary/display email is unchanged.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric user id."),
-    email: z.string().describe("Email to add — normalized to trimmed lowercase."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await addUserEmail(args.id, args.email, principal.name);
-    if (result === "invalid") return fail("email must be a non-empty string");
-    if (result === "not-found") return fail(`User ${args.id} not found`);
-    if (result === "duplicate") {
-      return fail("That email already belongs to a user");
-    }
-    return ok({ ok: true, id: args.id });
-  },
-});
-
-const removeUserEmailTool = defineTool({
-  name: "remove_user_email",
-  description:
-    "Remove an email from a user (admin only). Mirrors DELETE /api/users/[id]/emails/[email]: the address is matched normalized. Removing the last email of a user WITHOUT a service token is blocked (last-email guard) — they'd have no way to sign in; a user with a token may drop to zero emails. An unknown user/email returns an error result.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric user id."),
-    email: z.string().describe("Email to remove — matched normalized."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await removeUserEmail(args.id, args.email, principal.name);
-    if (result === "not-found") return fail(`Email not found on user ${args.id}`);
-    if (result === "last-email") {
-      return fail(
-        "Can't remove the last email of a user without a service token — they'd have no way to sign in.",
-      );
-    }
-    return ok({ ok: true, id: args.id });
-  },
-});
-
-// ── Admin: access requests ──────────────────────────────────────────────────────
-
-const listAccessRequestsTool = defineTool({
-  name: "list_access_requests",
-  description:
-    "List pending access requests (id, email, firstSeenAt, lastSeenAt, hits), most-recently-seen first. Mirrors GET /api/access-requests. Admin only.",
-  inputSchema: {},
-  handler: async (principal) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const accessRequests = await listAccessRequests();
-    return ok({ accessRequests });
-  },
-});
-
-const approveAccessRequestTool = defineTool({
-  name: "approve_access_request",
-  description:
-    "Approve a pending access request by id (admin only). DEFAULT: creates a member user from its email and clears the request; optional display_name overrides the default (capitalized email local-part). ALIAS: pass alias_of_user_id to add the request's email to an EXISTING user instead of creating an account (for a second address of the same person — aliasing onto the admin's account makes that email an admin login). An unknown request id, or an unknown alias_of_user_id, returns an error; if a user with that email already appeared meanwhile the request is still cleared and an 'already exists' error is returned.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric access-request id."),
-    display_name: z
-      .string()
-      .optional()
-      .describe("Optional display name for the new user; defaults from the email. Ignored in alias mode."),
-    alias_of_user_id: z
+      .describe("Listing visibility (default private). Governs DISCOVERY only — never the git ACL."),
+    owner_user_id: z
       .number()
       .int()
+      .positive()
       .optional()
-      .describe("If set, add the request's email to this existing user instead of creating a new account."),
+      .describe("Owner users.id (defaults to the calling admin)."),
   },
   handler: async (principal, args) => {
     if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await approveAccessRequest(args.id, {
-      displayName: args.display_name,
-      aliasOfUserId: args.alias_of_user_id,
-      by: principal.name,
+    const ownerUserId = args.owner_user_id ?? (await resolvePrincipalUserId(principal));
+    if (ownerUserId == null) return fail("Cannot resolve an owner for the space");
+    const out = await createSpace(
+      args.slug.trim(),
+      ownerUserId,
+      args.visibility ?? "private",
+      principal.name,
+    );
+    if (!out.ok) return fail(out.error);
+    return ok({
+      space: {
+        slug: out.space.slug,
+        visibility: out.space.visibility,
+        ownerUserId: out.space.ownerUserId,
+      },
     });
-    if (result.status === "not-found") {
-      return fail(`Access request ${args.id} not found`);
-    }
-    if (result.status === "alias-not-found") {
-      return fail(`Alias target user ${args.alias_of_user_id} not found`);
-    }
-    if (result.status === "duplicate") {
-      return fail("A user with that email already exists — request cleared");
-    }
-    return ok({ ok: true, userId: result.userId });
   },
 });
 
-const dismissAccessRequestTool = defineTool({
-  name: "dismiss_access_request",
+const setSpaceMemberTool = defineTool({
+  name: "set_space_member",
   description:
-    "Dismiss (delete) a pending access request by id without creating a user (admin only). Mirrors DELETE /api/access-requests/[id]. An unknown id returns an error result.",
+    "Set or remove a user's role on a space (admin or the space owner). Mirrors POST /api/spaces/[slug]/members: role 'writer'|'reader' upserts the membership; role null removes it. The space owner cannot be demoted/removed here. An unknown space returns an error result. Emits space.member_added / space.member_removed.",
   inputSchema: {
-    id: z.number().int().describe("Numeric access-request id."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await dismissAccessRequest(args.id);
-    if (result === "not-found") return fail(`Access request ${args.id} not found`);
-    return ok({ ok: true, id: args.id });
-  },
-});
-
-// ── Admin: audience management ──────────────────────────────────────────────────
-
-const createAudienceTool = defineTool({
-  name: "create_audience",
-  description:
-    "Create an audience (admin only). Mirrors POST /api/audiences: key must match ^[a-z0-9][a-z0-9-]*$, label must be non-empty, member_visible defaults to false. A duplicate key returns an error result.",
-  inputSchema: {
-    key: z.string().describe("Audience key (^[a-z0-9][a-z0-9-]*$)."),
-    label: z.string().describe("Human label (non-empty after trim)."),
-    member_visible: z
-      .boolean()
-      .optional()
-      .describe("Whether members may see docs in this audience (default false)."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    if (!SLUG_RE.test(args.key.trim())) {
-      return fail("Missing or invalid key (must match ^[a-z0-9][a-z0-9-]*$)");
-    }
-    if (args.label.trim().length === 0) {
-      return fail("Missing or invalid label — must be a non-empty string");
-    }
-    const audience = await createAudience({
-      key: args.key,
-      label: args.label,
-      memberVisible: args.member_visible === true,
-    });
-    // Key + label validated above, so null here means a duplicate key.
-    if (audience === null) {
-      return fail("An audience with that key already exists");
-    }
-    return ok({ audience });
-  },
-});
-
-const updateAudienceTool = defineTool({
-  name: "update_audience",
-  description:
-    "Toggle an audience's member-visibility by id (admin only). Mirrors PATCH /api/audiences/[id]. An unknown id returns an error result.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric audience id."),
-    member_visible: z.boolean().describe("New member-visibility flag."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const done = await setAudienceMemberVisible(args.id, args.member_visible);
-    if (!done) return fail(`Audience ${args.id} not found`);
-    return ok({ ok: true, id: args.id });
-  },
-});
-
-const deleteAudienceTool = defineTool({
-  name: "delete_audience",
-  description:
-    "Delete an audience by id (admin only). Mirrors DELETE /api/audiences/[id]: refuses (error result) if any doc still references the audience key — re-point those docs first. An unknown id returns an error result.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric audience id."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await deleteAudience(args.id);
-    if (result === "not-found") return fail(`Audience ${args.id} not found`);
-    if (result === "in-use") {
-      return fail("Audience is in use — re-point its docs before deleting");
-    }
-    return ok({ ok: true, id: args.id });
-  },
-});
-
-// ── Audience membership (Audiences v2 — audiences are groups) ────────────────────
-
-const listAudienceMembersTool = defineTool({
-  name: "list_audience_members",
-  description:
-    "List the members of an audience by numeric id (staff). Mirrors GET /api/audiences/[id]/members. Each row carries the audience_members row id, userId, displayName, email, tokenName, and createdAt. These users see the audience's docs via membership (on top of the member_visible flag). An unknown id returns an error result.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric audience id."),
+    slug: z.string().describe("Space slug."),
+    user_id: z.number().int().positive().describe("Target users.id."),
+    role: z
+      .enum(["writer", "reader"])
+      .nullable()
+      .describe("New role ('writer'|'reader'), or null to remove the membership."),
   },
   handler: async (principal, args) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const members = await listAudienceMembers(args.id);
-    if (members === null) return fail(`Audience ${args.id} not found`);
-    return ok({ members });
+    const space = await getSpaceBySlug(args.slug);
+    if (!space) return fail("Unknown space");
+    if (!(await canManageSpace(principal, space))) return fail(ADMIN_ONLY);
+    const out = await setSpaceMemberRole(args.slug, args.user_id, args.role, principal.name);
+    if (!out.ok) return fail(out.error);
+    return ok({ ok: true, role: out.role });
   },
 });
 
-const addAudienceMemberTool = defineTool({
-  name: "add_audience_member",
+// ── Principal tokens (document-host Phase 2) ────────────────────────────────────
+// The git Basic-auth credential, self-serve. Parity with /api/tokens. A token is
+// always scoped to the CALLER's user; a member touches only their own, an admin
+// may list-all / revoke-any. The RAW token is returned exactly once (mint).
+
+const createTokenTool = defineTool({
+  name: "create_token",
   description:
-    "Add a user to an audience (admin only). Mirrors POST /api/audiences/[id]/members { userId }. Makes the audience a real group: the user then sees every doc tagged with this audience. Idempotent — re-adding an existing member succeeds with added:false and emits no event. An unknown audience or user id returns an error result. Emits audience.member_added on a real insert.",
+    "Mint a principal token for the CALLER's user — the credential a git client sends as its HTTP Basic password to push/clone a space over /api/git/<owner>/<space>.git. Returns the RAW token EXACTLY ONCE (only its hash is stored; it is never re-shown). Mirrors POST /api/tokens. Staff only.",
   inputSchema: {
-    id: z.number().int().describe("Numeric audience id."),
-    user_id: z.number().int().describe("Numeric user id to add."),
+    label: z.string().describe("Human-facing name for the token (e.g. 'laptop', 'CI agent')."),
   },
   handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await addAudienceMember(args.id, args.user_id, principal.name);
-    if (!result.ok) {
-      if (result.reason === "audience-not-found") {
-        return fail(`Audience ${args.id} not found`);
-      }
-      return fail(`User ${args.user_id} not found`);
-    }
-    return ok({ ok: true, added: result.added, member: result.item });
+    if (!isStaff(principal)) return fail(STAFF_ONLY);
+    const label = args.label.trim();
+    if (label.length === 0) return fail("Missing or invalid label");
+    const userId = await resolvePrincipalUserId(principal);
+    if (userId == null) return fail("Cannot resolve your user identity");
+    const minted = await mintPrincipalToken(userId, label);
+    return ok({ id: minted.id, label: minted.label, token: minted.token });
   },
 });
 
-const removeAudienceMemberTool = defineTool({
-  name: "remove_audience_member",
+// The documented safe token projection — drops the internal `ownerUserId`,
+// matching GET /api/tokens. Never the raw token or hash (those never leave the
+// service layer at all).
+function tokenWire(t: {
+  id: number;
+  label: string;
+  lastUsedAt: Date | null;
+  createdAt: Date;
+  revokedAt: Date | null;
+}) {
+  return {
+    id: t.id,
+    label: t.label,
+    lastUsedAt: t.lastUsedAt,
+    createdAt: t.createdAt,
+    revokedAt: t.revokedAt,
+  };
+}
+
+const listTokensTool = defineTool({
+  name: "list_tokens",
   description:
-    "Remove a user from an audience (admin only). Mirrors DELETE /api/audiences/[id]/members/[userId]. The user loses visibility of the audience's docs (unless the audience is member_visible). An unknown audience id, or a user who isn't a member, returns an error result. Emits audience.member_removed on a real delete.",
+    "List the CALLER's principal tokens (id, label, lastUsedAt, createdAt, revokedAt — NEVER the raw token, hash, or ownerUserId), newest-first. With all=true an admin lists every user's tokens. Mirrors GET /api/tokens. Staff only.",
   inputSchema: {
-    id: z.number().int().describe("Numeric audience id."),
-    user_id: z.number().int().describe("Numeric user id to remove."),
+    all: z
+      .boolean()
+      .optional()
+      .describe("Admin-only: list every user's tokens instead of just your own."),
   },
   handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await removeAudienceMember(args.id, args.user_id, principal.name);
-    if (result === "audience-not-found") return fail(`Audience ${args.id} not found`);
-    if (result === "not-a-member") {
-      return fail(`User ${args.user_id} is not a member of audience ${args.id}`);
+    if (!isStaff(principal)) return fail(STAFF_ONLY);
+    if (args.all) {
+      if (principal.kind !== "admin") return fail("Listing all tokens is admin only");
+      return ok({ tokens: (await listAllTokens()).map(tokenWire) });
     }
-    return ok({ ok: true, id: args.id, userId: args.user_id });
+    const userId = await resolvePrincipalUserId(principal);
+    if (userId == null) return fail("Cannot resolve your user identity");
+    return ok({ tokens: (await listTokensForUser(userId)).map(tokenWire) });
   },
 });
+
+const revokeTokenTool = defineTool({
+  name: "revoke_token",
+  description:
+    "Revoke a principal token by id. A member may revoke only their OWN token; an admin may revoke any. An unknown or not-owned token returns a not-found error (no existence leak). Mirrors DELETE /api/tokens/[id]. Staff only.",
+  inputSchema: {
+    id: z.number().int().positive().describe("The token id to revoke."),
+  },
+  handler: async (principal, args) => {
+    if (!isStaff(principal)) return fail(STAFF_ONLY);
+    const owner = await tokenOwnerUserId(args.id);
+    if (owner == null) return fail("Not found");
+    if (principal.kind !== "admin") {
+      const me = await resolvePrincipalUserId(principal);
+      if (me == null || me !== owner) return fail("Not found");
+    }
+    await revokePrincipalToken(args.id);
+    return ok({ ok: true });
+  },
+});
+
+// ── Admin: user management ──────────────────────────────────────────────────────
+// REMOVED from the MCP surface in the Slice-1.5 (D8) interface audit: user CRUD,
+// multi-email management, and access-request triage are pure web-UI admin actions
+// a headless agent does not drive. They remain available over REST (the Users /
+// admin pages) — see /api/users/** and /api/access-requests/**. MCP keeps only the
+// surfaces an agent actually drives (docs, spaces, tokens, revisions, shares,
+// board cards, events).
 
 // ── Admin: share management ──────────────────────────────────────────────────────
-
-const setShareCommentsTool = defineTool({
-  name: "set_share_comments",
-  description:
-    "Toggle whether link visitors may comment on a share, by numeric id (admin only). Mirrors PATCH /api/shares/[id] { allowComments }. An unknown id returns an error result.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric share id."),
-    allow: z.boolean().describe("Whether share-link visitors may comment."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const done = await setShareComments(args.id, args.allow);
-    if (!done) return fail(`Share ${args.id} not found`);
-    return ok({ ok: true, id: args.id, allowComments: args.allow });
-  },
-});
-
-const listShareViewsTool = defineTool({
-  name: "list_share_views",
-  description:
-    "List the raw view log for one share by numeric id (admin only). Mirrors GET /api/shares/[id]/views: each view carries viewedAt, ip, uaLabel (coarse human label), rawUa (truncated raw UA), and docVersionId. An unknown id returns an empty list (no existence signal — same as the route). ip / rawUa are attacker-controlled — render as plain text only.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric share id."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const views = await listViews(args.id);
-    return ok({
-      views: views.map((v) => ({
-        viewedAt: v.viewedAt,
-        ip: v.ip,
-        uaLabel: uaLabel(v.userAgent),
-        rawUa: v.userAgent != null ? v.userAgent.slice(0, RAW_UA_TOOLTIP_MAX) : null,
-        docVersionId: v.docVersionId,
-      })),
-    });
-  },
-});
 
 const listDocSharesTool = defineTool({
   name: "list_doc_shares",
@@ -1194,16 +900,16 @@ const deleteDocTool = defineTool({
 const distributionOverviewTool = defineTool({
   name: "distribution_overview",
   description:
-    "Return the full distribution overview (admin only) in three lenses: byAudience (per-audience: member list + doc list), byUser (per-active-user: visible audiences + visible-doc count), and links (all live share links — doc + directory — with status and canCopy flag). All three exclude deleted docs. Use this to audit who can see what and which share links are active.",
+    "Return the full distribution overview (admin only) in three lenses: bySpace (per-space: visibility + member list + the docs in it), byUser (per-active-user: which spaces they can see + visible-doc count), and links (all live share links — doc + directory — with status and canCopy flag). All three exclude deleted docs. Use this to audit who can see what (read access is space-scoped) and which share links are active.",
   inputSchema: {},
   handler: async (principal) => {
     if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const [byAudience, byUser, links] = await Promise.all([
-      distributionByAudience(),
+    const [bySpace, byUser, links] = await Promise.all([
+      distributionBySpace(),
       distributionByUser(),
       distributionLinks(),
     ]);
-    return ok({ byAudience, byUser, links });
+    return ok({ bySpace, byUser, links });
   },
 });
 
@@ -1212,7 +918,7 @@ const distributionOverviewTool = defineTool({
 const getVersionTool = defineTool({
   name: "get_version",
   description:
-    "Fetch the raw content of a specific version of a doc (staff only, audience-scoped exactly like get_doc — a member only sees member-visible audiences; an out-of-scope or missing slug returns a not-found error). version_id must belong to the named doc (cross-doc access is rejected as not-found). Returns the version's content string.",
+    "Fetch the raw content of a specific version of a doc (staff only, space-scoped exactly like get_doc — a member only sees docs in spaces they can see; an out-of-scope or missing slug returns a not-found error). version_id must belong to the named doc (cross-doc access is rejected as not-found). Returns the version's content string.",
   inputSchema: {
     slug: z.string().describe("The doc slug."),
     version_id: z.number().int().describe("Numeric version id (must belong to the doc)."),
@@ -1271,7 +977,7 @@ const deleteCommentTool = defineTool({
 const proposeRevisionTool = defineTool({
   name: "propose_revision",
   description:
-    "Propose a revision to a doc by slug (staff only, viewer-scoped exactly like get_doc — a member only sees member-visible audiences; an out-of-scope or missing slug returns a not-found error). Markdown docs only (html docs have no editor → error). `content` is the FULL proposed doc body (markdown), capped at 2,000,000 chars; the revision is based on the doc's current version. Optional `note` (≤1,000 chars). The revision queues 'open' for an admin to accept (→ new version) or reject. Returns the created revision.",
+    "Propose a revision to a doc by slug (staff only, viewer-scoped exactly like get_doc — a member only sees docs in spaces they can see; an out-of-scope or missing slug returns a not-found error). Markdown docs only (html docs have no editor → error). `content` is the FULL proposed doc body (markdown), capped at 2,000,000 chars; the revision is based on the doc's current version. Optional `note` (≤1,000 chars). The revision queues 'open' for an admin to accept (→ new version) or reject. Returns the created revision.",
   inputSchema: {
     slug: z.string().describe("The doc slug."),
     content: z.string().describe("Full proposed doc body (markdown, ≤2,000,000 chars)."),
@@ -1338,7 +1044,7 @@ const listRevisionsTool = defineTool({
 const decideRevisionTool = defineTool({
   name: "decide_revision",
   description:
-    "Decide a proposed revision by numeric `id` (admin OR the doc owner). `accept: true` publishes the revision's content as a new doc version (the doc's title / audience / sourcePath are unchanged — only content) and marks it accepted; `accept: false` rejects it. A revision can be decided only once (already-decided → error). When accepting, the response carries `staleBase` (true if the doc moved past the revision's base version).",
+    "Decide a proposed revision by numeric `id` (admin OR the doc owner). `accept: true` publishes the revision's content as a new doc version (the doc's title / sourcePath are unchanged — only content) and marks it accepted; `accept: false` rejects it. A revision can be decided only once (already-decided → error). When accepting, the response carries `staleBase` (true if the doc moved past the revision's base version).",
   inputSchema: {
     id: z.number().int().describe("Numeric revision id."),
     accept: z.boolean().describe("true → accept (publish a new version); false → reject."),
@@ -1391,7 +1097,7 @@ const decideRevisionTool = defineTool({
 const listEventsTool = defineTool({
   name: "list_events",
   description:
-    "Read the append-only event log (staff only). Returns events after `since` (exclusive cursor on the monotonic event id), oldest-first. Optional `kinds` filters to a subset (doc.published, doc.unpublished, doc.moved, revision.proposed, revision.decided, comment.added, user.approved). Members are audience-scoped — they only receive events for docs they can see, and never user.approved. Payloads carry ids/slugs/version ids only — never document content (fetch bodies via get_doc / get_version). Advance `since` to the largest id returned to page forward.",
+    "Read the append-only event log (staff only). Returns events after `since` (exclusive cursor on the monotonic event id), oldest-first. Optional `kinds` filters to a subset (doc.published, doc.unpublished, doc.moved, revision.proposed, revision.decided, comment.added, user.approved). Members are space-scoped — they only receive events for docs in a space they can see, and never user.approved. Payloads carry ids/slugs/version ids only — never document content (fetch bodies via get_doc / get_version). Advance `since` to the largest id returned to page forward.",
   inputSchema: {
     since: z
       .number()
@@ -1412,8 +1118,10 @@ const listEventsTool = defineTool({
   },
   handler: async (principal, args) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
+    // Same resolver as the doc read path (scopeForPrincipal) so the events feed
+    // and the docs list agree on which spaces a member can see.
     const userId =
-      principal.kind === "member" ? await resolveMemberUserId(principal) : null;
+      principal.kind === "member" ? await resolvePrincipalUserId(principal) : null;
     const events = await listEvents({
       since: args.since,
       kinds: args.kinds,
@@ -1433,7 +1141,7 @@ const listEventsTool = defineTool({
 const listBucketsTool = defineTool({
   name: "list_buckets",
   description:
-    "List the board's buckets (columns) in order, each with a live card-count. Staff only. The board is an internal coordination surface (no audience scoping).",
+    "List the board's buckets (columns) in order, each with a live card-count. Staff only. The board is an internal coordination surface (not space-scoped).",
   inputSchema: {},
   handler: async (principal) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
@@ -1442,62 +1150,12 @@ const listBucketsTool = defineTool({
   },
 });
 
-const createBucketTool = defineTool({
-  name: "create_bucket",
-  description:
-    "Create a board bucket at the end of the column order (admin only). Mirrors POST /api/buckets: `label` is required; `key` (slug ^[a-z0-9][a-z0-9-]*$) is derived from the label when omitted. A duplicate/invalid key returns an error result. Emits bucket.created.",
-  inputSchema: {
-    label: z.string().describe("Human label (non-empty after trim)."),
-    key: z.string().optional().describe("Optional slug key; derived from label if omitted."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    if (args.label.trim().length === 0) return fail("Missing or invalid label — must be a non-empty string");
-    const bucket = await createBucket({ label: args.label, key: args.key, actorName: principal.name });
-    if (bucket === null) return fail("Could not create bucket — invalid or duplicate key");
-    return ok({ bucket });
-  },
-});
-
-const updateBucketTool = defineTool({
-  name: "update_bucket",
-  description:
-    "Rename a board bucket by id (admin only). Mirrors PATCH /api/buckets/[id]. The key is immutable (it's referenced in event payloads); only the label changes. An unknown id returns an error result. Emits bucket.updated.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric bucket id."),
-    label: z.string().describe("New label (non-empty after trim)."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await renameBucket(args.id, args.label, principal.name);
-    if (result === "not-found") return fail(`Bucket ${args.id} not found`);
-    if (result === "invalid") return fail("label must be a non-empty string");
-    return ok({ ok: true, id: args.id });
-  },
-});
-
-const deleteBucketTool = defineTool({
-  name: "delete_bucket",
-  description:
-    "Delete a board bucket by id (admin only). Mirrors DELETE /api/buckets/[id]: refuses (error result) when ANY card (live or archived) still references it — move or archive-restore those first. An unknown id returns an error result. Emits bucket.deleted.",
-  inputSchema: {
-    id: z.number().int().describe("Numeric bucket id."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await deleteBucket(args.id, principal.name);
-    if (result === "not-found") return fail(`Bucket ${args.id} not found`);
-    if (result === "in-use") return fail("Bucket is not empty — move or archive its cards before deleting");
-    return ok({ ok: true, id: args.id });
-  },
-});
-
 // ── Board: cards ────────────────────────────────────────────────────────────────
 
 const listCardsTool = defineTool({
   name: "list_cards",
   description:
-    "List board cards (staff only; not audience-scoped). Live cards only by default; pass include_archived to include archived ones. Filters: `bucket_id`, `owner_user_id`, or `owner: \"me\"` (= cards owned by the calling principal's users row; my_cards sugar). Ordered by bucket then card position.",
+    "List board cards (staff only; not space-scoped — the board is internal). Live cards only by default; pass include_archived to include archived ones. Filters: `bucket_id`, `owner_user_id`, or `owner: \"me\"` (= cards owned by the calling principal's users row; my_cards sugar). Ordered by bucket then card position.",
   inputSchema: {
     bucket_id: z.number().int().positive().optional().describe("Restrict to one bucket."),
     owner_user_id: z.number().int().positive().optional().describe("Restrict to one owner's users-row id."),
@@ -1671,159 +1329,8 @@ const archiveCardTool = defineTool({
   },
 });
 
-// ── Catalogs ────────────────────────────────────────────────────────────────────
-
-const listCatalogKindsTool = defineTool({
-  name: "list_catalog_kinds",
-  description:
-    "List every catalog kind (schema-as-data registry: finding, decision, rfc, …), each with its label, idPattern, JSON Schema, and item count. Staff only. Catalogs are an internal coordination surface (no audience scoping) — members read, only admins write.",
-  inputSchema: {},
-  handler: async (principal) => {
-    if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const kinds = await listKinds();
-    return ok({ kinds });
-  },
-});
-
-const getCatalogSchemaTool = defineTool({
-  name: "get_catalog_schema",
-  description:
-    "Get one catalog kind's schema (label, idPattern, JSON Schema, item count) by its kind slug (staff only). An unknown kind returns an error result.",
-  inputSchema: {
-    kind: z.string().describe("The kind slug (e.g. 'finding')."),
-  },
-  handler: async (principal, args) => {
-    if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const schema = await getSchema(args.kind);
-    if (!schema) return fail(`Kind '${args.kind}' not found`);
-    return ok({ kind: schema });
-  },
-});
-
-const upsertCatalogSchemaTool = defineTool({
-  name: "upsert_catalog_schema",
-  description:
-    "Create or update a catalog kind (admin only). `kind` is a slug (^[a-z0-9][a-z0-9-]*$, immutable once created); `label` is human-facing; `id_pattern` is a regex SOURCE (e.g. 'F-\\\\d+') used both to validate item ids and to auto-link references; `schema` is a JSON Schema (object) the item `data` payload is validated against. The idPattern must compile as a regex and the schema must compile as a JSON Schema, else an error result. Additive changes apply immediately; breaking changes are flagged in the UI, not blocked here. Emits catalog.schema.created/updated.",
-  inputSchema: {
-    kind: z.string().describe("Kind slug (^[a-z0-9][a-z0-9-]*$)."),
-    label: z.string().describe("Human label (non-empty)."),
-    id_pattern: z.string().describe("Regex source for item ids (e.g. 'F-\\\\d+')."),
-    schema: z.record(z.string(), z.unknown()).optional().describe("JSON Schema object for the `data` payload (default {})."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await upsertSchema({
-      kind: args.kind,
-      label: args.label,
-      idPattern: args.id_pattern,
-      schema: args.schema ?? {},
-      actorName: principal.name,
-    });
-    if (!result.ok) return fail(result.error);
-    return ok({ kind: result.value });
-  },
-});
-
-const listCatalogItemsTool = defineTool({
-  name: "list_catalog_items",
-  description:
-    "List items in a catalog kind, newest-updated first (staff only). Optional `status` (exact match) and `q` (case-insensitive substring over itemId/title — simple, not full-text). An unknown kind returns an error result.",
-  inputSchema: {
-    kind: z.string().describe("The kind slug."),
-    status: z.string().optional().describe("Exact status filter."),
-    q: z.string().optional().describe("Substring match over itemId/title."),
-  },
-  handler: async (principal, args) => {
-    if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const schema = await getSchema(args.kind);
-    if (!schema) return fail(`Kind '${args.kind}' not found`);
-    const items = await listItems({ kind: args.kind, status: args.status, q: args.q });
-    return ok({ items });
-  },
-});
-
-const getCatalogItemTool = defineTool({
-  name: "get_catalog_item",
-  description:
-    "Get one catalog item plus its outbound + inbound typed links (staff only). Links are item↔item typed edges (references / supersedes / implements / …); the inbound list shows other items that link to this one. An unknown item returns an error result.",
-  inputSchema: {
-    kind: z.string().describe("The kind slug."),
-    item_id: z.string().describe("The human item id (e.g. 'F-012')."),
-  },
-  handler: async (principal, args) => {
-    if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const result = await getItem(args.kind, args.item_id);
-    if (!result) return fail(`Item '${args.item_id}' not found in '${args.kind}'`);
-    return ok(result);
-  },
-});
-
-const upsertCatalogItemTool = defineTool({
-  name: "upsert_catalog_item",
-  description:
-    "Create or update a catalog item (admin only), keyed on (kind, item_id). The id is CLIENT-PROPOSED: `item_id` is validated against the kind's idPattern (rejected if it doesn't match). `data` is validated against the kind's JSON Schema (rejected with the schema error if it fails). Links are re-derived automatically by scanning body + data for other kinds' ids (and own-kind references, excluding self). Body is markdown (capped). Emits catalog.item.created/updated (payload: kind/itemId/title/status only). An unknown kind returns an error result.",
-  inputSchema: {
-    kind: z.string().describe("The kind slug."),
-    item_id: z.string().describe("Client-proposed human id (must match the kind's idPattern)."),
-    title: z.string().describe("Item title (non-empty)."),
-    body: z.string().optional().describe("Markdown body (capped)."),
-    status: z.string().optional().describe("Status (free-text; the schema may constrain it)."),
-    data: z.record(z.string(), z.unknown()).optional().describe("Structured payload, validated against the kind's JSON Schema."),
-    source_hash: z.string().optional().describe("Repo-mirror ingest cursor (idempotent re-sync)."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await upsertItem({
-      kind: args.kind,
-      itemId: args.item_id,
-      title: args.title,
-      body: args.body,
-      status: args.status,
-      data: args.data,
-      sourceHash: args.source_hash,
-      actorName: principal.name,
-    });
-    if (!result.ok) return fail(result.error);
-    return ok({ item: result.value });
-  },
-});
-
-const deleteCatalogItemTool = defineTool({
-  name: "delete_catalog_item",
-  description:
-    "Delete a catalog item by (kind, item_id) (admin only). Cascades its links (both directions). An unknown item returns an error result. Emits catalog.item.deleted.",
-  inputSchema: {
-    kind: z.string().describe("The kind slug."),
-    item_id: z.string().describe("The human item id to delete."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await deleteItem(args.kind, args.item_id, principal.name);
-    if (!result.ok) return fail(result.error);
-    return ok({ ok: true, kind: args.kind, itemId: args.item_id });
-  },
-});
-
-// ── Doc ownership ───────────────────────────────────────────────────────────────
-
-const setDocOwnerTool = defineTool({
-  name: "set_doc_owner",
-  description:
-    "Reassign a doc's owner (admin only). The owner may publish new versions directly and decide revisions on their doc. `owner_user_id` must be an active users-row id. Emits a doc.owner_changed event. An unknown slug, inactive user, or non-admin caller returns an error result.",
-  inputSchema: {
-    slug: z.string().describe("The doc slug."),
-    owner_user_id: z.number().int().positive().describe("The new owner's users-row id."),
-  },
-  handler: async (principal, args) => {
-    if (principal.kind !== "admin") return fail(ADMIN_ONLY);
-    const result = await setDocOwner(args.slug, args.owner_user_id, principal.name);
-    if (result === "not-found") return fail(`Doc '${args.slug}' not found`);
-    if (result === "invalid-user") {
-      return fail(`User ${args.owner_user_id} does not exist or is inactive`);
-    }
-    return ok({ ok: true, slug: args.slug, ownerUserId: args.owner_user_id });
-  },
-});
+// ── Approval queue ───────────────────────────────────────────────────────────────
+// (Doc owner reassignment is folded into update_doc — see above.)
 
 const listOpenRevisionsTool = defineTool({
   name: "list_open_revisions",
@@ -1855,14 +1362,18 @@ const listOpenRevisionsTool = defineTool({
  * internally via `defineTool`.
  */
 export const TOOLS: ReadonlyArray<ToolDef> = [
+  // Docs + versions — the core read/write surface an agent drives.
   listDocsTool,
   searchDocsTool,
   getDocTool,
   getVersionTool,
   publishDocTool,
-  setDocPathTool,
+  updateDocTool, // merged set_doc_path + set_doc_owner
   unpublishDocTool,
+  deleteDocTool,
+  // Events — the trigger feed (card.assigned etc.).
   listEventsTool,
+  // Shares + distribution — outbound sharing + the "who sees what" audit.
   createShareTool,
   createDirectoryShareTool,
   listSharesTool,
@@ -1870,40 +1381,20 @@ export const TOOLS: ReadonlyArray<ToolDef> = [
   revokeShareTool,
   revealShareTool,
   deleteShareTool,
-  deleteDocTool,
   distributionOverviewTool,
-  setShareCommentsTool,
-  listShareViewsTool,
+  // Comments.
   listCommentsTool,
   addCommentTool,
   resolveCommentTool,
   deleteCommentTool,
+  // Revisions / approvals — the propose→review→accept gate.
   proposeRevisionTool,
   listRevisionsTool,
   decideRevisionTool,
   listOpenRevisionsTool,
-  setDocOwnerTool,
-  listAudiencesTool,
-  createAudienceTool,
-  updateAudienceTool,
-  deleteAudienceTool,
-  listAudienceMembersTool,
-  addAudienceMemberTool,
-  removeAudienceMemberTool,
-  listUsersTool,
-  createUserTool,
-  updateUserTool,
-  listUserEmailsTool,
-  addUserEmailTool,
-  removeUserEmailTool,
-  listAccessRequestsTool,
-  approveAccessRequestTool,
-  dismissAccessRequestTool,
-  // P2 board — buckets + cards (parity with REST).
+  // Board — cards (the agent triggers on card.assigned + drives cards); bucket
+  // LIFECYCLE (create/rename/delete) is web-UI-only (REST /api/buckets).
   listBucketsTool,
-  createBucketTool,
-  updateBucketTool,
-  deleteBucketTool,
   listCardsTool,
   getCardTool,
   createCardTool,
@@ -1911,15 +1402,42 @@ export const TOOLS: ReadonlyArray<ToolDef> = [
   moveCardTool,
   assignCardTool,
   archiveCardTool,
-  // P3 catalogs — schemas + items (parity with REST).
-  listCatalogKindsTool,
-  getCatalogSchemaTool,
-  upsertCatalogSchemaTool,
-  listCatalogItemsTool,
-  getCatalogItemTool,
-  upsertCatalogItemTool,
-  deleteCatalogItemTool,
+  // Spaces — the write/clone boundary.
+  listSpacesTool,
+  createSpaceTool,
+  setSpaceMemberTool,
+  // Principal tokens — the git Basic-auth credential, self-serve.
+  createTokenTool,
+  listTokensTool,
+  revokeTokenTool,
+  // Identity / debugging.
   whoamiTool,
 ] as ToolDef[];
+
+// ── MCP surface policy (Slice-1.5 / D8) ─────────────────────────────────────────
+//
+// MCP is the AGENT surface; REST is the UI surface. They are deliberately NOT
+// 1:1. MCP exposes what a headless agent actually drives — docs (publish / get /
+// list / search / update / unpublish / delete), versions, events, shares +
+// distribution, comments, revisions/approvals, board cards (it triggers on
+// card.assigned), spaces, and principal tokens — plus whoami.
+//
+// The CATALOG is no longer an MCP surface: it was reframed (Slice 2 / D6) from a
+// Desk-authored registry into a READ-ONLY projection of a space directory's doc
+// frontmatter (+ optional `.desk.collection.yml` schema). Its truth is the repo,
+// so an agent edits it by committing frontmatter — not via a Desk catalog tool.
+// The dormant `catalog_*` tables are retained (dropped in a later cleanup).
+//
+// Pure web-UI admin actions a headless agent does NOT drive are REST-only and
+// have NO MCP tool:
+//   • user CRUD + multi-email management   → /api/users/**       (Users page)
+//   • access-request triage                → /api/access-requests/**
+//   • board BUCKET lifecycle (create/rename/delete) → /api/buckets/**
+//   • per-share view-log + comment-toggle  → /api/shares/[id]/views, PATCH /api/shares/[id]
+// The audit need those served (who-can-see-what) is covered for agents by
+// distribution_overview + list_shares.
+//
+// Over-granular single-field doc mutations (set_doc_path, set_doc_owner) were
+// MERGED into one update_doc tool.
 
 export { maskContact };

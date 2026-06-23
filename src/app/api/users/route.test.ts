@@ -61,11 +61,11 @@ describe("POST /api/users", () => {
   });
 
   it("admin creates a human user → 200 {user} (always stored as member)", async () => {
-    const res = await POST(postReq({ email: "Bob@Example.com", displayName: "Bob" }));
+    const res = await POST(postReq({ email: "Dani@Example.com", displayName: "Dani" }));
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.user.email).toBe("bob@example.com");
-    expect(json.user.displayName).toBe("Bob");
+    expect(json.user.email).toBe("dani@example.com");
+    expect(json.user.displayName).toBe("Dani");
     expect(json.user.role).toBe("member");
   });
 

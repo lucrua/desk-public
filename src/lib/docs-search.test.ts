@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
+import {
+  resetDb,
+  publishDocOk,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+} from "@/test/db";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 import {
   searchDocs,
   unpublishDoc,
@@ -13,19 +20,23 @@ const base: PublishInput = {
   slug: "alpha",
   title: "Alpha",
   sourcePath: "os/alpha.md",
-  audience: "team",
   format: "md",
   content: "# Alpha\nbody text",
-  by: "admin",
+  by: "lucas",
 };
 
 const admin = { viewer: "admin" as const };
-const member = { viewer: "member" as const };
+// Gen-2: member visibility is SPACE-scoped. `member.userId` is the dev member's
+// resolved id (filled in setup) — a reader of the default `workspace` space, so
+// member-scoped search sees workspace docs but not docs in spaces it isn't in.
+let member: { viewer: "member"; userId: number };
 
 describe("searchDocs — full-text search service", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    await seedDevMemberInDefaultSpace();
+    const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
+    member = { viewer: "member", userId: memberId! };
   });
 
   it("empty / whitespace query returns []", async () => {
@@ -55,7 +66,7 @@ describe("searchDocs — full-text search service", () => {
       audience: "team",
       format: "md",
       content: "unrelated body content",
-      by: "admin",
+      by: "lucas",
     });
     await publishDocOk({
       slug: "body-hit",
@@ -64,7 +75,7 @@ describe("searchDocs — full-text search service", () => {
       audience: "team",
       format: "md",
       content: "a long passage that mentions mercury once in the body only",
-      by: "admin",
+      by: "lucas",
     });
     const out = await searchDocs("mercury", { scope: admin });
     const slugs = out.map((d) => d.slug);
@@ -96,25 +107,27 @@ describe("searchDocs — full-text search service", () => {
 
   // ── member scoping ──────────────────────────────────────────────────────────
 
-  it("member: a hidden-audience doc is absent from results", async () => {
-    // 'alice' is seeded member-hidden.
+  it("member: a doc in a space they're not in is absent from results", async () => {
+    // `secret` lives in a SEPARATE private space the dev member is NOT in.
+    const adminId = await seedUser({ email: "search-admin@test.com", displayName: "Admin", role: "admin" });
+    const hiddenSpace = await seedSpace({ slug: "priv", ownerId: adminId, visibility: "private" });
     await publishDocOk({
       slug: "secret",
       title: "Secret Mercury",
       sourcePath: "s.md",
-      audience: "alice",
       format: "md",
       content: "mercury content",
-      by: "admin",
+      by: "lucas",
+      spaceId: hiddenSpace,
     });
+    // `shown` lands in the default `workspace` space the dev member reads.
     await publishDocOk({
       slug: "shown",
       title: "Public Mercury",
       sourcePath: "p.md",
-      audience: "team",
       format: "md",
       content: "mercury content",
-      by: "admin",
+      by: "lucas",
     });
     const adminSlugs = (await searchDocs("mercury", { scope: admin })).map((d) => d.slug);
     expect(adminSlugs).toContain("secret");

@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences } from "@/test/db";
+import {
+  resetDb,
+  publishDocOk,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+} from "@/test/db";
 import { publishDoc } from "@/lib/docs";
 import { GET, POST } from "./route";
 import { POST as resolvePost } from "@/app/api/comments/[id]/resolve/route";
@@ -33,19 +39,22 @@ const TEAM_DOC = {
   slug: "team-doc",
   title: "Team Doc",
   sourcePath: "os/t.md",
-  audience: "team",
   format: "md" as const,
   content: "# Hi",
-  by: "admin",
+  by: "lucas",
 };
-const HIDDEN_DOC = { ...TEAM_DOC, slug: "alice-doc", audience: "alice" };
+const HIDDEN_DOC = { ...TEAM_DOC, slug: "pedro-doc" };
 
 describe("GET/POST /api/docs/[slug]/comments", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    // TEAM_DOC lands in the default workspace the dev member reads.
+    await seedDevMemberInDefaultSpace();
     await publishDoc(TEAM_DOC);
-    await publishDoc(HIDDEN_DOC);
+    // HIDDEN_DOC lives in a separate private space the dev member is not in.
+    const ownerId = await seedUser({ email: "owner@test.local", displayName: "Owner", role: "admin" });
+    const privateSpace = await seedSpace({ slug: "private-space", ownerId, visibility: "private" });
+    await publishDocOk({ ...HIDDEN_DOC, spaceId: privateSpace });
   });
 
   it("admin POST creates a comment (201) authored by the principal", async () => {
@@ -57,16 +66,16 @@ describe("GET/POST /api/docs/[slug]/comments", () => {
     expect(json.comment.authorName).toBe("Dev Admin");
   });
 
-  it("member POST on a member-visible doc → 201, authored member", async () => {
+  it("member POST on a doc in their space → 201, authored member", async () => {
     const res = await POST(postReq("team-doc", { body: "from member" }, "member"), ctx("team-doc"));
     expect(res.status).toBe(201);
     expect((await res.json()).comment.authorKind).toBe("member");
   });
 
-  it("member on a hidden-audience doc → 404 (uniform, no existence leak)", async () => {
-    const res = await POST(postReq("alice-doc", { body: "x" }, "member"), ctx("alice-doc"));
+  it("member on a doc in a space they're not in → 404 (uniform, no existence leak)", async () => {
+    const res = await POST(postReq("pedro-doc", { body: "x" }, "member"), ctx("pedro-doc"));
     expect(res.status).toBe(404);
-    const get = await GET(getReq("alice-doc", "member"), ctx("alice-doc"));
+    const get = await GET(getReq("pedro-doc", "member"), ctx("pedro-doc"));
     expect(get.status).toBe(404);
   });
 
@@ -110,7 +119,6 @@ describe("GET/POST /api/docs/[slug]/comments", () => {
 describe("admin resolve / delete", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await publishDoc(TEAM_DOC);
   });
 

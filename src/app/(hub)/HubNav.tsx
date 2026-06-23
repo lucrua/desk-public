@@ -9,7 +9,11 @@ import { usePathname } from "next/navigation";
  * is the supported way to know where the user is.
  *
  * A link is active when the pathname equals its href or sits beneath it
- * (`/docs/notes-overview` keeps Docs lit).
+ * (`/spaces/market` keeps Spaces lit).
+ *
+ * Spaces is the home (Gen-2 consolidation): docs are browsed inside a space.
+ * There is no top-level "Docs" peer — the `/docs/[slug]` viewer is reached from
+ * a space (deep links still work).
  *
  * `approvalCount` — open revision proposals visible to this principal (0 hides badge).
  */
@@ -23,10 +27,11 @@ export default function HubNav({
   const pathname = usePathname() ?? "";
 
   const links: { href: string; label: string; disabled?: boolean; badge?: number }[] = [
-    { href: "/docs", label: "Docs" },
+    { href: "/spaces", label: "Spaces" },
     { href: "/board", label: "Board" },
     { href: "/catalog", label: "Catalog" },
     { href: "/approvals", label: "Approvals", badge: approvalCount > 0 ? approvalCount : undefined },
+    { href: "/settings/tokens", label: "Tokens" },
     { href: "/help", label: "Help" },
     ...(isAdmin ? [{ href: "/admin", label: "Admin" }] : []),
     ...(isAdmin ? [{ href: "/distribution", label: "Distribution" }] : []),

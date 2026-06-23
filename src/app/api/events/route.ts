@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import { getPrincipal, isStaff } from "@/lib/auth";
 import { listEvents, parseKindsParam } from "@/lib/events";
-import { resolveMemberUserId } from "@/lib/cards";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 
 /**
  * GET /api/events?since=<id>&kinds=a,b&limit=n — the event-log read surface
  * (staff only). The change-cursor the sync client (S2+) and any observer polls.
  *
- * Audience scoping is enforced in the service: a member only receives events
- * for docs whose audience is member-visible, and never user.approved. Payloads
- * carry references only (ids/slugs/version ids), never document content.
+ * Space scoping is enforced in the service: a member only receives events for
+ * docs in a space they can see (member-of ∪ public/unlisted), and never
+ * user.approved. Payloads carry references only (ids/slugs/version ids), never
+ * document content.
  *
  * Response: { events: [...], nextCursor } where nextCursor is the largest id in
  * this page (or the requested `since`/0 when empty) — the client advances
@@ -55,10 +56,13 @@ export async function GET(req: Request) {
     limit = n;
   }
 
-  // Resolve the member's users-row id so the feed can include events for
-  // audiences they belong to (Audiences v2). Admins ignore it (see everything).
+  // Resolve the member's users-row id so the feed can include events for docs in
+  // spaces they belong to. Uses the SAME resolver as the doc read path
+  // (scopeForPrincipal → resolvePrincipalUserId, dev-stub aware) so the events
+  // feed and the docs list agree on which spaces a member can see. Admins ignore
+  // it (see everything).
   const userId =
-    principal.kind === "member" ? await resolveMemberUserId(principal) : null;
+    principal.kind === "member" ? await resolvePrincipalUserId(principal) : null;
 
   const events = await listEvents({
     since,

@@ -19,10 +19,10 @@ const BASE_DOC = {
   slug: "test-doc",
   title: "Test Doc",
   sourcePath: "os/test.md",
-  audience: "external:alice",
+  audience: "external:pedro",
   format: "md" as const,
   content: "# Hello",
-  by: "admin",
+  by: "lucas",
 };
 
 describe("shares service", () => {
@@ -35,7 +35,7 @@ describe("shares service", () => {
 
   describe("createShare", () => {
     it("returns {id, token (43 chars), shareUrl, label}", async () => {
-      const result = await createShareOk("test-doc", "Alice share", "admin");
+      const result = await createShareOk("test-doc", "Pedro share", "lucas");
       expect(result).not.toBeNull();
       expect(typeof result!.id).toBe("number");
       expect(typeof result!.token).toBe("string");
@@ -43,11 +43,11 @@ describe("shares service", () => {
       expect(result!.shareUrl).toBe(
         `${process.env.SHARE_BASE_URL}/s/${result!.token}`
       );
-      expect(result!.label).toBe("Alice share");
+      expect(result!.label).toBe("Pedro share");
     });
 
     it("DB row stores ONLY the hash — raw token not in row", async () => {
-      const result = await createShareOk("test-doc", "Alice share", "admin");
+      const result = await createShareOk("test-doc", "Pedro share", "lucas");
       expect(result).not.toBeNull();
       const { token } = result!;
 
@@ -66,7 +66,7 @@ describe("shares service", () => {
 
     it("createShare with expiresInDays sets expiresAt", async () => {
       const before = Date.now();
-      const result = await createShareOk("test-doc", "Expiring", "admin", 7);
+      const result = await createShareOk("test-doc", "Expiring", "lucas", 7);
       expect(result).not.toBeNull();
 
       const { db } = await import("@/db");
@@ -81,31 +81,31 @@ describe("shares service", () => {
     });
 
     it("createShare for unknown docSlug returns an error outcome", async () => {
-      const result = await createShare("no-such-doc", "label", "admin");
+      const result = await createShare("no-such-doc", "label", "lucas");
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe("doc-not-found");
     });
 
     it("omitted label → auto-named from doc title", async () => {
-      const result = await createShareOk("test-doc", undefined, "admin");
+      const result = await createShareOk("test-doc", undefined, "lucas");
       // BASE_DOC title is "Test Doc"
       expect(result.label).toBe("Test Doc");
     });
 
     it("empty string label → auto-named from doc title", async () => {
-      const out = await createShare("test-doc", "", "admin");
+      const out = await createShare("test-doc", "", "lucas");
       if (!out.ok) throw new Error("Expected ok");
       expect(out.label).toBe("Test Doc");
     });
 
     it("explicit label is preserved unchanged", async () => {
-      const result = await createShareOk("test-doc", "Partner review", "admin");
+      const result = await createShareOk("test-doc", "Partner review", "lucas");
       expect(result.label).toBe("Partner review");
     });
 
     it("omitted expiresInDays defaults to ~7 days from now", async () => {
       const before = Date.now();
-      const result = await createShareOk("test-doc", "auto-expiry", "admin");
+      const result = await createShareOk("test-doc", "auto-expiry", "lucas");
       const { db } = await import("@/db");
       const { shares } = await import("@/db/schema");
       const { eq } = await import("drizzle-orm");
@@ -117,7 +117,7 @@ describe("shares service", () => {
     });
 
     it("null expiresInDays → expiresAt is null (never expires)", async () => {
-      const result = await createShareOk("test-doc", "never-expires", "admin", null);
+      const result = await createShareOk("test-doc", "never-expires", "lucas", null);
       const { db } = await import("@/db");
       const { shares } = await import("@/db/schema");
       const { eq } = await import("drizzle-orm");
@@ -131,7 +131,7 @@ describe("shares service", () => {
   describe("resolveShare", () => {
     it("valid share resolves to {doc, version, shareId, expiresAt}", async () => {
       // Pass null to create a never-expiring share (expiresAt = null)
-      const share = await createShareOk("test-doc", "Alice", "admin", null);
+      const share = await createShareOk("test-doc", "Pedro", "lucas", null);
       expect(share).not.toBeNull();
       const resolved = await resolveShare(share!.token);
       expect(resolved).not.toBeNull();
@@ -144,7 +144,7 @@ describe("shares service", () => {
 
     it("resolves to the CURRENT version after re-publish", async () => {
       // Share created pointing at v1
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       // Publish v2
       await publishDoc({ ...BASE_DOC, content: "# Hello v2" });
 
@@ -159,7 +159,7 @@ describe("shares service", () => {
     });
 
     it("returns null for revoked share", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       await revokeShare(share!.id);
       const result = await resolveShare(share!.token);
       expect(result).toBeNull();
@@ -184,7 +184,7 @@ describe("shares service", () => {
         tokenHash: hash,
         docId,
         label: "expired",
-        createdBy: "admin",
+        createdBy: "lucas",
         expiresAt: pastDate,
       });
 
@@ -193,7 +193,7 @@ describe("shares service", () => {
     });
 
     it("returns null when doc is unpublished after share created", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       await unpublishDoc("test-doc");
       const result = await resolveShare(share!.token);
       expect(result).toBeNull();
@@ -204,13 +204,13 @@ describe("shares service", () => {
 
   describe("revokeShare", () => {
     it("revokeShare returns true on first call", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       const result = await revokeShare(share!.id);
       expect(result).toBe(true);
     });
 
     it("revokeShare returns false on second call (idempotent — already revoked)", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       await revokeShare(share!.id);
       const result = await revokeShare(share!.id);
       expect(result).toBe(false);
@@ -226,7 +226,7 @@ describe("shares service", () => {
 
   describe("recordView", () => {
     it("inserts a row in share_views", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       const resolved = await resolveShare(share!.token);
       expect(resolved).not.toBeNull();
       const versionId = resolved!.version!.id;
@@ -246,7 +246,7 @@ describe("shares service", () => {
     });
 
     it("caps long ip (64 chars) and userAgent (512 chars) before insert", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       const resolved = await resolveShare(share!.token);
       const versionId = resolved!.version!.id;
 
@@ -269,7 +269,7 @@ describe("shares service", () => {
     });
 
     it("inserts without optional ip/userAgent", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       const resolved = await resolveShare(share!.token);
       const versionId = resolved!.version!.id;
 
@@ -291,7 +291,7 @@ describe("shares service", () => {
 
   describe("listShares", () => {
     it("returns per-share summary with viewCount and lastViewedAt", async () => {
-      const share = await createShareOk("test-doc", "Alice share", "admin");
+      const share = await createShareOk("test-doc", "Pedro share", "lucas");
       const resolved = await resolveShare(share!.token);
       const versionId = resolved!.version!.id;
 
@@ -302,16 +302,16 @@ describe("shares service", () => {
       expect(list).toHaveLength(1);
       const item = list[0];
       expect(item.id).toBe(share!.id);
-      expect(item.label).toBe("Alice share");
+      expect(item.label).toBe("Pedro share");
       expect(item.docSlug).toBe("test-doc");
-      expect(item.createdBy).toBe("admin");
+      expect(item.createdBy).toBe("lucas");
       expect(item.viewCount).toBe(2);
       expect(item.lastViewedAt).not.toBeNull();
       expect(item.revokedAt).toBeNull();
     });
 
     it("viewCount is 0 for share with no views", async () => {
-      await createShareOk("test-doc", "No views", "admin");
+      await createShareOk("test-doc", "No views", "lucas");
       const list = await listShares();
       expect(list).toHaveLength(1);
       expect(list[0].viewCount).toBe(0);
@@ -319,8 +319,8 @@ describe("shares service", () => {
     });
 
     it("lists multiple shares", async () => {
-      await createShareOk("test-doc", "Share A", "admin");
-      await createShareOk("test-doc", "Share B", "admin");
+      await createShareOk("test-doc", "Share A", "lucas");
+      await createShareOk("test-doc", "Share B", "lucas");
       const list = await listShares();
       expect(list).toHaveLength(2);
     });
@@ -333,9 +333,9 @@ describe("shares service", () => {
 
     it("returns only shares for the given doc (SQL-filtered, not cross-contaminated)", async () => {
       await publishDoc(OTHER_DOC);
-      await createShareOk("test-doc", "Mine A", "admin");
-      await createShareOk("test-doc", "Mine B", "admin");
-      await createShareOk("other-doc", "Theirs", "admin");
+      await createShareOk("test-doc", "Mine A", "lucas");
+      await createShareOk("test-doc", "Mine B", "lucas");
+      await createShareOk("other-doc", "Theirs", "lucas");
 
       const mine = await listSharesForDoc("test-doc");
       expect(mine).toHaveLength(2);
@@ -357,7 +357,7 @@ describe("shares service", () => {
     });
 
     it("carries view stats, expiry, revoke and allowComments state", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       const resolved = await resolveShare(share!.token);
       await recordView(share!.id, resolved!.version!.id, "1.1.1.1");
       await revokeShare(share!.id);
@@ -371,8 +371,8 @@ describe("shares service", () => {
     });
 
     it("orders newest-first by createdAt", async () => {
-      const a = await createShareOk("test-doc", "First", "admin");
-      const b = await createShareOk("test-doc", "Second", "admin");
+      const a = await createShareOk("test-doc", "First", "lucas");
+      const b = await createShareOk("test-doc", "Second", "lucas");
       const list = await listSharesForDoc("test-doc");
       // Same-instant createdAt falls back to id desc — newest id first.
       expect(list.map((s) => s.id)).toEqual([b!.id, a!.id]);
@@ -383,7 +383,7 @@ describe("shares service", () => {
 
   describe("listViews", () => {
     it("returns view rows newest-first with ip/userAgent/docVersionId", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       const resolved = await resolveShare(share!.token);
       const versionId = resolved!.version!.id;
 
@@ -415,7 +415,7 @@ describe("shares service", () => {
     });
 
     it("returns ip/userAgent unsanitized (raw passthrough — render layer escapes)", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       const resolved = await resolveShare(share!.token);
       const versionId = resolved!.version!.id;
       const hostile = '<img src=x onerror=alert(1)>';
@@ -428,7 +428,7 @@ describe("shares service", () => {
     });
 
     it("empty list for a share with no views", async () => {
-      const share = await createShareOk("test-doc", "No views", "admin");
+      const share = await createShareOk("test-doc", "No views", "lucas");
       const views = await listViews(share!.id);
       expect(views).toEqual([]);
     });
@@ -448,13 +448,13 @@ describe("shares service", () => {
     });
 
     it("active share → { state: 'ok' }", async () => {
-      const share = await createShareOk("test-doc", "active", "admin", null);
+      const share = await createShareOk("test-doc", "active", "lucas", null);
       const result = await resolveShareState(share.token);
       expect(result.state).toBe("ok");
     });
 
     it("revoked share → { state: 'gone' }", async () => {
-      const share = await createShareOk("test-doc", "revoke-me", "admin", null);
+      const share = await createShareOk("test-doc", "revoke-me", "lucas", null);
       await revokeShare(share.id);
       const result = await resolveShareState(share.token);
       expect(result.state).toBe("gone");
@@ -472,7 +472,7 @@ describe("shares service", () => {
         tokenHash: hashToken(token),
         docId: docRows[0].id,
         label: "expired",
-        createdBy: "admin",
+        createdBy: "lucas",
         expiresAt: pastDate,
       });
       const result = await resolveShareState(token);
@@ -484,7 +484,7 @@ describe("shares service", () => {
 
     it("deleted share → { state: 'gone' }", async () => {
       const { deleteShare } = await import("./shares");
-      const share = await createShareOk("test-doc", "delete-me", "admin", null);
+      const share = await createShareOk("test-doc", "delete-me", "lucas", null);
       await deleteShare(share.id);
       const result = await resolveShareState(share.token);
       expect(result.state).toBe("gone");
@@ -495,13 +495,13 @@ describe("shares service", () => {
 
   describe("createDirectoryShare — label optional", () => {
     it("omitted label → auto-named as 'Folder: <prefix>'", async () => {
-      const result = await createDirectoryShare("finance", undefined, "admin");
+      const result = await createDirectoryShare("finance", undefined, "lucas");
       if (!result.ok) throw new Error("Expected ok");
       expect(result.label).toBe("Folder: finance");
     });
 
     it("explicit label is preserved", async () => {
-      const result = await createDirectoryShare("finance", "Q3 finance pack", "admin");
+      const result = await createDirectoryShare("finance", "Q3 finance pack", "lucas");
       if (!result.ok) throw new Error("Expected ok");
       expect(result.label).toBe("Q3 finance pack");
     });
@@ -511,7 +511,7 @@ describe("shares service", () => {
 
   describe("countRecentViews", () => {
     it("counts only views within the window", async () => {
-      const share = await createShareOk("test-doc", "Alice", "admin");
+      const share = await createShareOk("test-doc", "Pedro", "lucas");
       const resolved = await resolveShare(share!.token);
       const versionId = resolved!.version!.id;
 

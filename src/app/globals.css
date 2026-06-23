@@ -2,8 +2,11 @@
 
 /* =========================================================================
    Desk design tokens
+   Values extracted verbatim from the design handoff prototypes:
+     - Share Reader.dc.html  (partner register, renderVals() theme object,
+       lines ~190-202)
+     - Hub Docs.dc.html       (operator register + badge map, lines ~233-261)
    Two themes (light default / dark via [data-theme="dark"]), one token set.
-   Badge colors and surface tokens are defined as CSS custom properties below.
    ========================================================================= */
 
 :root {
@@ -64,10 +67,10 @@
   --diff-del-fg: #9c4a3c;
 
   /* audience badges — same lightness/chroma family (Hub Docs badge map) */
-  --badge-alice-bg: rgba(46, 107, 79, 0.1);
-  --badge-alice-ink: #2e6b4f;
-  --badge-bob-bg: rgba(95, 70, 150, 0.09);
-  --badge-bob-ink: #5f4696;
+  --badge-pedro-bg: rgba(46, 107, 79, 0.1);
+  --badge-pedro-ink: #2e6b4f;
+  --badge-dani-bg: rgba(95, 70, 150, 0.09);
+  --badge-dani-ink: #5f4696;
   --badge-team-bg: rgba(61, 90, 143, 0.09);
   --badge-team-ink: #3d5a8f;
   --badge-external-bg: rgba(160, 110, 40, 0.1);
@@ -127,10 +130,10 @@
   --diff-del-bg: rgba(226, 160, 151, 0.09);
   --diff-del-fg: #d99a90;
 
-  --badge-alice-bg: rgba(127, 191, 155, 0.12);
-  --badge-alice-ink: #8fcba8;
-  --badge-bob-bg: rgba(170, 150, 220, 0.12);
-  --badge-bob-ink: #b6a4de;
+  --badge-pedro-bg: rgba(127, 191, 155, 0.12);
+  --badge-pedro-ink: #8fcba8;
+  --badge-dani-bg: rgba(170, 150, 220, 0.12);
+  --badge-dani-ink: #b6a4de;
   --badge-team-bg: rgba(150, 175, 220, 0.12);
   --badge-team-ink: #a8bee2;
   --badge-external-bg: rgba(217, 190, 130, 0.12);
@@ -442,7 +445,7 @@ body {
 .hljs-class .hljs-title,
 .hljs-function .hljs-title,
 .hljs-attr {
-  color: var(--badge-bob-ink);
+  color: var(--badge-dani-ink);
 }
 .hljs-variable,
 .hljs-template-variable,

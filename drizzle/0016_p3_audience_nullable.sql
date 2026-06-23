@@ -1,0 +1,16 @@
+-- 0016_p3_audience_nullable
+-- Gen-1 → Gen-2 consolidation, Slice 1 (specs/desk/consolidation-plan.md, D2).
+--
+-- Read access is now SPACE-SCOPED: a doc is visible to a principal iff the
+-- principal is an admin, OR a member of the doc's space, OR the doc's space is
+-- public/unlisted, OR a capability share carries it. The per-doc `audience` tag
+-- no longer gates any read path, so `docs.audience` becomes VESTIGIAL.
+--
+-- This migration is NON-DESTRUCTIVE: it only DROPs the NOT NULL constraint on
+-- docs.audience so publish/projection no longer need to supply it. The
+-- `audiences` / `audience_members` tables and the `docs.audience` column itself
+-- are intentionally LEFT IN PLACE (dormant) — a later cleanup slice drops them.
+-- No data is touched; existing audience values stay on their rows, simply
+-- unread by the access layer.
+--> statement-breakpoint
+ALTER TABLE "docs" ALTER COLUMN "audience" DROP NOT NULL;

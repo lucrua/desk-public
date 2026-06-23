@@ -23,7 +23,7 @@ const DOC = {
   audience: "team",
   format: "md" as const,
   content: "# v1",
-  by: "admin",
+  by: "lucas",
 };
 const OTHER = { ...DOC, slug: "sp-other", content: "# o" };
 

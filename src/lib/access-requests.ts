@@ -34,7 +34,7 @@ function isUniqueViolation(e: unknown): boolean {
 }
 
 /**
- * Default display name from an email local-part: "bob.silva@x.com" → "Bob.silva".
+ * Default display name from an email local-part: "dani.silva@x.com" → "Dani.silva".
  * Capitalizes the first character only — the admin can edit it after approval.
  */
 function defaultDisplayName(email: string): string {

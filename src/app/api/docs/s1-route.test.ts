@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
+import { resetDb, publishDocOk } from "@/test/db";
 import { getDocBySlug } from "@/lib/docs";
 import { POST, GET } from "./route";
 import { PATCH as slugPATCH } from "./[slug]/route";
@@ -34,82 +34,61 @@ const base = {
   slug: "conc-doc",
   title: "Conc",
   sourcePath: "os/conc.md",
-  audience: "team",
   format: "md" as const,
   content: "# v1",
 };
 
-describe("POST /api/docs — audience default (Audiences v2)", () => {
+describe("POST /api/docs — audience is vestigial (Gen-2 consolidation)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
-  it("omitting audience lands the doc in `private`", async () => {
-    const { audience: _omit, ...noAudience } = { ...base, slug: "no-aud" };
-    void _omit;
-    const res = await POST(postReq(noAudience));
+  it("omitting audience still publishes (200) — visibility follows the space", async () => {
+    const res = await POST(postReq({ ...base, slug: "no-aud" }));
     expect(res.status).toBe(200);
     const doc = await getDocBySlug("no-aud");
-    expect(doc!.doc.audience).toBe("private");
+    expect(doc).toBeTruthy();
+    // Audience is vestigial: no longer set on publish.
+    expect(doc!.doc.audience).toBeNull();
   });
 
-  it("explicit audience is still honoured + validated", async () => {
-    const ok = await POST(postReq({ ...base, slug: "with-aud", audience: "team" }));
-    expect(ok.status).toBe(200);
-    expect((await getDocBySlug("with-aud"))!.doc.audience).toBe("team");
-
-    const bad = await POST(postReq({ ...base, slug: "bad-aud", audience: "nope" }));
-    expect(bad.status).toBe(400);
-
-    const empty = await POST(postReq({ ...base, slug: "empty-aud", audience: "" }));
-    expect(empty.status).toBe(400);
+  it("an `audience` field in the body is ignored, not rejected", async () => {
+    // Any value (including ones that used to be unknown / empty) is accepted now.
+    expect((await POST(postReq({ ...base, slug: "with-aud", audience: "team" }))).status).toBe(200);
+    expect((await POST(postReq({ ...base, slug: "any-aud", audience: "nope" }))).status).toBe(200);
+    expect((await POST(postReq({ ...base, slug: "empty-aud", audience: "" }))).status).toBe(200);
   });
 });
 
-describe("PATCH /api/docs/[slug] — audience (Sharing panel visibility control)", () => {
+describe("PATCH /api/docs/[slug] — audience removed (visibility follows the space)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   function ctx(slug: string) {
     return { params: Promise.resolve({ slug }) };
   }
 
-  it("admin changes a doc's audience to an existing key", async () => {
-    await publishDocOk({ ...base, slug: "a", audience: "private", by: "admin" });
+  it("PATCH with only { audience } → 400 (PATCH supports { path } only)", async () => {
+    await publishDocOk({ ...base, slug: "a", by: "lucas" });
     const res = await slugPATCH(patchReq("a", { audience: "team" }), ctx("a"));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.audience).toBe("team");
-    expect(body.changed).toBe(true);
-    expect((await getDocBySlug("a"))!.doc.audience).toBe("team");
+    // Audience is no longer a mutable per-doc field; PATCH supports { path } only.
+    expect(res.status).toBe(400);
   });
 
-  it("unknown audience → 400; member → 403; unknown slug → 404", async () => {
-    await publishDocOk({ ...base, slug: "b", audience: "private", by: "admin" });
-    expect((await slugPATCH(patchReq("b", { audience: "nope" }), ctx("b"))).status).toBe(400);
-    expect((await slugPATCH(patchReq("b", { audience: "team" }, "member"), ctx("b"))).status).toBe(403);
-    expect((await slugPATCH(patchReq("missing", { audience: "team" }), ctx("missing"))).status).toBe(404);
-  });
-
-  it("same audience → 200 changed:false (no-op)", async () => {
-    await publishDocOk({ ...base, slug: "c", audience: "team", by: "admin" });
-    const res = await slugPATCH(patchReq("c", { audience: "team" }), ctx("c"));
-    expect(res.status).toBe(200);
-    expect((await res.json()).changed).toBe(false);
+  it("member → 403 before any body validation", async () => {
+    await publishDocOk({ ...base, slug: "b", by: "lucas" });
+    expect((await slugPATCH(patchReq("b", { path: "team" }, "member"), ctx("b"))).status).toBe(403);
   });
 });
 
 describe("POST /api/docs — optimistic concurrency (base_version_id)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("matching base_version_id appends a new version (200)", async () => {
-    const v1 = await publishDocOk({ ...base, by: "admin" });
+    const v1 = await publishDocOk({ ...base, by: "lucas" });
     const res = await POST(
       postReq({ ...base, content: "# v2", baseVersionId: v1.versionId }),
     );
@@ -119,9 +98,9 @@ describe("POST /api/docs — optimistic concurrency (base_version_id)", () => {
   });
 
   it("stale base_version_id → 409 with current_version_id + current_content_hash", async () => {
-    const v1 = await publishDocOk({ ...base, by: "admin" });
+    const v1 = await publishDocOk({ ...base, by: "lucas" });
     // advance the doc so v1 is no longer current
-    const v2 = await publishDocOk({ ...base, content: "# v2", by: "admin" });
+    const v2 = await publishDocOk({ ...base, content: "# v2", by: "lucas" });
 
     const res = await POST(
       postReq({ ...base, content: "# v3 from stale", baseVersionId: v1.versionId }),
@@ -139,7 +118,7 @@ describe("POST /api/docs — optimistic concurrency (base_version_id)", () => {
   });
 
   it("absent base_version_id keeps back-compat append behaviour", async () => {
-    await publishDocOk({ ...base, by: "admin" });
+    await publishDocOk({ ...base, by: "lucas" });
     const res = await POST(postReq({ ...base, content: "# v2" }));
     expect(res.status).toBe(200);
   });
@@ -158,7 +137,6 @@ describe("POST /api/docs — optimistic concurrency (base_version_id)", () => {
 describe("POST /api/docs — path on create", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("valid path is stored", async () => {
@@ -184,8 +162,7 @@ describe("POST /api/docs — path on create", () => {
 describe("PATCH /api/docs/[slug] — Move (path)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
-    await publishDocOk({ ...base, by: "admin" });
+    await publishDocOk({ ...base, by: "lucas" });
   });
 
   it("admin moves the doc to a new path (200, moved: true)", async () => {
@@ -236,11 +213,10 @@ describe("PATCH /api/docs/[slug] — Move (path)", () => {
 describe("GET /api/docs — ?path= prefix filter", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
-    await publishDocOk({ ...base, slug: "root-doc", path: "", by: "admin" });
-    await publishDocOk({ ...base, slug: "os-doc", path: "os", by: "admin" });
-    await publishDocOk({ ...base, slug: "canon-doc", path: "os/canon", by: "admin" });
-    await publishDocOk({ ...base, slug: "other-doc", path: "team", by: "admin" });
+    await publishDocOk({ ...base, slug: "root-doc", path: "", by: "lucas" });
+    await publishDocOk({ ...base, slug: "os-doc", path: "os", by: "lucas" });
+    await publishDocOk({ ...base, slug: "canon-doc", path: "os/canon", by: "lucas" });
+    await publishDocOk({ ...base, slug: "other-doc", path: "team", by: "lucas" });
   });
 
   it("prefix matches the folder and its descendants", async () => {

@@ -165,7 +165,7 @@ async function recordAccessRequest(email: string): Promise<void> {
 }
 
 /**
- * Derive a display name from an email local-part: "admin.smith@x.com" → "Admin.smith".
+ * Derive a display name from an email local-part: "lucas.smith@x.com" → "Lucas.smith".
  * Capitalizes the first character only — a sane default the admin can edit later.
  */
 function displayNameFromEmail(email: string): string {
@@ -261,7 +261,7 @@ async function bootstrapAdmin(email: string): Promise<Principal | null> {
  * Called once at app boot (from src/instrumentation.ts or equivalent). If
  * ADMIN_EMAIL is set and a user row with that email exists at role='member',
  * promotes it to role='admin'. Idempotent: already-admin rows are untouched;
- * unknown emails are a no-op. After the first post-upgrade deploy confirms Admin
+ * unknown emails are a no-op. After the first post-upgrade deploy confirms Lucas
  * is still admin, remove ADMIN_EMAIL from the environment.
  *
  * This is the ONLY surviving use of process.env.ADMIN_EMAIL. It does NOT affect

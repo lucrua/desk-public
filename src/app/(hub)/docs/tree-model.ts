@@ -4,9 +4,9 @@
  * This module imports NOTHING that pulls the DB layer (`@/lib/docs`) — only
  * `@/lib/path` (pure) and `@/lib/snippet-delim` (two constants). That keeps it
  * importable from client components (DocsTree, PathPicker) without dragging the
- * `postgres` driver into the browser bundle. The DB-coupled helpers
- * (`canSeeAudience`) and the version-rail helpers that reference DB types live
- * in `view-model.ts`, which re-exports everything here for back-compat.
+ * `postgres` driver into the browser bundle. The version-rail helpers that
+ * reference DB types live in `view-model.ts`, which re-exports everything here
+ * for back-compat.
  */
 
 import { normalizePath } from "@/lib/path";

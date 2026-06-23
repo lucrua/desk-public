@@ -2,11 +2,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { db } from "@/db";
 import { docs, docVersions, accessRequests } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { resetDb } from "@/test/db";
+import { resetDb, seedDefaultSpace } from "@/test/db";
 
 describe("schema smoke test — docs + doc_versions round-trip", () => {
+  let spaceId: number;
   beforeEach(async () => {
     await resetDb();
+    spaceId = await seedDefaultSpace();
   });
 
   it("inserts a doc + version, updates currentVersionId, reads back with correct defaults", async () => {
@@ -18,6 +20,7 @@ describe("schema smoke test — docs + doc_versions round-trip", () => {
         title: "Test Document",
         sourcePath: "os/CONTEXT.md",
         audience: "team",
+        spaceId,
         // format defaults to "md", unpublishedAt defaults to null
       })
       .returning();
@@ -37,14 +40,14 @@ describe("schema smoke test — docs + doc_versions round-trip", () => {
         docId: doc.id,
         content: contentStr,
         contentHash: hashStr,
-        publishedBy: "admin",
+        publishedBy: "lucas",
       })
       .returning();
 
     expect(version.docId).toBe(doc.id);
     expect(version.content).toBe(contentStr);
     expect(version.contentHash).toBe(hashStr);
-    expect(version.publishedBy).toBe("admin");
+    expect(version.publishedBy).toBe("lucas");
     expect(version.publishedAt).toBeInstanceOf(Date);
 
     // Update doc.currentVersionId to point to the new version
@@ -78,6 +81,7 @@ describe("schema smoke test — docs + doc_versions round-trip", () => {
       title: "First",
       sourcePath: "os/A.md",
       audience: "team",
+      spaceId,
     });
 
     let thrown: unknown;
@@ -87,6 +91,7 @@ describe("schema smoke test — docs + doc_versions round-trip", () => {
         title: "Second",
         sourcePath: "os/B.md",
         audience: "team",
+        spaceId,
       });
     } catch (e) {
       thrown = e;

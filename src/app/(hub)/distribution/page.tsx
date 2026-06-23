@@ -3,10 +3,10 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getPrincipal } from "@/lib/auth";
 import {
-  distributionByAudience,
+  distributionBySpace,
   distributionByUser,
   distributionLinks,
-  type AudienceDistEntry,
+  type SpaceDistEntry,
   type UserDistEntry,
   type LinkDistEntry,
 } from "@/lib/distribution";
@@ -48,19 +48,19 @@ function formatDate(d: Date | null): string {
   return d.toISOString().slice(0, 10);
 }
 
-// ── By Audience lens ─────────────────────────────────────────────────────────
-function AudienceLens({ rows }: { rows: AudienceDistEntry[] }) {
+// ── By Space lens ────────────────────────────────────────────────────────────
+function SpaceLens({ rows }: { rows: SpaceDistEntry[] }) {
   if (rows.length === 0) {
     return (
-      <p style={{ fontSize: 13, color: "var(--muted)" }}>No audiences configured.</p>
+      <p style={{ fontSize: 13, color: "var(--muted)" }}>No spaces configured.</p>
     );
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {rows.map((a) => (
+      {rows.map((s) => (
         <div
-          key={a.key}
+          key={s.slug}
           style={{
             border: "1px solid var(--hairline)",
             borderRadius: 10,
@@ -74,41 +74,44 @@ function AudienceLens({ rows }: { rows: AudienceDistEntry[] }) {
               gap: 12,
               padding: "10px 14px",
               background: "var(--surface-alt)",
-              borderBottom: a.docCount > 0 ? "1px solid var(--hairline)" : "none",
+              borderBottom:
+                s.docCount > 0 || s.members.length > 0 ? "1px solid var(--hairline)" : "none",
             }}
           >
             <span style={{ ...mono, fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>
-              {a.key}
+              {s.slug}
             </span>
-            {a.label !== a.key && (
-              <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{a.label}</span>
-            )}
-            {a.memberVisible && (
-              <span style={chip("var(--ok-ink, var(--accent))")}>all members</span>
-            )}
+            <span
+              style={chip(
+                s.openVisible ? "var(--ok-ink, var(--accent))" : "var(--muted)",
+              )}
+            >
+              {s.visibility}
+            </span>
             <span style={{ ...cellMono, marginLeft: "auto" }}>
-              {a.memberCount} {a.memberCount === 1 ? "member" : "members"}
+              {s.memberCount} {s.memberCount === 1 ? "member" : "members"}
             </span>
             <span style={cellMono}>
-              {a.docCount} {a.docCount === 1 ? "doc" : "docs"}
+              {s.docCount} {s.docCount === 1 ? "doc" : "docs"}
             </span>
           </div>
-          {a.docCount > 0 && (
+          {(s.members.length > 0 || s.docCount > 0) && (
             <div style={{ padding: "6px 14px 10px" }}>
-              {a.members.length > 0 && (
+              {s.members.length > 0 && (
                 <div style={{ marginBottom: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {a.members.map((m) => (
+                  {s.members.map((m) => (
                     <span
-                      key={m}
+                      key={m.displayName}
                       style={{ ...mono, fontSize: 10.5, padding: "2px 8px", borderRadius: 999, border: "1px solid var(--hairline)", color: "var(--muted)" }}
                     >
-                      {m}
+                      {m.displayName}
+                      <span style={{ color: "var(--faint)" }}> · {m.role}</span>
                     </span>
                   ))}
                 </div>
               )}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                {a.docs.map((d) => (
+                {s.docs.map((d) => (
                   <Link
                     key={d.slug}
                     href={`/docs/${d.slug}`}
@@ -157,7 +160,7 @@ function UserLens({ rows }: { rows: UserDistEntry[] }) {
         <span>user</span>
         <span>role</span>
         <span>emails</span>
-        <span>visible audiences</span>
+        <span>visible spaces</span>
         <span style={{ justifySelf: "end" }}>docs</span>
       </div>
       {rows.map((u) => (
@@ -183,13 +186,13 @@ function UserLens({ rows }: { rows: UserDistEntry[] }) {
             ))}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-            {u.audienceKeys.length === 0 ? (
+            {u.visibleSpaces.length === 0 ? (
               <span style={cellMono}>none</span>
             ) : u.role === "admin" ? (
-              <span style={chip("var(--muted)")}>all ({u.audienceKeys.length})</span>
+              <span style={chip("var(--muted)")}>all ({u.visibleSpaces.length})</span>
             ) : (
-              u.audienceKeys.map((k) => (
-                <span key={k} style={chip("var(--muted)")}>{k}</span>
+              u.visibleSpaces.map((slug) => (
+                <span key={slug} style={chip("var(--muted)")}>{slug}</span>
               ))
             )}
           </div>
@@ -304,8 +307,8 @@ export default async function DistributionPage() {
   const principal = await getPrincipal(await headers());
   if (principal.kind !== "admin") notFound();
 
-  const [byAudience, byUser, links] = await Promise.all([
-    distributionByAudience(),
+  const [bySpace, byUser, links] = await Promise.all([
+    distributionBySpace(),
     distributionByUser(),
     distributionLinks(),
   ]);
@@ -319,28 +322,29 @@ export default async function DistributionPage() {
           Distribution
         </h1>
         <span style={{ ...mono, fontSize: 11, color: "var(--faint)" }}>
-          {byAudience.length} audiences · {byUser.length} users · {links.length} links ({liveLinks} active)
+          {bySpace.length} spaces · {byUser.length} users · {links.length} links ({liveLinks} active)
         </span>
       </div>
       <p style={{ margin: "0 0 28px", fontSize: 13, color: "var(--muted)" }}>
         Who can see what — three read-only lenses over your workspace&apos;s exposure. Admin-only.
       </p>
 
-      {/* ── By Audience ── */}
+      {/* ── By Space ── */}
       <section style={{ marginBottom: 48 }}>
-        <h2 style={{ fontSize: 15, fontWeight: 600, margin: "0 0 12px" }}>By audience</h2>
+        <h2 style={{ fontSize: 15, fontWeight: 600, margin: "0 0 12px" }}>By space</h2>
         <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--muted)" }}>
-          Each audience group — who is in it and which docs are tagged to it.
+          Each space — its visibility, who is a member (and their role), and which docs live in it.
+          A public/unlisted space is visible to every signed-in user; a private space only to its members.
         </p>
-        <AudienceLens rows={byAudience} />
+        <SpaceLens rows={bySpace} />
       </section>
 
       {/* ── By User ── */}
       <section style={{ marginBottom: 48 }}>
         <h2 style={{ fontSize: 15, fontWeight: 600, margin: "0 0 12px" }}>By user</h2>
         <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--muted)" }}>
-          Each active user — their role, visible audiences, and how many docs they can see.
-          Admins see all docs in all audiences.
+          Each active user — their role, the spaces they can see (member-of plus any
+          public/unlisted space), and how many docs they can see. Admins see all docs in all spaces.
         </p>
         <UserLens rows={byUser} />
       </section>

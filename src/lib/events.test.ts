@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk, createShareOk } from "@/test/db";
+import {
+  resetDb,
+  seedAudiences,
+  seedDefaultSpace,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+  publishDocOk,
+  createShareOk,
+} from "@/test/db";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 import { db } from "@/db";
 import {
   listEvents,
@@ -17,16 +27,11 @@ const DOC = {
   slug: "ev-doc",
   title: "Ev Doc",
   sourcePath: "os/ev.md",
-  audience: "team", // member-visible (seeded)
+  // Lands in the default `workspace` space — member-visible once the
+  // dev-member is seeded as a reader of it (seedDevMemberInDefaultSpace).
   format: "md" as const,
   content: "# v1",
-  by: "admin",
-};
-
-const HIDDEN_DOC = {
-  ...DOC,
-  slug: "ev-hidden",
-  audience: "alice", // hidden from members (seeded)
+  by: "lucas",
 };
 
 async function allKinds(): Promise<string[]> {
@@ -38,6 +43,10 @@ describe("events service", () => {
   beforeEach(async () => {
     await resetDb();
     await seedAudiences();
+    // Pre-create the Phase-1 default space (inserted directly, emits no event)
+    // so publishDoc doesn't lazily create it — and thereby emit a space.created
+    // event — mid-test. The event-log assertions count only doc.* events.
+    await seedDefaultSpace();
   });
 
   // ── emission per mutation ──────────────────────────────────────────────────
@@ -53,7 +62,7 @@ describe("events service", () => {
     // NEVER the content.
     expect(JSON.stringify(payload)).not.toContain("# v1");
     expect(payload.content).toBeUndefined();
-    expect(rows[0].actorName).toBe("admin");
+    expect(rows[0].actorName).toBe("lucas");
   });
 
   it("a no-op republish (same content) emits NO new event", async () => {
@@ -77,9 +86,9 @@ describe("events service", () => {
 
   it("setDocPath emits doc.moved {slug, from_path, to_path}; noop move is silent", async () => {
     await publishDocOk(DOC);
-    const r1 = await setDocPath("ev-doc", "os/canon", "admin");
+    const r1 = await setDocPath("ev-doc", "os/canon", "lucas");
     expect(r1).toBe("ok");
-    const r2 = await setDocPath("ev-doc", "os/canon", "admin"); // same → noop
+    const r2 = await setDocPath("ev-doc", "os/canon", "lucas"); // same → noop
     expect(r2).toBe("noop");
 
     const moved = (await listEvents({ viewer: "admin" })).filter(
@@ -95,7 +104,7 @@ describe("events service", () => {
     const doc = await getDocBySlug("ev-doc");
     const rev = await createRevision({
       slug: "ev-doc",
-      authorName: "bob",
+      authorName: "dani",
       authorKind: "member",
       scope: { viewer: "admin" },
       content: "# v1 edited",
@@ -105,7 +114,7 @@ describe("events service", () => {
     let kinds = await allKinds();
     expect(kinds).toContain("revision.proposed");
 
-    const res = await acceptRevision(rev!.id, { by: "admin" });
+    const res = await acceptRevision(rev!.id, { by: "lucas" });
     expect(res.ok).toBe(true);
 
     kinds = await allKinds();
@@ -124,12 +133,12 @@ describe("events service", () => {
     await publishDocOk(DOC);
     const rev = await createRevision({
       slug: "ev-doc",
-      authorName: "bob",
+      authorName: "dani",
       authorKind: "member",
       scope: { viewer: "admin" },
       content: "# nope",
     });
-    await rejectRevision(rev!.id, { by: "admin" });
+    await rejectRevision(rev!.id, { by: "lucas" });
     const decided = (await listEvents({ viewer: "admin" })).find(
       (e) => e.kind === "revision.decided",
     )!;
@@ -142,7 +151,7 @@ describe("events service", () => {
     await addComment({
       docId,
       versionId: pub.versionId,
-      authorName: "bob",
+      authorName: "dani",
       authorKind: "member",
       body: "secret comment body",
     });
@@ -159,7 +168,7 @@ describe("events service", () => {
       .insert((await import("@/db/schema")).accessRequests)
       .values({ email: "new@x.com" });
     const reqs = await (await import("@/lib/access-requests")).listAccessRequests();
-    const res = await approveAccessRequest(reqs[0].id, { by: "admin" });
+    const res = await approveAccessRequest(reqs[0].id, { by: "lucas" });
     expect(res.status).toBe("ok");
     const approved = (await listEvents({ viewer: "admin" })).find(
       (e) => e.kind === "user.approved",
@@ -182,7 +191,7 @@ describe("events service", () => {
           kind: "doc.published",
           docId: 1,
           payload: { slug: "ev-doc", versionId: 999 },
-          actorName: "admin",
+          actorName: "lucas",
         });
         throw new Error("boom — force rollback");
       }),
@@ -219,13 +228,20 @@ describe("events service", () => {
     expect(page).toHaveLength(2);
   });
 
-  // ── member audience scoping ─────────────────────────────────────────────────
+  // ── member space scoping ────────────────────────────────────────────────────
 
-  it("member sees doc events ONLY for member-visible audiences", async () => {
-    await publishDocOk(DOC); // team → visible
-    await publishDocOk(HIDDEN_DOC); // alice → hidden
+  it("member sees doc events ONLY for docs whose space is member-visible", async () => {
+    // dev-member is a reader of the default `workspace` space → sees DOC's events.
+    await seedDevMemberInDefaultSpace();
+    const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
+    // Hidden doc lives in a SEPARATE private space the dev-member isn't in.
+    const owner = await seedUser({ email: "hidden-owner@x.com", displayName: "Owner", role: "admin" });
+    const hiddenSpace = await seedSpace({ slug: "hidden-space", ownerId: owner, visibility: "private" });
 
-    const memberRows = await listEvents({ viewer: "member" });
+    await publishDocOk(DOC); // default space → visible
+    await publishDocOk({ ...DOC, slug: "ev-hidden", spaceId: hiddenSpace }); // private space → hidden
+
+    const memberRows = await listEvents({ viewer: "member", userId: memberId });
     const slugs = memberRows.map((e) => (e.payload as Record<string, unknown>).slug);
     expect(slugs).toContain("ev-doc");
     expect(slugs).not.toContain("ev-hidden");
@@ -241,7 +257,7 @@ describe("events service", () => {
       .insert((await import("@/db/schema")).accessRequests)
       .values({ email: "p@x.com" });
     const reqs = await (await import("@/lib/access-requests")).listAccessRequests();
-    await approveAccessRequest(reqs[0].id, { by: "admin" });
+    await approveAccessRequest(reqs[0].id, { by: "lucas" });
 
     const memberRows = await listEvents({ viewer: "member" });
     expect(memberRows.map((e) => e.kind)).not.toContain("user.approved");
@@ -250,19 +266,19 @@ describe("events service", () => {
     expect(filtered).toHaveLength(0);
   });
 
-  it("member with zero visible audiences sees no events", async () => {
-    // Make team hidden too.
-    const { db: d } = await import("@/db");
-    const { audiences } = await import("@/db/schema");
-    const { eq } = await import("drizzle-orm");
-    await d.update(audiences).set({ memberVisible: 0 }).where(eq(audiences.key, "team"));
-    await publishDocOk(DOC);
-    expect(await listEvents({ viewer: "member" })).toHaveLength(0);
+  it("member with no visible spaces sees no doc events", async () => {
+    // The dev-member is NOT seeded into any space → the default `workspace`
+    // (PRIVATE) doc is invisible to them.
+    const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
+    await publishDocOk(DOC); // default private space, member not a member
+    expect(await listEvents({ viewer: "member", userId: memberId })).toHaveLength(0);
   });
 
   it("comment via share link still reaches the member feed if the doc is visible", async () => {
+    await seedDevMemberInDefaultSpace();
+    const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
     const pub = await publishDocOk(DOC);
-    const share = await createShareOk("ev-doc", "Partner", "admin");
+    const share = await createShareOk("ev-doc", "Partner", "lucas");
     const docId = (await docIdForSlug("ev-doc"))!;
     await addComment({
       docId,
@@ -272,27 +288,34 @@ describe("events service", () => {
       authorKind: "link:Partner",
       body: "from outside",
     });
-    const memberRows = await listEvents({ viewer: "member", kinds: ["comment.added"] });
+    const memberRows = await listEvents({
+      viewer: "member",
+      userId: memberId,
+      kinds: ["comment.added"],
+    });
     expect(memberRows).toHaveLength(1);
     expect((memberRows[0].payload as Record<string, unknown>).viaShare).toBe(true);
   });
 });
 
-// ── P2 board events: staff-visible, no audience scoping ──────────────────────
+// ── P2 board events: staff-visible, no space scoping ─────────────────────────
 describe("board event scoping (card.* / bucket.*)", () => {
   beforeEach(async () => {
     await resetDb();
     await seedAudiences();
+    // Pre-create the Phase-1 default space (inserted directly, emits no event)
+    // so publishDoc doesn't lazily create it — and thereby emit a space.created
+    // event — mid-test. The event-log assertions count only doc.* events.
+    await seedDefaultSpace();
   });
 
-  it("members see card/bucket events even with ZERO visible audiences", async () => {
-    // Hide every audience — doc events would be invisible to a member.
-    const { audiences } = await import("@/db/schema");
-    await db.update(audiences).set({ memberVisible: 0 });
+  it("members see card/bucket events even with NO visible doc spaces", async () => {
+    // A member with no space membership — doc events would be invisible.
+    const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
     await emitEvent(db, { kind: "card.created", payload: { cardId: 1, bucket: "backlog" }, actorName: "Alex" });
     await emitEvent(db, { kind: "bucket.created", payload: { bucketId: 1, bucketKey: "backlog" }, actorName: "Alex" });
 
-    const memberRows = await listEvents({ viewer: "member" });
+    const memberRows = await listEvents({ viewer: "member", userId: memberId });
     const kinds = memberRows.map((e) => e.kind);
     expect(kinds).toContain("card.created");
     expect(kinds).toContain("bucket.created");
@@ -307,11 +330,16 @@ describe("board event scoping (card.* / bucket.*)", () => {
   });
 
   it("a member's board events come through alongside their visible doc events", async () => {
-    await publishDocOk(DOC); // team → visible
-    await publishDocOk(HIDDEN_DOC); // alice → hidden
+    await seedDevMemberInDefaultSpace();
+    const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
+    const owner = await seedUser({ email: "hidden-owner2@x.com", displayName: "Owner", role: "admin" });
+    const hiddenSpace = await seedSpace({ slug: "hidden-space2", ownerId: owner, visibility: "private" });
+
+    await publishDocOk(DOC); // default space → visible
+    await publishDocOk({ ...DOC, slug: "ev-hidden", spaceId: hiddenSpace }); // private space → hidden
     await emitEvent(db, { kind: "card.created", payload: { cardId: 7, bucket: "review" }, actorName: "Alex" });
 
-    const rows = await listEvents({ viewer: "member" });
+    const rows = await listEvents({ viewer: "member", userId: memberId });
     const kinds = rows.map((e) => e.kind);
     expect(kinds).toContain("card.created"); // board event
     expect(kinds).toContain("doc.published"); // visible doc

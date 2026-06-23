@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
+import {
+  resetDb,
+  publishDocOk,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+} from "@/test/db";
 import { SNIPPET_START, SNIPPET_STOP } from "@/lib/docs";
 import { GET } from "./route";
 
@@ -12,7 +18,6 @@ function getReq(url: string, role: string | null = "admin") {
 describe("GET /api/docs?q= — full-text search", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("q present → FTS results with a snippet field (same list shape)", async () => {
@@ -20,10 +25,9 @@ describe("GET /api/docs?q= — full-text search", () => {
       slug: "fts-a",
       title: "Neptune Notes",
       sourcePath: "a.md",
-      audience: "team",
       format: "md",
       content: "the neptune passage is here in the body",
-      by: "admin",
+      by: "lucas",
     });
     const res = await GET(getReq("/api/docs?q=neptune"));
     expect(res.status).toBe(200);
@@ -46,10 +50,9 @@ describe("GET /api/docs?q= — full-text search", () => {
       slug: "plain",
       title: "Plain",
       sourcePath: "p.md",
-      audience: "team",
       format: "md",
       content: "body",
-      by: "admin",
+      by: "lucas",
     });
     const res = await GET(getReq("/api/docs"));
     const json = await res.json();
@@ -58,24 +61,28 @@ describe("GET /api/docs?q= — full-text search", () => {
     expect(row.snippet).toBeUndefined();
   });
 
-  it("member q is audience-scoped — hidden-audience match absent", async () => {
+  it("member q is space-scoped — a match in another space is absent", async () => {
+    // Hidden: a doc in a separate private space the dev member is not in.
+    const ownerId = await seedUser({ email: "owner@test.local", displayName: "Owner", role: "admin" });
+    const privateSpace = await seedSpace({ slug: "private-space", ownerId, visibility: "private" });
     await publishDocOk({
       slug: "hidden",
       title: "Hidden Saturn",
       sourcePath: "h.md",
-      audience: "alice",
       format: "md",
       content: "saturn",
-      by: "admin",
+      by: "lucas",
+      spaceId: privateSpace,
     });
+    // Visible: a doc in the default workspace the dev member reads.
+    await seedDevMemberInDefaultSpace();
     await publishDocOk({
       slug: "visible",
       title: "Visible Saturn",
       sourcePath: "v.md",
-      audience: "team",
       format: "md",
       content: "saturn",
-      by: "admin",
+      by: "lucas",
     });
     const res = await GET(getReq("/api/docs?q=saturn", "member"));
     const json = await res.json();

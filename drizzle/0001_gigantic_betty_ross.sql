@@ -11,12 +11,12 @@ CREATE TABLE "audiences" (
 -- preserves the previous hardcoded rule (members saw only team docs).
 INSERT INTO "audiences" ("key", "label", "member_visible") VALUES
 	('team', 'Team', 1),
-	('alice', 'Alice', 0),
-	('bob', 'Bob', 0)
+	('pedro', 'Pedro', 0),
+	('dani', 'Dani', 0)
 ON CONFLICT ("key") DO NOTHING;
 --> statement-breakpoint
 -- Backfill any audience value already present on existing docs that the three
--- canonical rows don't cover (e.g. `external:Acme`). Label = the raw value;
+-- canonical rows don't cover (e.g. `external:PartnerCo`). Label = the raw value;
 -- member_visible 0 so prod docs stay valid without exposing them to members.
 INSERT INTO "audiences" ("key", "label", "member_visible")
 SELECT DISTINCT d."audience", d."audience", 0

@@ -7,8 +7,9 @@ import { canPublishVersion } from "@/lib/permissions";
 import { getUserById } from "@/lib/users";
 import { unifiedDiff } from "@/lib/diff";
 import Markdown from "@/components/Markdown";
-import AudienceBadge from "@/components/AudienceBadge";
+import HtmlPreview from "./HtmlPreview";
 import DriftBanner from "@/components/DriftBanner";
+import { getSpaceById } from "@/lib/spaces";
 import DocActions from "./DocActions";
 import DocReaderActions from "./DocReaderActions";
 import DocSharingPanel from "./DocSharingPanel";
@@ -61,6 +62,10 @@ export default async function DocDetailPage({
   if (!result) notFound();
 
   const { doc, version } = result;
+  // The doc lives in a space; the back-link returns there (Gen-2: Spaces is the
+  // home, there is no flat /docs list). Fall back to /spaces if the space is gone.
+  const space = await getSpaceById(doc.spaceId);
+  const backHref = space ? `/spaces/${space.slug}` : "/spaces";
   const versions = await listVersions(slug);
   // Active catalog id-patterns drive doc-body auto-linking for staff readers
   // (F-012 → /catalog/finding/F-012). Empty when no kinds exist.
@@ -172,7 +177,7 @@ export default async function DocDetailPage({
     >
       <article style={{ flex: 1, minWidth: 0 }}>
         <Link
-          href="/docs"
+          href={backHref}
           style={{
             fontSize: 12.5,
             color: "var(--muted)",
@@ -181,7 +186,7 @@ export default async function DocDetailPage({
             marginBottom: 16,
           }}
         >
-          ← All docs
+          ← {space ? space.slug : "Spaces"}
         </Link>
 
         <div
@@ -196,7 +201,23 @@ export default async function DocDetailPage({
           <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.015em", margin: 0 }}>
             {doc.title}
           </h1>
-          <AudienceBadge audience={doc.audience} />
+          {space && (
+            <Link
+              href={`/spaces/${space.slug}`}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 11,
+                padding: "3px 10px",
+                borderRadius: 999,
+                border: "1px solid var(--hairline)",
+                background: "var(--surface-alt)",
+                color: "var(--muted)",
+                textDecoration: "none",
+              }}
+            >
+              {space.slug}
+            </Link>
+          )}
         </div>
 
         <div
@@ -322,7 +343,11 @@ export default async function DocDetailPage({
         )}
 
         {version ? (
-          <Markdown content={version.content} register="operator" catalogPatterns={catalogPatterns} />
+          doc.format === "html" ? (
+            <HtmlPreview content={version.content} title={doc.title} />
+          ) : (
+            <Markdown content={version.content} register="operator" catalogPatterns={catalogPatterns} />
+          )
         ) : (
           <p style={{ color: "var(--muted)", fontSize: 13.5 }}>
             This doc has no published version yet.
@@ -341,12 +366,11 @@ export default async function DocDetailPage({
           </div>
         )}
 
-        {/* Consolidated Sharing panel (Audiences v2): admin visibility control
-            (audience select + live preview) + the per-doc share-links table.
-            Members see the read-only links view. */}
+        {/* Sharing panel: the per-doc capability share-links table. Visibility is
+            space-scoped now (set on the space), so there is no per-doc audience
+            control here. Members see the read-only links view. */}
         <DocSharingPanel
           slug={doc.slug}
-          audience={doc.audience}
           isAdmin={isAdmin}
           versions={shareVersionOptions}
           versionLabelById={versionLabelById}

@@ -37,7 +37,7 @@ export type HelpSection = {
  */
 export const HELP_SECTIONS: readonly HelpSection[] = [
   { id: "what-is-desk", title: "What is Desk", audience: "all" },
-  { id: "reading", title: "Reading & audiences", audience: "member-info" },
+  { id: "reading", title: "Reading & visibility", audience: "member-info" },
   { id: "search", title: "Search", audience: "all" },
   { id: "publishing", title: "Publishing", audience: "admin" },
   { id: "ownership", title: "Doc ownership", audience: "all" },
@@ -50,6 +50,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   { id: "board", title: "Board", audience: "all" },
   { id: "catalog", title: "Catalog", audience: "all" },
   { id: "users", title: "Users & access", audience: "admin" },
+  { id: "spaces", title: "Spaces & git", audience: "admin" },
   { id: "mcp", title: "Connecting an agent (MCP)", audience: "all" },
   { id: "cli", title: "CLI", audience: "all" },
   { id: "syncing", title: "Syncing local files", audience: "all" },

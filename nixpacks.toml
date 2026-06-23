@@ -1,0 +1,5 @@
+# The git smart-HTTP transport (/api/git/<owner>/<space>.git) spawns the system
+# `git` binary and /usr/lib/git-core/git-http-backend. The default Nixpacks
+# Next.js image does not include git, so install it at build time.
+[phases.setup]
+aptPkgs = ["git"]

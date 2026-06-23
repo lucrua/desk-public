@@ -5,7 +5,7 @@
  * tools.test.ts.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
+import { resetDb, seedAudiences, publishDocOk, seedSpace, seedUser } from "@/test/db";
 import { getDocBySlug } from "@/lib/docs";
 import { resolveShare } from "@/lib/shares";
 import type { Principal } from "@/lib/auth";
@@ -33,44 +33,47 @@ const DOC = {
   audience: "team",
   format: "md" as const,
   content: "# v1",
-  by: "admin",
+  by: "lucas",
 };
-const HIDDEN = { ...DOC, slug: "m-hidden", audience: "alice" };
+const HIDDEN = { ...DOC, slug: "m-hidden", audience: "pedro" };
 
 describe("MCP — registry includes the S1 tools", () => {
-  it("set_doc_path and list_events are registered", () => {
-    expect(TOOLS.find((t) => t.name === "set_doc_path")).toBeTruthy();
+  it("update_doc (merged set_doc_path + set_doc_owner) and list_events are registered", () => {
+    expect(TOOLS.find((t) => t.name === "update_doc")).toBeTruthy();
     expect(TOOLS.find((t) => t.name === "list_events")).toBeTruthy();
+    // The granular predecessors were merged away in the Slice-1.5 (D8) audit.
+    expect(TOOLS.find((t) => t.name === "set_doc_path")).toBeUndefined();
+    expect(TOOLS.find((t) => t.name === "set_doc_owner")).toBeUndefined();
   });
 });
 
-describe("MCP set_doc_path", () => {
+describe("MCP update_doc — path", () => {
   beforeEach(async () => {
     await resetDb();
     await seedAudiences();
     await publishDocOk(DOC);
   });
 
-  it("admin moves a doc; payload reports moved", async () => {
-    const res = await run("set_doc_path", admin, { slug: "m-doc", path: "os/canon" });
+  it("admin moves a doc; payload reports the new path", async () => {
+    const res = await run("update_doc", admin, { slug: "m-doc", path: "os/canon" });
     expect(res.isError).toBeFalsy();
-    expect(structured(res)).toMatchObject({ moved: true, path: "os/canon" });
+    expect(structured(res)).toMatchObject({ path: "os/canon" });
     const doc = await getDocBySlug("m-doc");
     expect(doc!.doc.path).toBe("os/canon");
   });
 
   it("member is forbidden", async () => {
-    const res = await run("set_doc_path", member, { slug: "m-doc", path: "x" });
+    const res = await run("update_doc", member, { slug: "m-doc", path: "x" });
     expect(res.isError).toBe(true);
   });
 
   it("invalid path → error", async () => {
-    const res = await run("set_doc_path", admin, { slug: "m-doc", path: "BAD" });
+    const res = await run("update_doc", admin, { slug: "m-doc", path: "BAD" });
     expect(res.isError).toBe(true);
   });
 
   it("unknown slug → error", async () => {
-    const res = await run("set_doc_path", admin, { slug: "nope", path: "x" });
+    const res = await run("update_doc", admin, { slug: "nope", path: "x" });
     expect(res.isError).toBe(true);
   });
 });
@@ -79,11 +82,18 @@ describe("MCP list_events", () => {
   beforeEach(async () => {
     await resetDb();
     await seedAudiences();
-    await publishDocOk(DOC);
-    await publishDocOk(HIDDEN);
+    // Read access is space-scoped. The MCP `member` principal carries no
+    // email/tokenName → resolves to no users-row → sees only PUBLIC/UNLISTED
+    // spaces. m-doc lands in an unlisted space (visible); m-hidden in a private
+    // space the member isn't in (hidden).
+    const owner = await seedUser({ email: "le-owner@x.com", displayName: "Owner", role: "admin" });
+    const openSpace = await seedSpace({ slug: "le-open", ownerId: owner, visibility: "unlisted" });
+    const privSpace = await seedSpace({ slug: "le-priv", ownerId: owner, visibility: "private" });
+    await publishDocOk({ ...DOC, spaceId: openSpace });
+    await publishDocOk({ ...HIDDEN, spaceId: privSpace });
   });
 
-  it("admin sees both audiences + a nextCursor", async () => {
+  it("admin sees both spaces + a nextCursor", async () => {
     const res = await run("list_events", admin, {});
     const s = structured(res);
     const events = s.events as Array<{ payload: { slug: string } }>;
@@ -92,7 +102,7 @@ describe("MCP list_events", () => {
     expect(typeof s.nextCursor).toBe("number");
   });
 
-  it("member is audience-scoped (no hidden-audience events)", async () => {
+  it("member is space-scoped (no events for spaces they're not in)", async () => {
     const res = await run("list_events", member, {});
     const events = (structured(res).events as Array<{ payload: { slug: string } }>).map(
       (e) => e.payload.slug,
@@ -143,8 +153,8 @@ describe("MCP publish_doc — path + base_version_id", () => {
   });
 
   it("stale base_version_id → conflict error result", async () => {
-    const v1 = await publishDocOk({ ...DOC, slug: "mp3", by: "admin" });
-    await publishDocOk({ ...DOC, slug: "mp3", content: "# v2", by: "admin" });
+    const v1 = await publishDocOk({ ...DOC, slug: "mp3", by: "lucas" });
+    await publishDocOk({ ...DOC, slug: "mp3", content: "# v2", by: "lucas" });
     const res = await run("publish_doc", admin, {
       slug: "mp3",
       title: "M",
@@ -187,8 +197,8 @@ describe("MCP create_share — pinned_version_id", () => {
   });
 
   it("pins the link to a version", async () => {
-    const v1 = await publishDocOk({ ...DOC, slug: "cs", by: "admin" });
-    await publishDocOk({ ...DOC, slug: "cs", content: "# v2", by: "admin" });
+    const v1 = await publishDocOk({ ...DOC, slug: "cs", by: "lucas" });
+    await publishDocOk({ ...DOC, slug: "cs", content: "# v2", by: "lucas" });
     const res = await run("create_share", admin, {
       doc_slug: "cs",
       label: "Pinned",
@@ -203,8 +213,8 @@ describe("MCP create_share — pinned_version_id", () => {
   });
 
   it("pinned_version_id from a different doc → error", async () => {
-    await publishDocOk({ ...DOC, slug: "cs2", by: "admin" });
-    const otherV = await publishDocOk({ ...DOC, slug: "cs-other", content: "# o", by: "admin" });
+    await publishDocOk({ ...DOC, slug: "cs2", by: "lucas" });
+    const otherV = await publishDocOk({ ...DOC, slug: "cs-other", content: "# o", by: "lucas" });
     const res = await run("create_share", admin, {
       doc_slug: "cs2",
       label: "Bad",
@@ -218,7 +228,7 @@ describe("MCP create_directory_share", () => {
   beforeEach(async () => {
     await resetDb();
     await seedAudiences();
-    await publishDocOk({ ...DOC, slug: "fin-q3", path: "finance/q3", content: "# q3", by: "admin" });
+    await publishDocOk({ ...DOC, slug: "fin-q3", path: "finance/q3", content: "# q3", by: "lucas" });
   });
 
   it("admin creates a directory share → directory mode + 43-char token", async () => {

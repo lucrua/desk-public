@@ -4,16 +4,13 @@ import { getPrincipal } from "@/lib/auth";
 import { listDocs } from "@/lib/docs";
 import { listShares, countRecentViews } from "@/lib/shares";
 import { listUsers, listAllUserEmails } from "@/lib/users";
-import { listAudiences, listAllMemberships } from "@/lib/audiences";
 import { listAccessRequests } from "@/lib/access-requests";
-import AudienceBadge from "@/components/AudienceBadge";
 import { dateStamp } from "../docs/view-model";
 import { computeStats, toShareRow, toUserRow, toAccessRequestRow } from "./view-model";
 import ShareRow from "./ShareRow";
 import DocUnpublish from "./DocUnpublish";
 import UserRow from "./UserRow";
 import AddUser from "./AddUser";
-import Audiences from "./Audiences";
 import AccessRequests from "./AccessRequests";
 
 export const dynamic = "force-dynamic";
@@ -89,7 +86,7 @@ async function ForbiddenPanel() {
           Your account is a member — ask {contact} if you need admin access.
         </p>
         <Link
-          href="/docs"
+          href="/spaces"
           style={{
             display: "inline-block",
             marginTop: 18,
@@ -98,7 +95,7 @@ async function ForbiddenPanel() {
             textDecoration: "none",
           }}
         >
-          ← Back to docs
+          ← Back to spaces
         </Link>
       </div>
     </div>
@@ -114,30 +111,15 @@ export default async function AdminPage() {
     return <ForbiddenPanel />;
   }
 
-  const [docs, shares, recentViews, users, audiences, accessRequests, memberships, emailsByUser] =
+  const [docs, shares, recentViews, users, accessRequests, emailsByUser] =
     await Promise.all([
       listDocs({ includeUnpublished: true, scope: { viewer: "admin" } }),
       listShares(),
       countRecentViews(7),
       listUsers(),
-      listAudiences(),
       listAccessRequests(),
-      listAllMemberships(),
       listAllUserEmails(),
     ]);
-
-  // Group memberships both ways once: by audience (member chips on each audience
-  // row) and by user (audience chips on each user row).
-  const membersByAudience = new Map<number, Array<{ userId: number; displayName: string }>>();
-  const audiencesByUser = new Map<number, Array<{ key: string; label: string }>>();
-  for (const m of memberships) {
-    const a = membersByAudience.get(m.audienceId) ?? [];
-    a.push({ userId: m.userId, displayName: m.displayName });
-    membersByAudience.set(m.audienceId, a);
-    const u = audiencesByUser.get(m.userId) ?? [];
-    u.push({ key: m.audienceKey, label: m.audienceLabel });
-    audiencesByUser.set(m.userId, u);
-  }
 
   const stats = computeStats(docs, shares, recentViews);
   const shareRows = shares
@@ -152,11 +134,10 @@ export default async function AdminPage() {
       u,
       principal,
       undefined,
-      audiencesByUser.get(u.id) ?? [],
       (emailsByUser.get(u.id) ?? []).map((e) => ({ email: e.email, primary: e.primary })),
     ),
   );
-  // Candidate users for the audience add-member picker (id + display name).
+  // Candidate users for the access-request approve picker (id + display name).
   const userOptions = users.map((u) => ({ id: u.id, displayName: u.displayName }));
   const accessRequestRows = accessRequests.map((r) => toAccessRequestRow(r));
 
@@ -251,27 +232,6 @@ export default async function AdminPage() {
         <AddUser />
       </section>
 
-      {/* ── audiences ── */}
-      <section style={{ marginBottom: 30 }}>
-        <h2 style={sectionH2}>
-          Audiences{" "}
-          <span style={{ fontWeight: 400, color: "var(--faint)", fontSize: 11.5 }}>
-            · groups: member-visible = all members; otherwise only listed members see the docs
-          </span>
-        </h2>
-        <Audiences
-          rows={audiences.map((a) => ({
-            id: a.id,
-            key: a.key,
-            label: a.label,
-            memberVisible: a.memberVisible,
-            docCount: a.docCount,
-            members: membersByAudience.get(a.id) ?? [],
-          }))}
-          userOptions={userOptions}
-        />
-      </section>
-
       {/* ── shares + view log ── */}
       <section style={{ marginBottom: 30 }}>
         <h2 style={sectionH2}>Shares</h2>
@@ -328,7 +288,7 @@ export default async function AdminPage() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1.3fr 1fr 0.7fr 0.9fr 0.7fr 0.8fr",
+              gridTemplateColumns: "1.3fr 0.7fr 0.9fr 0.7fr 0.8fr",
               padding: "8px 14px",
               borderBottom: "1px solid var(--hairline)",
               background: "var(--surface-alt)",
@@ -336,7 +296,6 @@ export default async function AdminPage() {
             }}
           >
             <span>slug</span>
-            <span>audience</span>
             <span>versions</span>
             <span>updated</span>
             <span>state</span>
@@ -354,7 +313,7 @@ export default async function AdminPage() {
                   key={d.slug}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "1.3fr 1fr 0.7fr 0.9fr 0.7fr 0.8fr",
+                    gridTemplateColumns: "1.3fr 0.7fr 0.9fr 0.7fr 0.8fr",
                     padding: "8px 14px",
                     borderBottom: "1px solid var(--hairline)",
                     alignItems: "center",
@@ -373,9 +332,6 @@ export default async function AdminPage() {
                   >
                     {d.slug}
                   </Link>
-                  <span>
-                    <AudienceBadge audience={d.audience} />
-                  </span>
                   <span
                     style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)" }}
                   >

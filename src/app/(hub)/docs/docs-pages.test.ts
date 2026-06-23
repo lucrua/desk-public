@@ -1,13 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
-import { publishDoc, listDocs, listVersions, type PublishInput } from "@/lib/docs";
+import { resetDb, publishDocOk } from "@/test/db";
+import { listDocs, listVersions, type PublishInput } from "@/lib/docs";
 import {
   shortHash,
   dateStamp,
   buildVersionRail,
   predecessorVersionId,
   parseDiffParam,
-  canSeeAudience,
   groupDocsByPath,
 } from "./view-model";
 import type { VersionListItem } from "@/lib/docs";
@@ -65,28 +64,6 @@ describe("view-model: shortHash / dateStamp", () => {
   });
 });
 
-describe("view-model: canSeeAudience (DB-driven)", () => {
-  // canSeeAudience is the service-layer check (re-exported from lib/docs), now
-  // DB-driven + async. It accepts "admin" | "member" only — anonymous principals
-  // are rejected by the API routes and page layouts before this is reached.
-  beforeEach(async () => {
-    await resetDb();
-    await seedAudiences([{ key: "external:Acme", label: "Acme", memberVisible: false }]);
-  });
-
-  it("admin sees every audience", async () => {
-    for (const aud of ["team", "alice", "bob", "external:Acme", "weird"]) {
-      expect(await canSeeAudience("admin", aud)).toBe(true);
-    }
-  });
-  it("member sees only member-visible audiences (team by default)", async () => {
-    expect(await canSeeAudience("member", "team")).toBe(true);
-    expect(await canSeeAudience("member", "alice")).toBe(false);
-    expect(await canSeeAudience("member", "bob")).toBe(false);
-    expect(await canSeeAudience("member", "external:Acme")).toBe(false);
-  });
-});
-
 describe("view-model: parseDiffParam", () => {
   it("parses a positive integer", () => {
     expect(parseDiffParam("42")).toBe(42);
@@ -106,9 +83,9 @@ describe("view-model: parseDiffParam", () => {
 describe("view-model: buildVersionRail", () => {
   // newest-first input, like listVersions returns.
   const versions: VersionListItem[] = [
-    { id: 30, contentHash: "ccc", publishedAt: new Date("2026-06-09T00:00:00Z"), publishedBy: "admin" },
-    { id: 20, contentHash: "bbb", publishedAt: new Date("2026-06-02T00:00:00Z"), publishedBy: "admin" },
-    { id: 10, contentHash: "aaa", publishedAt: new Date("2026-05-21T00:00:00Z"), publishedBy: "admin" },
+    { id: 30, contentHash: "ccc", publishedAt: new Date("2026-06-09T00:00:00Z"), publishedBy: "lucas" },
+    { id: 20, contentHash: "bbb", publishedAt: new Date("2026-06-02T00:00:00Z"), publishedBy: "lucas" },
+    { id: 10, contentHash: "aaa", publishedAt: new Date("2026-05-21T00:00:00Z"), publishedBy: "lucas" },
   ];
 
   it("labels newest as 'vN · current' and descends", () => {
@@ -162,21 +139,20 @@ describe("view-model: predecessorVersionId", () => {
 // ── DB-backed: server-side search filter (ilike over title+slug) ────────────────
 
 const base: PublishInput = {
-  slug: "notes-overview",
-  title: "Notes context",
-  sourcePath: "os/notes.md",
-  audience: "alice",
+  slug: "market-context",
+  title: "Market context",
+  sourcePath: "os/market.md",
   format: "md",
-  content: "# Notes\nbody",
-  by: "admin",
+  content: "# Market\nbody",
+  by: "lucas",
 };
 
 describe("listDocs server-side search (q)", () => {
   beforeEach(async () => {
     await resetDb();
     await publishDocOk(base);
-    await publishDocOk({ ...base, slug: "q2-growth-review", title: "Q2 growth review", audience: "team" });
-    await publishDocOk({ ...base, slug: "instrumentation-audit", title: "Instrumentation audit", audience: "team" });
+    await publishDocOk({ ...base, slug: "q2-growth-review", title: "Q2 growth review" });
+    await publishDocOk({ ...base, slug: "instrumentation-audit", title: "Instrumentation audit" });
   });
 
   it("no q → all docs", async () => {
@@ -190,8 +166,8 @@ describe("listDocs server-side search (q)", () => {
   });
 
   it("matches on slug substring", async () => {
-    const docs = await listDocs({ q: "notes" });
-    expect(docs.map((d) => d.slug)).toEqual(["notes-overview"]);
+    const docs = await listDocs({ q: "market" });
+    expect(docs.map((d) => d.slug)).toEqual(["market-context"]);
   });
 
   it("blank / whitespace q behaves like no filter", async () => {

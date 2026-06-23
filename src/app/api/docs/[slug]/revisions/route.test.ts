@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences } from "@/test/db";
+import {
+  resetDb,
+  publishDocOk,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+} from "@/test/db";
 import { publishDoc, getDocBySlug, listVersions, getVersionContent } from "@/lib/docs";
 import { getRevision } from "@/lib/revisions";
 import { GET, POST } from "./route";
@@ -35,21 +41,24 @@ const TEAM_DOC = {
   slug: "team-doc",
   title: "Team Doc",
   sourcePath: "os/t.md",
-  audience: "team",
   format: "md" as const,
   content: "# Hi\n\noriginal\n",
-  by: "admin",
+  by: "lucas",
 };
-const HIDDEN_DOC = { ...TEAM_DOC, slug: "alice-doc", audience: "alice" };
+const HIDDEN_DOC = { ...TEAM_DOC, slug: "pedro-doc" };
 const HTML_DOC = { ...TEAM_DOC, slug: "html-doc", format: "html" as const, content: "<p>hi</p>" };
 
 describe("GET/POST /api/docs/[slug]/revisions", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    // TEAM_DOC + HTML_DOC land in the default workspace the dev member reads.
+    await seedDevMemberInDefaultSpace();
     await publishDoc(TEAM_DOC);
-    await publishDoc(HIDDEN_DOC);
     await publishDoc(HTML_DOC);
+    // HIDDEN_DOC lives in a separate private space the dev member is not in.
+    const ownerId = await seedUser({ email: "owner@test.local", displayName: "Owner", role: "admin" });
+    const privateSpace = await seedSpace({ slug: "private-space", ownerId, visibility: "private" });
+    await publishDocOk({ ...HIDDEN_DOC, spaceId: privateSpace });
   });
 
   it("admin POST creates a revision (201) authored by the principal", async () => {
@@ -63,16 +72,16 @@ describe("GET/POST /api/docs/[slug]/revisions", () => {
     expect(json.revision.status).toBe("open");
   });
 
-  it("member POST on a member-visible doc → 201, authored member", async () => {
+  it("member POST on a doc in their space → 201, authored member", async () => {
     const res = await POST(postReq("team-doc", { content: "# member edit" }, "member"), ctx("team-doc"));
     expect(res.status).toBe(201);
     expect((await res.json()).revision.authorKind).toBe("member");
   });
 
-  it("member on a hidden-audience doc → 404 (uniform, no existence leak)", async () => {
-    const res = await POST(postReq("alice-doc", { content: "x" }, "member"), ctx("alice-doc"));
+  it("member on a doc in a space they're not in → 404 (uniform, no existence leak)", async () => {
+    const res = await POST(postReq("pedro-doc", { content: "x" }, "member"), ctx("pedro-doc"));
     expect(res.status).toBe(404);
-    const get = await GET(getReq("alice-doc", "member"), ctx("alice-doc"));
+    const get = await GET(getReq("pedro-doc", "member"), ctx("pedro-doc"));
     expect(get.status).toBe(404);
   });
 
@@ -117,7 +126,8 @@ describe("GET/POST /api/docs/[slug]/revisions", () => {
 describe("POST /api/revisions/[id]/accept | reject", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    // The dev member proposes revisions, so it must read the doc's space.
+    await seedDevMemberInDefaultSpace();
     await publishDoc(TEAM_DOC);
   });
 

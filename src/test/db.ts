@@ -2,9 +2,38 @@ import { eq } from "drizzle-orm";
 import { sql, db, schema } from "@/db";
 import { createShare, type CreateShareResult } from "@/lib/shares";
 import { publishDoc, type PublishInput } from "@/lib/docs";
+import { ensureDefaultSpace, DEFAULT_SPACE_SLUG } from "@/lib/spaces";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 
 export async function resetDb() {
-  await sql`TRUNCATE events, revisions, comments, share_views, shares, doc_versions, docs, audience_members, user_emails, users, audiences, access_requests, cards, buckets, catalog_links, catalog_items, catalog_schemas RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE events, revisions, comments, share_views, shares, doc_versions, docs, audience_members, user_emails, users, audiences, access_requests, cards, buckets, catalog_links, catalog_items, catalog_schemas, space_members, principal_tokens, spaces RESTART IDENTITY CASCADE`;
+}
+
+/**
+ * Seed the Phase-1 default space and return its id. Tests that insert `docs`
+ * rows directly (bypassing publishDoc, which attaches the space itself) call
+ * this so the NOT-NULL docs.space_id is satisfied. Creates a throwaway owner
+ * user when none exists, mirrored as the space's `owner` member.
+ */
+export async function seedDefaultSpace(): Promise<number> {
+  let [owner] = await db.select({ id: schema.users.id }).from(schema.users).limit(1);
+  if (!owner) {
+    [owner] = await db
+      .insert(schema.users)
+      .values({ email: "space-owner@test.local", displayName: "Space Owner", role: "admin", active: 1 })
+      .returning({ id: schema.users.id });
+  }
+  const existing = await db.query.spaces.findFirst({ where: eq(schema.spaces.slug, "workspace") });
+  if (existing) return existing.id;
+  const [s] = await db
+    .insert(schema.spaces)
+    .values({ slug: "workspace", ownerUserId: owner.id, visibility: "private" })
+    .returning({ id: schema.spaces.id });
+  await db
+    .insert(schema.spaceMembers)
+    .values({ spaceId: s.id, userId: owner.id, role: "owner" })
+    .onConflictDoNothing();
+  return s.id;
 }
 
 /**
@@ -99,6 +128,75 @@ export async function seedUser(input: {
 }
 
 /**
+ * Test helper: create a SPACE with a given slug + visibility, owned by `ownerId`
+ * (mirrored as an `owner` member row, the way the real create paths do). Returns
+ * the new space id. Used by the space-scoped read-visibility tests.
+ */
+export async function seedSpace(input: {
+  slug: string;
+  ownerId: number;
+  visibility?: "private" | "unlisted" | "public";
+}): Promise<number> {
+  return db.transaction(async (tx) => {
+    const [s] = await tx
+      .insert(schema.spaces)
+      .values({
+        slug: input.slug,
+        ownerUserId: input.ownerId,
+        visibility: input.visibility ?? "private",
+      })
+      .returning({ id: schema.spaces.id });
+    await tx
+      .insert(schema.spaceMembers)
+      .values({ spaceId: s.id, userId: input.ownerId, role: "owner" })
+      .onConflictDoNothing();
+    return s.id;
+  });
+}
+
+/**
+ * Test helper: add a user to a space with a role (owner|writer|reader). Idempotent
+ * via the (space,user) PK — re-adding updates nothing extra. Mirrors the coarse
+ * WRITE/read membership the space-scope read path keys on.
+ */
+export async function seedSpaceMember(
+  spaceId: number,
+  userId: number,
+  role: "owner" | "writer" | "reader" = "reader",
+): Promise<void> {
+  await db
+    .insert(schema.spaceMembers)
+    .values({ spaceId, userId, role })
+    .onConflictDoNothing();
+}
+
+/**
+ * Test helper for route/MCP tests that drive the dev-mode role-switcher
+ * ("x-dev-role: member"). Read access is space-scoped now: a doc published with
+ * no explicit space lands in the Phase-1 default space (`workspace`, PRIVATE), so
+ * the dev `member` principal — a distinct `dev-member` user — can't see it by
+ * default. This makes the dev-member a READER of the default space, so a member
+ * sees docs published there (the audience-era "team is member-visible" default).
+ * Idempotent. Returns the default space id. Call it in a member-visibility test's
+ * setup (after the user/space rows exist) the way `seedAudiences()` was called.
+ */
+export async function seedDevMemberInDefaultSpace(): Promise<number> {
+  // Ensure the default space exists (publishDoc would create it lazily, but a
+  // test may call this before its first publish). ensureDefaultSpace needs at
+  // least one user to own it; resolve/create the dev-member first so there is one.
+  const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
+  const space = await ensureDefaultSpace();
+  if (!space) {
+    // No owner could be resolved — create the space owned by the dev-member.
+    const id = await seedSpace({ slug: DEFAULT_SPACE_SLUG, ownerId: memberId!, visibility: "private" });
+    await seedSpaceMember(id, memberId!, "reader");
+    return id;
+  }
+  if (memberId != null) await seedSpaceMember(space.id, memberId, "reader");
+  return space.id;
+}
+
+/**
  * Test helper: add a user to an audience (by audience key + userId). Resolves
  * the audience id from its key. Idempotent (onConflictDoNothing on the uniq).
  */
@@ -117,7 +215,7 @@ export async function seedMembership(
 }
 
 /**
- * Seed the canonical audiences (team visible to members; alice/bob hidden)
+ * Seed the canonical audiences (team visible to members; pedro/dani hidden)
  * the way the 0001 migration does in real DBs. resetDb truncates the table, so
  * tests that exercise audience-scoped visibility call this in their setup.
  * Pass extra rows for ad-hoc audiences (e.g. an external one).
@@ -131,8 +229,8 @@ export async function seedAudiences(
     // the "no audience → private" default resolves in tests.
     { key: "private", label: "Private", memberVisible: 0 },
     { key: "team", label: "Team", memberVisible: 1 },
-    { key: "alice", label: "Alice", memberVisible: 0 },
-    { key: "bob", label: "Bob", memberVisible: 0 },
+    { key: "pedro", label: "Pedro", memberVisible: 0 },
+    { key: "dani", label: "Dani", memberVisible: 0 },
     ...extra.map((e) => ({
       key: e.key,
       label: e.label,

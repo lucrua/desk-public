@@ -43,8 +43,8 @@ function ModeChip({ chip }: { chip: DocShareRow["modeChip"] }) {
         fontSize: 10,
         padding: "2px 7px",
         borderRadius: 4,
-        background: "var(--pin-bg, var(--badge-bob-bg, var(--surface-alt)))",
-        color: "var(--pin-ink, var(--badge-bob-ink, var(--muted)))",
+        background: "var(--pin-bg, var(--badge-dani-bg, var(--surface-alt)))",
+        color: "var(--pin-ink, var(--badge-dani-ink, var(--muted)))",
         border: "1px solid var(--pin-border, var(--hairline))",
       }}
     >

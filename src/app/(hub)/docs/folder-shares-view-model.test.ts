@@ -11,7 +11,7 @@ function share(over: Partial<ShareListItem> = {}): ShareListItem {
     mode: "directory",
     docSlug: null,
     pathPrefix: "finance",
-    createdBy: "admin",
+    createdBy: "lucas",
     createdAt: new Date("2026-06-01T00:00:00Z"),
     allowComments: true,
     expiresAt: null,

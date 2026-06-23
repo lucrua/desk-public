@@ -41,10 +41,10 @@ const DOC = {
   slug: "my-doc",
   title: "My Doc",
   sourcePath: "os/my-doc.md",
-  audience: "external:alice",
+  audience: "external:pedro",
   format: "md" as const,
   content: "# Hello",
-  by: "admin",
+  by: "lucas",
 };
 
 // ── POST /api/shares ──────────────────────────────────────────────────────────
@@ -56,11 +56,11 @@ describe("POST /api/shares", () => {
   });
 
   it("admin create returns 200 with id, label, shareUrl containing 43-char token", async () => {
-    const res = await POST(postReq({ docSlug: "my-doc", label: "Alice" }));
+    const res = await POST(postReq({ docSlug: "my-doc", label: "Pedro" }));
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(typeof json.id).toBe("number");
-    expect(json.label).toBe("Alice");
+    expect(json.label).toBe("Pedro");
     expect(typeof json.shareUrl).toBe("string");
 
     // shareUrl must contain the raw token (43 chars after last /)
@@ -69,7 +69,7 @@ describe("POST /api/shares", () => {
   });
 
   it("member → 403", async () => {
-    const res = await POST(postReq({ docSlug: "my-doc", label: "Alice" }, "member"));
+    const res = await POST(postReq({ docSlug: "my-doc", label: "Pedro" }, "member"));
     expect(res.status).toBe(403);
     const json = await res.json();
     expect(json).toHaveProperty("error");
@@ -95,17 +95,17 @@ describe("POST /api/shares", () => {
   });
 
   it("anonymous → 403", async () => {
-    const res = await POST(postReq({ docSlug: "my-doc", label: "Alice" }, "anonymous"));
+    const res = await POST(postReq({ docSlug: "my-doc", label: "Pedro" }, "anonymous"));
     expect(res.status).toBe(403);
   });
 
   it("unknown doc → 404", async () => {
-    const res = await POST(postReq({ docSlug: "no-doc", label: "Alice" }));
+    const res = await POST(postReq({ docSlug: "no-doc", label: "Pedro" }));
     expect(res.status).toBe(404);
   });
 
   it("missing docSlug → 400", async () => {
-    const res = await POST(postReq({ label: "Alice" }));
+    const res = await POST(postReq({ label: "Pedro" }));
     expect(res.status).toBe(400);
   });
 
@@ -118,7 +118,7 @@ describe("POST /api/shares", () => {
   });
 
   it("docSlug is not a string → 400", async () => {
-    const res = await POST(postReq({ docSlug: 123, label: "Alice" }));
+    const res = await POST(postReq({ docSlug: 123, label: "Pedro" }));
     expect(res.status).toBe(400);
   });
 
@@ -129,12 +129,12 @@ describe("POST /api/shares", () => {
   });
 
   it("expiresInDays: 0 → 200 (0 = never expire)", async () => {
-    const res = await POST(postReq({ docSlug: "my-doc", label: "Alice", expiresInDays: 0 }));
+    const res = await POST(postReq({ docSlug: "my-doc", label: "Pedro", expiresInDays: 0 }));
     expect(res.status).toBe(200);
   });
 
   it("expiresInDays must be a positive number → 400 for negative", async () => {
-    const res = await POST(postReq({ docSlug: "my-doc", label: "Alice", expiresInDays: -1 }));
+    const res = await POST(postReq({ docSlug: "my-doc", label: "Pedro", expiresInDays: -1 }));
     expect(res.status).toBe(400);
   });
 
@@ -164,7 +164,7 @@ describe("GET /api/shares", () => {
 
   it("admin GET lists shares with viewCount", async () => {
     // Create a share
-    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Alice" }));
+    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Pedro" }));
     expect(createRes.status).toBe(200);
 
     const res = await GET(getReq("admin"));
@@ -195,7 +195,7 @@ describe("POST /api/shares/[id]/revoke", () => {
   });
 
   it("admin revoke returns 200 {ok: true}", async () => {
-    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Alice" }));
+    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Pedro" }));
     const { id } = await createRes.json();
 
     const res = await revokePost(revokeReq(String(id)), {
@@ -214,7 +214,7 @@ describe("POST /api/shares/[id]/revoke", () => {
   });
 
   it("second revoke (already revoked) → 404", async () => {
-    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Alice" }));
+    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Pedro" }));
     const { id } = await createRes.json();
 
     await revokePost(revokeReq(String(id)), {
@@ -227,7 +227,7 @@ describe("POST /api/shares/[id]/revoke", () => {
   });
 
   it("resolveShare returns null after revoke (capability cut)", async () => {
-    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Alice" }));
+    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Pedro" }));
     const { id, shareUrl } = await createRes.json();
     const token = shareUrl.split("/").pop()!;
 
@@ -244,7 +244,7 @@ describe("POST /api/shares/[id]/revoke", () => {
   });
 
   it("member → 403", async () => {
-    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Alice" }));
+    const createRes = await POST(postReq({ docSlug: "my-doc", label: "Pedro" }));
     const { id } = await createRes.json();
 
     const res = await revokePost(revokeReq(String(id), "member"), {

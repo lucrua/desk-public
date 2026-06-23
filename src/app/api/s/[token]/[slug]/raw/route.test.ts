@@ -17,13 +17,13 @@ function doc(over: Record<string, unknown> = {}) {
     audience: "private",
     format: "md" as const,
     content: "# body",
-    by: "admin",
+    by: "lucas",
     ...over,
   } as Parameters<typeof publishDocOk>[0];
 }
 
 async function dirShare(prefix: string) {
-  const out = await createDirectoryShare(prefix, "Folder", "admin");
+  const out = await createDirectoryShare(prefix, "Folder", "lucas");
   if (!out.ok) throw new Error("create failed");
   return { id: out.id, token: out.shareUrl.split("/").pop()! };
 }

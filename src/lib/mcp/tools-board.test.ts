@@ -35,27 +35,20 @@ describe("MCP board tools", () => {
   });
   const bId = (k: string) => buckets.find((b) => b.key === k)!.id;
 
-  describe("buckets (admin-only mutations)", () => {
-    it("list_buckets is staff; create/update/delete are admin-only", async () => {
-      expect((await run("list_buckets", memberNoRow)).isError).toBeFalsy();
-      expect((await run("list_buckets", anon)).isError).toBe(true);
-
-      expect((await run("create_bucket", memberNoRow, { label: "X" })).isError).toBe(true);
-      const created = await run("create_bucket", admin, { label: "Blocked" });
-      expect(created.isError).toBeFalsy();
-      const newId = (created.structuredContent as { bucket: { id: number } }).bucket.id;
-
-      expect((await run("update_bucket", memberNoRow, { id: newId, label: "Y" })).isError).toBe(true);
-      expect((await run("update_bucket", admin, { id: newId, label: "Stuck" })).isError).toBeFalsy();
-
-      expect((await run("delete_bucket", memberNoRow, { id: newId })).isError).toBe(true);
-      expect((await run("delete_bucket", admin, { id: newId })).isError).toBeFalsy();
+  describe("buckets", () => {
+    // Bucket LIFECYCLE (create/rename/delete) was dropped from MCP in the
+    // Slice-1.5 (D8) audit — it's web-UI-only now (REST /api/buckets). The agent
+    // still reads buckets (it needs their ids to create/move cards).
+    it("list_buckets is staff-readable; the mutation tools are not on the MCP surface", () => {
+      expect(TOOLS.find((t) => t.name === "list_buckets")).toBeDefined();
+      expect(TOOLS.find((t) => t.name === "create_bucket")).toBeUndefined();
+      expect(TOOLS.find((t) => t.name === "update_bucket")).toBeUndefined();
+      expect(TOOLS.find((t) => t.name === "delete_bucket")).toBeUndefined();
     });
 
-    it("delete_bucket refuses a non-empty bucket", async () => {
-      await run("create_card", admin, { title: "x", bucket_id: bId("backlog") });
-      const res = await run("delete_bucket", admin, { id: bId("backlog") });
-      expect(res.isError).toBe(true);
+    it("list_buckets: staff yes, anonymous no", async () => {
+      expect((await run("list_buckets", memberNoRow)).isError).toBeFalsy();
+      expect((await run("list_buckets", anon)).isError).toBe(true);
     });
   });
 

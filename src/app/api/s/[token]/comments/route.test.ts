@@ -8,10 +8,10 @@ const DOC = {
   slug: "shared-doc",
   title: "Shared Doc",
   sourcePath: "os/s.md",
-  audience: "external:alice",
+  audience: "external:pedro",
   format: "md" as const,
   content: "# Hello",
-  by: "admin",
+  by: "lucas",
 };
 
 const ctx = (token: string) => ({ params: Promise.resolve({ token }) });
@@ -28,7 +28,7 @@ function getReq(token: string) {
 }
 
 async function freshShare(label = "Microsoft") {
-  const share = await createShareOk("shared-doc", label, "admin");
+  const share = await createShareOk("shared-doc", label, "lucas");
   // Recover the token from the share URL (raw token appears once).
   const token = share.shareUrl.split("/").pop()!;
   return { id: share.id, token, label };

@@ -2,6 +2,14 @@
 
 Command-line interface for Desk. Zero dependencies — plain Node.js >= 20.
 
+> **Note (Gen-2 consolidation): `--audience` is vestigial.** Read access is now
+> **space-scoped** — a doc is visible by space membership, the space's
+> public/unlisted visibility, or a capability share. The `--audience` flag (and
+> `link-dir --audience`) is still accepted for backward compatibility but the
+> value is **stored unread** and does not govern who can see a doc. The primary
+> publish path is now `git push … HEAD:main` to a space; `desk publish` remains a
+> convenient single-file equivalent. See the repo `README.md` for the full model.
+
 ## Setup
 
 ```bash
@@ -19,7 +27,7 @@ Publish a local file to the Hub.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--audience <a>` | `private` | Audience tag (e.g. `alice`, `team`, `internal`). Optional — omit to publish as `private` (only you + admins + members added to the audience group). |
+| `--audience <a>` | `private` | Audience tag (e.g. `pedro`, `team`, `internal`). Optional — omit to publish as `private` (only you + admins + members added to the audience group). |
 | `--slug <s>` | filename stem, slugified | URL slug — must match `^[a-z0-9][a-z0-9-]*$` |
 | `--title <t>` | first `# heading` (md) or filename stem | Doc title |
 | `--source <path>` | the file path as given | Stored as `sourcePath` for status tracking |

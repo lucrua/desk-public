@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences } from "@/test/db";
+import {
+  resetDb,
+  publishDocOk,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+} from "@/test/db";
 import { publishDoc, getDocBySlug } from "@/lib/docs";
 import { GET } from "./route";
 
@@ -25,12 +31,11 @@ const TEAM_DOC = {
   slug: "team-doc",
   title: "Team Doc",
   sourcePath: "os/t.md",
-  audience: "team",
   format: "md" as const,
   content: "# Hi\n\nbody one\n",
-  by: "admin",
+  by: "lucas",
 };
-const HIDDEN_DOC = { ...TEAM_DOC, slug: "alice-doc", audience: "alice" };
+const HIDDEN_DOC = { ...TEAM_DOC, slug: "pedro-doc" };
 
 async function currentVersionId(slug: string): Promise<number> {
   const r = await getDocBySlug(slug, { includeUnpublished: true });
@@ -40,9 +45,13 @@ async function currentVersionId(slug: string): Promise<number> {
 describe("GET /api/docs/[slug]/versions/[id]", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    // TEAM_DOC lands in the default workspace the dev member reads.
+    await seedDevMemberInDefaultSpace();
     await publishDoc(TEAM_DOC);
-    await publishDoc(HIDDEN_DOC);
+    // HIDDEN_DOC lives in a separate private space the dev member is not in.
+    const ownerId = await seedUser({ email: "owner@test.local", displayName: "Owner", role: "admin" });
+    const privateSpace = await seedSpace({ slug: "private-space", ownerId, visibility: "private" });
+    await publishDocOk({ ...HIDDEN_DOC, spaceId: privateSpace });
   });
 
   it("admin gets the raw content of a version", async () => {
@@ -55,7 +64,7 @@ describe("GET /api/docs/[slug]/versions/[id]", () => {
     expect(json.content).toBe("# Hi\n\nbody one\n");
   });
 
-  it("member on a member-visible doc gets content", async () => {
+  it("member on a doc in their space gets content", async () => {
     const vid = await currentVersionId("team-doc");
     const res = await GET(getReq("team-doc", vid, "member"), ctx("team-doc", vid));
     expect(res.status).toBe(200);
@@ -63,9 +72,9 @@ describe("GET /api/docs/[slug]/versions/[id]", () => {
     expect(json.content).toBe("# Hi\n\nbody one\n");
   });
 
-  it("member on a hidden audience gets a uniform 404 (no existence leak)", async () => {
-    const vid = await currentVersionId("alice-doc");
-    const res = await GET(getReq("alice-doc", vid, "member"), ctx("alice-doc", vid));
+  it("member on a doc in a space they're not in gets a uniform 404 (no existence leak)", async () => {
+    const vid = await currentVersionId("pedro-doc");
+    const res = await GET(getReq("pedro-doc", vid, "member"), ctx("pedro-doc", vid));
     expect(res.status).toBe(404);
   });
 
@@ -77,8 +86,8 @@ describe("GET /api/docs/[slug]/versions/[id]", () => {
 
   it("cross-doc version id → 404 (no content leak across docs)", async () => {
     const teamVid = await currentVersionId("team-doc");
-    // Ask for team-doc's version under alice-doc's slug.
-    const res = await GET(getReq("alice-doc", teamVid), ctx("alice-doc", teamVid));
+    // Ask for team-doc's version under pedro-doc's slug.
+    const res = await GET(getReq("pedro-doc", teamVid), ctx("pedro-doc", teamVid));
     expect(res.status).toBe(404);
   });
 

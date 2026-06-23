@@ -18,7 +18,7 @@ const BASE_DOC = {
   audience: "team",
   format: "md" as const,
   content: "# Hello",
-  by: "admin",
+  by: "lucas",
 };
 
 // Resolve the doc id + current version id for the seeded doc.
@@ -92,7 +92,7 @@ describe("comments service", () => {
     it("stores shareId + link author kind for share-posted comments", async () => {
       const { docId, versionId } = await docHandle();
       // Make a share so the FK is satisfiable.
-            const share = await createShareOk("test-doc", "Microsoft", "admin");
+            const share = await createShareOk("test-doc", "Microsoft", "lucas");
       const row = await addComment({
         docId,
         versionId,

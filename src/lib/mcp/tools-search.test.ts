@@ -3,7 +3,14 @@
  * Handlers are exercised directly, like tools-s1.test.ts.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
+import {
+  resetDb,
+  seedAudiences,
+  publishDocOk,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+} from "@/test/db";
 import type { Principal } from "@/lib/auth";
 import { TOOLS, type ToolDef } from "./tools";
 
@@ -32,6 +39,8 @@ describe("MCP search_docs", () => {
   beforeEach(async () => {
     await resetDb();
     await seedAudiences();
+    // Member reads docs in the default `workspace` space.
+    await seedDevMemberInDefaultSpace();
   });
 
   it("staff only — anonymous is rejected", async () => {
@@ -52,7 +61,7 @@ describe("MCP search_docs", () => {
       audience: "team",
       format: "md",
       content: "unrelated body",
-      by: "admin",
+      by: "lucas",
     });
     await publishDocOk({
       slug: "body-hit",
@@ -61,7 +70,7 @@ describe("MCP search_docs", () => {
       audience: "team",
       format: "md",
       content: "a passage mentioning comet only in the body",
-      by: "admin",
+      by: "lucas",
     });
     const res = await run("search_docs", admin, { q: "comet" });
     const out = docs(res);
@@ -74,24 +83,26 @@ describe("MCP search_docs", () => {
     expect(bodyRow.snippet as string).not.toMatch(/[\x02\x03]/);
   });
 
-  it("member scoping — a hidden-audience doc is absent", async () => {
+  it("member scoping — a doc in a space they're not in is absent", async () => {
+    // hidden lives in a SEPARATE private space the dev-member isn't in.
+    const owner = await seedUser({ email: "pulsar-owner@x.com", displayName: "Owner", role: "admin" });
+    const hiddenSpace = await seedSpace({ slug: "pulsar-space", ownerId: owner, visibility: "private" });
     await publishDocOk({
       slug: "hidden",
       title: "Hidden Pulsar",
       sourcePath: "h.md",
-      audience: "alice",
       format: "md",
       content: "pulsar",
-      by: "admin",
+      by: "lucas",
+      spaceId: hiddenSpace,
     });
     await publishDocOk({
       slug: "shown",
       title: "Shown Pulsar",
       sourcePath: "s.md",
-      audience: "team",
       format: "md",
       content: "pulsar",
-      by: "admin",
+      by: "lucas",
     });
     const out = docs(await run("search_docs", member, { q: "pulsar" }));
     const slugs = out.map((d) => d.slug);
@@ -108,7 +119,7 @@ describe("MCP search_docs", () => {
         audience: "team",
         format: "md",
         content: "quark body",
-        by: "admin",
+        by: "lucas",
       });
     }
     const out = docs(await run("search_docs", admin, { q: "quark", limit: 2 }));
@@ -123,7 +134,7 @@ describe("MCP search_docs", () => {
       audience: "team",
       format: "md",
       content: "lead in <img src=x onerror=alert(1)> photonword trailing text",
-      by: "admin",
+      by: "lucas",
     });
     const out = docs(await run("search_docs", admin, { q: "photonword" }));
     const row = out[0];
@@ -151,7 +162,7 @@ describe("MCP list_docs q → FTS", () => {
       audience: "team",
       format: "md",
       content: "this body mentions helium prominently",
-      by: "admin",
+      by: "lucas",
     });
     const out = docs(await run("list_docs", admin, { q: "helium" }));
     const row = out.find((d) => d.slug === "deep");
@@ -167,7 +178,7 @@ describe("MCP list_docs q → FTS", () => {
       audience: "team",
       format: "md",
       content: "body",
-      by: "admin",
+      by: "lucas",
     });
     const out = docs(await run("list_docs", admin, {}));
     const row = out.find((d) => d.slug === "plain");

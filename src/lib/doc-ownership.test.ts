@@ -19,7 +19,8 @@
  *   - MCP set_doc_owner + list_open_revisions
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk, seedUser } from "@/test/db";
+import { resetDb, seedAudiences, publishDocOk, seedUser, seedDevMemberInDefaultSpace } from "@/test/db";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 import { db } from "@/db";
 import { docs, revisions } from "@/db/schema";
 import { eq, isNull } from "drizzle-orm";
@@ -59,6 +60,16 @@ const memberNoUserId = (): Principal => ({
 });
 
 const anonymous = (): Principal => ({ kind: "anonymous" });
+
+// Gen-2: a member proposing a revision must be able to SEE the doc's space.
+// Docs published with no spaceId land in the default `workspace` space; this
+// helper makes the dev member a reader of it and returns the member scope to
+// pass to createRevision, so member proposals on workspace docs succeed.
+async function memberSeesWorkspaceScope(): Promise<{ viewer: "member"; userId: number }> {
+  await seedDevMemberInDefaultSpace();
+  const memberId = await resolvePrincipalUserId({ kind: "member", name: "Dev Member" });
+  return { viewer: "member", userId: memberId! };
+}
 
 // ─── Route helpers ──────────────────────────────────────────────────────────
 
@@ -326,10 +337,12 @@ describe("listOpenRevisions", () => {
   let adminId: number;
   let ownerId: number;
   let memberId: number;
+  // Member scope that can SEE the default-workspace docs (so proposals land).
+  let proposerScope: { viewer: "member"; userId: number };
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    proposerScope = await memberSeesWorkspaceScope();
     adminId = await seedUser({ email: "adm@t.com", displayName: "Admin", role: "admin" });
     ownerId = await seedUser({ email: "owner@t.com", displayName: "Owner", role: "member" });
     memberId = await seedUser({ email: "plain@t.com", displayName: "Plain", role: "member" });
@@ -337,12 +350,12 @@ describe("listOpenRevisions", () => {
 
   it("returns all open revisions for admin (no filter)", async () => {
     // Create two docs with different owners
-    await publishDocOk({ slug: "doc-a", title: "A", sourcePath: "a.md", audience: "team", format: "md", content: "v1", by: "Owner", ownerUserId: ownerId });
-    await publishDocOk({ slug: "doc-b", title: "B", sourcePath: "b.md", audience: "team", format: "md", content: "v1", by: "Admin", ownerUserId: adminId });
+    await publishDocOk({ slug: "doc-a", title: "A", sourcePath: "a.md", format: "md", content: "v1", by: "Owner", ownerUserId: ownerId });
+    await publishDocOk({ slug: "doc-b", title: "B", sourcePath: "b.md", format: "md", content: "v1", by: "Admin", ownerUserId: adminId });
 
     // Propose revision on each
-    await createRevision({ slug: "doc-a", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed a" });
-    await createRevision({ slug: "doc-b", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed b" });
+    await createRevision({ slug: "doc-a", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed a" });
+    await createRevision({ slug: "doc-b", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed b" });
 
     const all = await listOpenRevisions();
     expect(all.length).toBe(2);
@@ -351,11 +364,11 @@ describe("listOpenRevisions", () => {
   });
 
   it("returns only own-doc revisions for owner", async () => {
-    await publishDocOk({ slug: "doc-c", title: "C", sourcePath: "c.md", audience: "team", format: "md", content: "v1", by: "Owner", ownerUserId: ownerId });
-    await publishDocOk({ slug: "doc-d", title: "D", sourcePath: "d.md", audience: "team", format: "md", content: "v1", by: "Admin", ownerUserId: adminId });
+    await publishDocOk({ slug: "doc-c", title: "C", sourcePath: "c.md", format: "md", content: "v1", by: "Owner", ownerUserId: ownerId });
+    await publishDocOk({ slug: "doc-d", title: "D", sourcePath: "d.md", format: "md", content: "v1", by: "Admin", ownerUserId: adminId });
 
-    await createRevision({ slug: "doc-c", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed c" });
-    await createRevision({ slug: "doc-d", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed d" });
+    await createRevision({ slug: "doc-c", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed c" });
+    await createRevision({ slug: "doc-d", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed d" });
 
     const ownerView = await listOpenRevisions({ ownerUserId: ownerId });
     expect(ownerView.length).toBe(1);
@@ -363,8 +376,8 @@ describe("listOpenRevisions", () => {
   });
 
   it("returns empty for a member who owns no docs", async () => {
-    await publishDocOk({ slug: "doc-e", title: "E", sourcePath: "e.md", audience: "team", format: "md", content: "v1", by: "Admin", ownerUserId: adminId });
-    await createRevision({ slug: "doc-e", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed e" });
+    await publishDocOk({ slug: "doc-e", title: "E", sourcePath: "e.md", format: "md", content: "v1", by: "Admin", ownerUserId: adminId });
+    await createRevision({ slug: "doc-e", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed e" });
 
     const none = await listOpenRevisions({ ownerUserId: memberId });
     expect(none).toHaveLength(0);
@@ -534,10 +547,10 @@ describe("REST PUT /api/docs/[slug]/owner", () => {
 describe("REST GET /api/revisions?status=open", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    const proposerScope = await memberSeesWorkspaceScope();
     // Create a doc with a revision
-    await publishDocOk({ slug: "queue-doc", title: "Queue Doc", sourcePath: "t.md", audience: "team", format: "md", content: "v1", by: "Admin" });
-    await createRevision({ slug: "queue-doc", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed" });
+    await publishDocOk({ slug: "queue-doc", title: "Queue Doc", sourcePath: "t.md", format: "md", content: "v1", by: "Admin" });
+    await createRevision({ slug: "queue-doc", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed" });
   });
 
   it("admin → 200 with all revisions", async () => {
@@ -575,9 +588,9 @@ describe("REST POST /api/revisions/[id]/accept — admin || owner", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
-    await publishDocOk({ slug: "decide-doc", title: "Decide Doc", sourcePath: "t.md", audience: "team", format: "md", content: "v1", by: "Admin" });
-    const rev = await createRevision({ slug: "decide-doc", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed body" });
+    const proposerScope = await memberSeesWorkspaceScope();
+    await publishDocOk({ slug: "decide-doc", title: "Decide Doc", sourcePath: "t.md", format: "md", content: "v1", by: "Admin" });
+    const rev = await createRevision({ slug: "decide-doc", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed body" });
     adminDocRevId = rev!.id;
   });
 
@@ -609,9 +622,9 @@ describe("REST POST /api/revisions/[id]/reject — admin || owner", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
-    await publishDocOk({ slug: "reject-doc", title: "Reject Doc", sourcePath: "t.md", audience: "team", format: "md", content: "v1", by: "Admin" });
-    const rev = await createRevision({ slug: "reject-doc", authorName: "Mem", authorKind: "member", scope: { viewer: "member" }, content: "proposed" });
+    const proposerScope = await memberSeesWorkspaceScope();
+    await publishDocOk({ slug: "reject-doc", title: "Reject Doc", sourcePath: "t.md", format: "md", content: "v1", by: "Admin" });
+    const rev = await createRevision({ slug: "reject-doc", authorName: "Mem", authorKind: "member", scope: proposerScope, content: "proposed" });
     revId = rev!.id;
   });
 
@@ -729,10 +742,10 @@ describe("MCP decide_revision — admin || owner", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    const proposerScope = await memberSeesWorkspaceScope();
     adminId = await seedUser({ email: "adm@decide.com", displayName: "Admin", role: "admin" });
-    await publishDocOk({ slug: "mcp-decide-doc", title: "Decide Doc", sourcePath: "t.md", audience: "team", format: "md", content: "v1", by: "Admin" });
-    const rev = await createRevision({ slug: "mcp-decide-doc", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed" });
+    await publishDocOk({ slug: "mcp-decide-doc", title: "Decide Doc", sourcePath: "t.md", format: "md", content: "v1", by: "Admin" });
+    const rev = await createRevision({ slug: "mcp-decide-doc", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed" });
     revId = rev!.id;
   });
 
@@ -751,10 +764,10 @@ describe("MCP decide_revision — non-owner member → error", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    const proposerScope = await memberSeesWorkspaceScope();
     // Doc with null owner
-    await publishDocOk({ slug: "mcp-noowner-doc", title: "NoOwner", sourcePath: "t.md", audience: "team", format: "md", content: "v1", by: "Admin" });
-    const rev = await createRevision({ slug: "mcp-noowner-doc", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed" });
+    await publishDocOk({ slug: "mcp-noowner-doc", title: "NoOwner", sourcePath: "t.md", format: "md", content: "v1", by: "Admin" });
+    const rev = await createRevision({ slug: "mcp-noowner-doc", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed" });
     revId = rev!.id;
   });
 
@@ -766,10 +779,12 @@ describe("MCP decide_revision — non-owner member → error", () => {
   });
 });
 
-// ─── MCP: set_doc_owner ──────────────────────────────────────────────────────
+// ─── MCP: owner reassignment via update_doc ──────────────────────────────────
+// set_doc_owner was merged into update_doc in the Slice-1.5 (D8) audit; owner
+// reassignment is now update_doc({ slug, owner_user_id }).
 
-describe("MCP set_doc_owner", () => {
-  const setDocOwnerTool = TOOLS.find((t) => t.name === "set_doc_owner")!;
+describe("MCP update_doc — owner reassignment", () => {
+  const updateDocTool = TOOLS.find((t) => t.name === "update_doc")!;
   let targetUserId: number;
   let adminId: number;
 
@@ -783,7 +798,7 @@ describe("MCP set_doc_owner", () => {
 
   it("admin reassigns owner → ok", async () => {
     const p = adminPrincipal(adminId);
-    const result = await setDocOwnerTool.handler(p, { slug: "mcp-owner-doc", owner_user_id: targetUserId });
+    const result = await updateDocTool.handler(p, { slug: "mcp-owner-doc", owner_user_id: targetUserId });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0].text);
     expect(data.ownerUserId).toBe(targetUserId);
@@ -791,20 +806,20 @@ describe("MCP set_doc_owner", () => {
 
   it("member → error", async () => {
     const p = memberPrincipal(targetUserId);
-    const result = await setDocOwnerTool.handler(p, { slug: "mcp-owner-doc", owner_user_id: targetUserId });
+    const result = await updateDocTool.handler(p, { slug: "mcp-owner-doc", owner_user_id: targetUserId });
     expect(result.isError).toBe(true);
   });
 
   it("unknown slug → error", async () => {
     const p = adminPrincipal(adminId);
-    const result = await setDocOwnerTool.handler(p, { slug: "no-doc", owner_user_id: targetUserId });
+    const result = await updateDocTool.handler(p, { slug: "no-doc", owner_user_id: targetUserId });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("not found");
   });
 
   it("unknown/inactive user → error", async () => {
     const p = adminPrincipal(adminId);
-    const result = await setDocOwnerTool.handler(p, { slug: "mcp-owner-doc", owner_user_id: 99999 });
+    const result = await updateDocTool.handler(p, { slug: "mcp-owner-doc", owner_user_id: 99999 });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("inactive");
   });
@@ -818,10 +833,10 @@ describe("MCP list_open_revisions", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    const proposerScope = await memberSeesWorkspaceScope();
     adminId = await seedUser({ email: "adm@queue.com", displayName: "Admin", role: "admin" });
-    await publishDocOk({ slug: "mcp-queue-doc", title: "Queue Doc", sourcePath: "t.md", audience: "team", format: "md", content: "v1", by: "Admin" });
-    await createRevision({ slug: "mcp-queue-doc", authorName: "Plain", authorKind: "member", scope: { viewer: "member" }, content: "proposed" });
+    await publishDocOk({ slug: "mcp-queue-doc", title: "Queue Doc", sourcePath: "t.md", format: "md", content: "v1", by: "Admin" });
+    await createRevision({ slug: "mcp-queue-doc", authorName: "Plain", authorKind: "member", scope: proposerScope, content: "proposed" });
   });
 
   it("admin sees all", async () => {
@@ -848,10 +863,12 @@ describe("MCP list_open_revisions", () => {
 // ─── MCP tool count check ────────────────────────────────────────────────────
 
 describe("MCP tool registry", () => {
-  it("includes set_doc_owner and list_open_revisions", () => {
+  it("includes update_doc (merged owner reassignment) and list_open_revisions", () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toContain("set_doc_owner");
+    expect(names).toContain("update_doc");
     expect(names).toContain("list_open_revisions");
+    // set_doc_owner was merged into update_doc in the Slice-1.5 (D8) audit.
+    expect(names).not.toContain("set_doc_owner");
   });
 
   it("decide_revision tool exists", () => {

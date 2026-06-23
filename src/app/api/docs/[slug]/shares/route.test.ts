@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences } from "@/test/db";
+import {
+  resetDb,
+  publishDocOk,
+  seedDevMemberInDefaultSpace,
+  seedSpace,
+  seedUser,
+} from "@/test/db";
 import { publishDoc, unpublishDoc } from "@/lib/docs";
 import { createShare } from "@/lib/shares";
 import { GET } from "./route";
@@ -23,24 +29,24 @@ const DOC = {
   slug: "links-doc",
   title: "Links Doc",
   sourcePath: "os/links.md",
-  audience: "team",
   format: "md" as const,
   content: "# Hi",
-  by: "admin",
+  by: "lucas",
 };
 
 describe("GET /api/docs/[slug]/shares", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    // The dev member reads the default workspace; DOC (no spaceId) lands there.
+    await seedDevMemberInDefaultSpace();
     await publishDoc(DOC);
   });
 
   it("admin → 200 with only this doc's shares", async () => {
     await publishDoc({ ...DOC, slug: "other", sourcePath: "os/other.md" });
-    await createShare("links-doc", "Alice", "admin");
-    await createShare("links-doc", "Bob", "admin");
-    await createShare("other", "Elsewhere", "admin");
+    await createShare("links-doc", "Pedro", "lucas");
+    await createShare("links-doc", "Dani", "lucas");
+    await createShare("other", "Elsewhere", "lucas");
 
     const res = await GET(getReq("links-doc"), ctx("links-doc"));
     expect(res.status).toBe(200);
@@ -62,9 +68,9 @@ describe("GET /api/docs/[slug]/shares", () => {
     expect(await res.json()).toHaveProperty("error");
   });
 
-  it("member → 200 read-only for a member-visible (team) doc", async () => {
-    // DOC.audience is "team" (member-visible by default seed).
-    await createShare("links-doc", "Alice", "admin");
+  it("member → 200 read-only for a doc in the member's space", async () => {
+    // DOC (no spaceId) lives in the default workspace the member reads.
+    await createShare("links-doc", "Pedro", "lucas");
     const res = await GET(getReq("links-doc", "member"), ctx("links-doc"));
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -75,16 +81,18 @@ describe("GET /api/docs/[slug]/shares", () => {
     expect(json.shares[0]).not.toHaveProperty("tokenHash");
   });
 
-  it("member → 404 for an audience-denied doc (no existence signal)", async () => {
-    // Publish a doc with a non-member-visible audience and a share on it.
-    await publishDoc({ ...DOC, slug: "secret", sourcePath: "os/secret.md", audience: "alice" });
-    await createShare("secret", "Eyes only", "admin");
+  it("member → 404 for a doc in a space they're not in (no existence signal)", async () => {
+    // Publish a doc into a separate private space and a share on it.
+    const ownerId = await seedUser({ email: "owner@test.local", displayName: "Owner", role: "admin" });
+    const privateSpace = await seedSpace({ slug: "private-space", ownerId, visibility: "private" });
+    await publishDocOk({ ...DOC, slug: "secret", sourcePath: "os/secret.md", spaceId: privateSpace });
+    await createShare("secret", "Eyes only", "lucas");
     const res = await GET(getReq("secret", "member"), ctx("secret"));
     expect(res.status).toBe(404);
   });
 
   it("member → 404 for an unpublished doc (members never see deleted docs)", async () => {
-    await createShare("links-doc", "Alice", "admin");
+    await createShare("links-doc", "Pedro", "lucas");
     await unpublishDoc("links-doc");
     const res = await GET(getReq("links-doc", "member"), ctx("links-doc"));
     expect(res.status).toBe(404);
@@ -96,7 +104,7 @@ describe("GET /api/docs/[slug]/shares", () => {
   });
 
   it("admin can list shares of an UNPUBLISHED (deleted) doc", async () => {
-    await createShare("links-doc", "Alice", "admin");
+    await createShare("links-doc", "Pedro", "lucas");
     await unpublishDoc("links-doc");
     const res = await GET(getReq("links-doc"), ctx("links-doc"));
     expect(res.status).toBe(200);

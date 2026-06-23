@@ -20,8 +20,8 @@ function c(over: Partial<CommentDTO> = {}): CommentDTO {
 
 describe("authorChip", () => {
   it("admin → admin kind, name label", () => {
-    expect(authorChip(c({ authorKind: "admin", authorName: "Admin" }))).toEqual({
-      label: "Admin",
+    expect(authorChip(c({ authorKind: "admin", authorName: "Lucas" }))).toEqual({
+      label: "Lucas",
       kind: "admin",
     });
   });

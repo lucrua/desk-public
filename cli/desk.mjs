@@ -428,7 +428,7 @@ Environment:
   DESK_SYNC_MANIFEST Override the sync manifest path (default: ~/.config/desk/sync.json)
 
 Alias:
-  alias desk='node /path/to/desk/cli/desk.mjs'
+  alias desk='node ~/desk/cli/desk.mjs'
 `);
 }
 

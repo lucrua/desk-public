@@ -109,12 +109,6 @@ export type UserRowView = {
   created: string;
   isSelf: boolean;
   /**
-   * Audiences this user belongs to (Audiences v2 group membership) — rendered
-   * as read-only chips in the Users table. Key + label for the badge. Empty when
-   * the user is in no targeted groups (they still see member-visible audiences).
-   */
-  audiences: Array<{ key: string; label: string }>;
-  /**
    * All of the user's emails (multi-email) — rendered as chips with an add/remove
    * control. `primary` flags the users.email display address. A token-only user
    * has none.
@@ -146,7 +140,6 @@ export function toUserRow(
   u: UserListItem,
   principal: Principal,
   _adminEmail: string | undefined, // kept for call-site compat — no longer used
-  audiences: Array<{ key: string; label: string }> = [],
   emails: Array<{ email: string; primary: boolean }> = [],
   totalActiveAdmins = 2,
 ): UserRowView {
@@ -193,7 +186,6 @@ export function toUserRow(
     active: u.active === 1,
     created: dateStamp(u.createdAt),
     isSelf,
-    audiences,
     emails: emails.length > 0
       ? emails
       : u.email != null

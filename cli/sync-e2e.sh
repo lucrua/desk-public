@@ -16,7 +16,7 @@
 # server (process-group kill, mirrors smoke.sh).
 set -uo pipefail
 
-DESK="node $(dirname "$0")/desk.mjs"
+DESK="node ~/desk/cli/desk.mjs"
 HUB_URL="${HUB_URL:-http://localhost:3000}"
 export HUB_URL
 WORK="$(mktemp -d /tmp/desk-sync-e2e.XXXXXX)"
@@ -56,7 +56,7 @@ if ss -tlnp 2>/dev/null | grep -q ':3000 '; then
   exit 1
 fi
 echo "[e2e] Starting pnpm dev..."
-cd "$(dirname "$0")/.."
+cd ~/desk
 setsid pnpm dev > /tmp/hub-sync-e2e-dev.log 2>&1 &
 DEV_PID=$!
 echo -n "[e2e] Waiting for API"

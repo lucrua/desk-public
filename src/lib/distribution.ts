@@ -1,95 +1,122 @@
 /**
  * Distribution overview — read-only, admin-only.
  *
- * Three lenses over the "who can see what" question:
+ * Three lenses over the "who can see what" question (Gen-2: space-scoped):
  *
- *   byAudience  — per audience: members + docs visible to that audience.
- *   byUser      — per active user: which audiences + how many docs they can see.
- *   links       — all live (non-deleted) shares (doc + directory) with copy/status.
+ *   bySpace  — per space: its members (display name + role) + the docs in it.
+ *   byUser   — per active user: which SPACES they can see + how many docs.
+ *   links    — all live (non-deleted) shares (doc + directory) with copy/status.
  *
- * Reuses the audiences-v2 scoping logic from docs.ts without reinventing it.
+ * Read access is SPACE-SCOPED (Gen-2 consolidation): a viewer sees a doc iff
+ * they are a member of its space, OR the space.visibility ∈ {public, unlisted},
+ * OR a capability share grants it. Audiences are RETIRED — the audiences /
+ * audience_members tables are dormant and never read here. Mirrors the
+ * space-scoping logic in docs.ts (memberVisibleSpaceIds).
+ *
  * Deleted docs (docs.deleted_at IS NOT NULL) are excluded from all three lenses.
+ *
+ * NOTE: the first export is still named `distributionByAudience` for backward
+ * compatibility with src/lib/mcp/tools.ts (distribution_overview tool), which
+ * passes the result straight through as JSON. The shape is now space-oriented
+ * (SpaceDistEntry). A `distributionBySpace` alias is exported for clarity.
  */
 
 import { eq, and, sql, isNull, desc } from "drizzle-orm";
 import { db } from "@/db";
 import {
   docs,
-  docVersions,
-  audiences,
-  audienceMembers,
+  spaces,
+  spaceMembers,
   users,
   userEmails,
   shares,
   shareViews,
 } from "@/db/schema";
-import { decryptToken } from "@/lib/crypto";
 
-const SHARE_BASE_URL = process.env.SHARE_BASE_URL ?? "http://localhost:3000";
+// ── bySpace (exported as distributionByAudience for tools.ts compat) ───────────
 
-// ── byAudience ────────────────────────────────────────────────────────────────
+export type SpaceMemberEntry = { displayName: string; role: string };
 
-export type AudienceDistEntry = {
-  key: string;
-  label: string;
-  memberVisible: boolean;
+export type SpaceDistEntry = {
+  slug: string;
+  visibility: "private" | "unlisted" | "public";
+  /** true when the space is discoverable by any signed-in user (public/unlisted). */
+  openVisible: boolean;
   memberCount: number;
-  members: string[];       // display names
+  members: SpaceMemberEntry[];
   docCount: number;
   docs: Array<{ slug: string; title: string; path: string }>;
 };
 
 /**
- * Per-audience distribution: which docs live under each audience, and which
- * users are members of it. Only live (non-deleted) docs are counted.
+ * Per-space distribution: which live docs live in each space, and which active
+ * users are members of it (with their space-local role). Only live (not deleted,
+ * not unpublished) docs are counted.
+ *
+ * Exported under the legacy name `distributionByAudience` (see file header) AND
+ * as `distributionBySpace`; both resolve to the same implementation.
  */
-export async function distributionByAudience(): Promise<AudienceDistEntry[]> {
-  // Load all audiences.
-  const audRows = await db
-    .select()
-    .from(audiences)
-    .orderBy(audiences.key);
+export async function distributionBySpace(): Promise<SpaceDistEntry[]> {
+  // Load all spaces.
+  const spaceRows = await db
+    .select({ id: spaces.id, slug: spaces.slug, visibility: spaces.visibility })
+    .from(spaces)
+    .orderBy(spaces.slug);
 
-  if (audRows.length === 0) return [];
+  if (spaceRows.length === 0) return [];
 
-  // Load live docs (not deleted, not unpublished).
+  // Load live docs (not deleted, not unpublished) with their owning space.
   const docRows = await db
-    .select({ slug: docs.slug, title: docs.title, path: docs.path, audience: docs.audience })
+    .select({ slug: docs.slug, title: docs.title, path: docs.path, spaceId: docs.spaceId })
     .from(docs)
     .where(and(isNull(docs.deletedAt), isNull(docs.unpublishedAt)));
 
-  // Load all audience members with their display names.
+  // Load all space members (active users only) with display name + role.
   const memberRows = await db
     .select({
-      audienceId: audienceMembers.audienceId,
+      spaceId: spaceMembers.spaceId,
+      role: spaceMembers.role,
       displayName: users.displayName,
     })
-    .from(audienceMembers)
-    .innerJoin(users, eq(users.id, audienceMembers.userId))
+    .from(spaceMembers)
+    .innerJoin(users, eq(users.id, spaceMembers.userId))
     .where(eq(users.active, 1));
 
-  // Build a lookup: audienceId → members
-  const membersByAudId = new Map<number, string[]>();
+  // Build lookups keyed by spaceId.
+  const membersBySpaceId = new Map<number, SpaceMemberEntry[]>();
   for (const m of memberRows) {
-    const arr = membersByAudId.get(m.audienceId) ?? [];
-    arr.push(m.displayName);
-    membersByAudId.set(m.audienceId, arr);
+    const arr = membersBySpaceId.get(m.spaceId) ?? [];
+    arr.push({ displayName: m.displayName, role: m.role });
+    membersBySpaceId.set(m.spaceId, arr);
   }
 
-  return audRows.map((aud) => {
-    const members = membersByAudId.get(aud.id) ?? [];
-    const audDocs = docRows.filter((d) => d.audience === aud.key);
+  const docsBySpaceId = new Map<number, Array<{ slug: string; title: string; path: string }>>();
+  for (const d of docRows) {
+    const arr = docsBySpaceId.get(d.spaceId) ?? [];
+    arr.push({ slug: d.slug, title: d.title, path: d.path });
+    docsBySpaceId.set(d.spaceId, arr);
+  }
+
+  return spaceRows.map((s) => {
+    const members = membersBySpaceId.get(s.id) ?? [];
+    const spaceDocs = docsBySpaceId.get(s.id) ?? [];
     return {
-      key: aud.key,
-      label: aud.label,
-      memberVisible: aud.memberVisible === 1,
+      slug: s.slug,
+      visibility: s.visibility,
+      openVisible: s.visibility === "public" || s.visibility === "unlisted",
       memberCount: members.length,
       members,
-      docCount: audDocs.length,
-      docs: audDocs.map((d) => ({ slug: d.slug, title: d.title, path: d.path })),
+      docCount: spaceDocs.length,
+      docs: spaceDocs,
     };
   });
 }
+
+/**
+ * Backward-compatible export name for src/lib/mcp/tools.ts (distribution_overview).
+ * Returns SPACE-based data (SpaceDistEntry[]); the audience model is retired.
+ */
+export const distributionByAudience = distributionBySpace;
 
 // ── byUser ────────────────────────────────────────────────────────────────────
 
@@ -98,21 +125,22 @@ export type UserDistEntry = {
   displayName: string;
   emails: string[];
   role: string;
-  audienceKeys: string[];
+  /** Space slugs this user can see (member-of ∪ public/unlisted; admins see all). */
+  visibleSpaces: string[];
   visibleDocCount: number;
 };
 
 /**
- * Per-user distribution: for each active user, which audiences they can see
- * and how many live docs they can see.
+ * Per-user distribution: for each active user, which SPACES they can see and how
+ * many live docs they can see.
  *
- * Visibility rule (audiences-v2):
- *   - Admins see ALL live docs (flagged in the response).
- *   - Members see docs whose audience is member_visible=1 (flag-visible) OR
- *     whose audience they are explicitly a member of.
+ * Visibility rule (Gen-2, space-scoped — mirrors docs.ts):
+ *   - Admins see ALL live docs in ALL spaces (flagged in the response).
+ *   - Members see docs in spaces they belong to (a space_members row) UNION
+ *     spaces whose visibility is public/unlisted.
  *
- * "Visible doc count" = distinct live (not deleted, not unpublished) docs in
- * any audience the user can see.
+ * "Visible doc count" = distinct live (not deleted, not unpublished) docs in any
+ * space the user can see.
  */
 export async function distributionByUser(): Promise<UserDistEntry[]> {
   // All active users.
@@ -136,43 +164,41 @@ export async function distributionByUser(): Promise<UserDistEntry[]> {
     emailsByUserId.set(e.userId, arr);
   }
 
-  // All audiences.
-  const audRows = await db
-    .select({ id: audiences.id, key: audiences.key, memberVisible: audiences.memberVisible })
-    .from(audiences);
+  // All spaces.
+  const spaceRows = await db
+    .select({ id: spaces.id, slug: spaces.slug, visibility: spaces.visibility })
+    .from(spaces);
 
-  // Flag-visible audience keys (member_visible = 1).
-  const flagVisibleKeys = new Set(
-    audRows.filter((a) => a.memberVisible === 1).map((a) => a.key),
+  const slugBySpaceId = new Map(spaceRows.map((s) => [s.id, s.slug]));
+
+  // Spaces discoverable by any signed-in user (public/unlisted).
+  const openSpaceIds = new Set(
+    spaceRows.filter((s) => s.visibility === "public" || s.visibility === "unlisted").map((s) => s.id),
   );
-  const flagVisibleKeysList = [...flagVisibleKeys];
 
-  // All audience memberships for active users.
+  // Space memberships for active users.
   const membershipRows = await db
-    .select({ userId: audienceMembers.userId, audienceId: audienceMembers.audienceId })
-    .from(audienceMembers)
-    .innerJoin(users, eq(users.id, audienceMembers.userId))
+    .select({ userId: spaceMembers.userId, spaceId: spaceMembers.spaceId })
+    .from(spaceMembers)
+    .innerJoin(users, eq(users.id, spaceMembers.userId))
     .where(eq(users.active, 1));
 
-  const audKeyById = new Map(audRows.map((a) => [a.id, a.key]));
-  const membershipsByUserId = new Map<number, Set<string>>();
+  const membershipsByUserId = new Map<number, Set<number>>();
   for (const m of membershipRows) {
-    const key = audKeyById.get(m.audienceId);
-    if (!key) continue;
-    const set = membershipsByUserId.get(m.userId) ?? new Set<string>();
-    set.add(key);
+    const set = membershipsByUserId.get(m.userId) ?? new Set<number>();
+    set.add(m.spaceId);
     membershipsByUserId.set(m.userId, set);
   }
 
-  // Count live docs per audience key.
-  const docCountByAudKey = new Map<string, number>();
+  // Count live docs per space id.
+  const docCountBySpaceId = new Map<number, number>();
   const liveDocRows = await db
-    .select({ audience: docs.audience, cnt: sql<number>`cast(count(*) as int)` })
+    .select({ spaceId: docs.spaceId, cnt: sql<number>`cast(count(*) as int)` })
     .from(docs)
     .where(and(isNull(docs.deletedAt), isNull(docs.unpublishedAt)))
-    .groupBy(docs.audience);
+    .groupBy(docs.spaceId);
   for (const r of liveDocRows) {
-    docCountByAudKey.set(r.audience, r.cnt);
+    docCountBySpaceId.set(r.spaceId, r.cnt);
   }
 
   const totalLiveDocs = liveDocRows.reduce((s, r) => s + r.cnt, 0);
@@ -180,39 +206,41 @@ export async function distributionByUser(): Promise<UserDistEntry[]> {
   return userRows.map((u) => {
     // Admins see everything.
     if (u.role === "admin") {
-      const allAudienceKeys = audRows.map((a) => a.key);
       return {
         id: u.id,
         displayName: u.displayName,
         emails: emailsByUserId.get(u.id) ?? [],
         role: u.role,
-        audienceKeys: allAudienceKeys,
+        visibleSpaces: spaceRows.map((s) => s.slug),
         visibleDocCount: totalLiveDocs,
       };
     }
 
-    // Member: flag-visible union membership.
-    const membership = membershipsByUserId.get(u.id) ?? new Set<string>();
-    const visibleKeys = new Set<string>([...flagVisibleKeysList, ...membership]);
-    const audienceKeys = [...visibleKeys].sort();
+    // Member: open spaces ∪ membership.
+    const membership = membershipsByUserId.get(u.id) ?? new Set<number>();
+    const visibleSpaceIds = new Set<number>([...openSpaceIds, ...membership]);
 
     let visibleDocCount = 0;
-    for (const key of visibleKeys) {
-      visibleDocCount += docCountByAudKey.get(key) ?? 0;
+    const visibleSpaces: string[] = [];
+    for (const id of visibleSpaceIds) {
+      visibleDocCount += docCountBySpaceId.get(id) ?? 0;
+      const slug = slugBySpaceId.get(id);
+      if (slug) visibleSpaces.push(slug);
     }
+    visibleSpaces.sort();
 
     return {
       id: u.id,
       displayName: u.displayName,
       emails: emailsByUserId.get(u.id) ?? [],
       role: u.role,
-      audienceKeys,
+      visibleSpaces,
       visibleDocCount,
     };
   });
 }
 
-// ── links ────────────────────────────────────────────────────────────────────
+// ── links (UNCHANGED — already reports shares, not audiences) ──────────────────
 
 export type LinkDistEntry = {
   id: number;

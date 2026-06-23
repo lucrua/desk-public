@@ -7,11 +7,11 @@ const NOW = new Date("2026-06-10T12:00:00Z");
 function share(over: Partial<ShareListItem> = {}): ShareListItem {
   return {
     id: 1,
-    label: "Alice",
+    label: "Pedro",
     mode: "doc",
-    docSlug: "notes-overview",
+    docSlug: "market-context",
     pathPrefix: null,
-    createdBy: "admin",
+    createdBy: "lucas",
     createdAt: new Date("2026-06-01T00:00:00Z"),
     allowComments: true,
     expiresAt: null,
@@ -96,9 +96,9 @@ describe("toDocShareRow", () => {
   });
 
   it("passes through allowComments and createdBy", () => {
-    const r = toDocShareRow(share({ allowComments: false, createdBy: "bob" }), NOW);
+    const r = toDocShareRow(share({ allowComments: false, createdBy: "dani" }), NOW);
     expect(r.allowComments).toBe(false);
-    expect(r.createdBy).toBe("bob");
+    expect(r.createdBy).toBe("dani");
   });
 
   it("live share → live mode chip", () => {

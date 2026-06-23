@@ -3,11 +3,11 @@
 # Boots pnpm dev, exercises all main commands, then kills the server.
 set -euo pipefail
 
-HUB="${HUB:-node "$(dirname "$0")/desk.mjs"}"
+HUB="${HUB:-node ~/desk/cli/desk.mjs}"
 HUB_URL="${HUB_URL:-http://localhost:3000}"
 SMOKE_SLUG="smoke-test-context-$(date +%s)"
-SHARE_LABEL="Smoke Alice $(date +%s)"
-TEST_FILE="$HOME/demo-workspace/os/CONTEXT.md"
+SHARE_LABEL="Smoke Pedro $(date +%s)"
+TEST_FILE="$HOME/acme-growth/os/CONTEXT.md"
 DEV_PID=""
 PASS=0
 FAIL=0
@@ -78,7 +78,7 @@ if ss -tlnp 2>/dev/null | grep -q ':3000 '; then
 fi
 
 echo "[smoke] Starting pnpm dev..."
-cd "$(dirname "$0")/.."
+cd ~/desk
 # setsid puts pnpm in its own process group so we can kill the whole tree at exit.
 setsid pnpm dev > /tmp/hub-smoke-dev.log 2>&1 &
 DEV_PID=$!
@@ -118,7 +118,7 @@ assert_contains "desk help shows share" "$HELP_OUT" "share"
 
 echo ""
 echo "[smoke] --- desk publish (new) ---"
-PUB1=$($HUB publish "$TEST_FILE" --audience alice --slug "$SMOKE_SLUG" --source "$TEST_FILE")
+PUB1=$($HUB publish "$TEST_FILE" --audience pedro --slug "$SMOKE_SLUG" --source "$TEST_FILE")
 echo "$PUB1"
 assert_contains "publish new version" "$PUB1" "published $SMOKE_SLUG"
 assert_contains "publish reports new version" "$PUB1" "new version"
@@ -128,7 +128,7 @@ assert_contains "publish returns hub URL" "$PUB1" "/docs/$SMOKE_SLUG"
 
 echo ""
 echo "[smoke] --- desk publish (unchanged) ---"
-PUB2=$($HUB publish "$TEST_FILE" --audience alice --slug "$SMOKE_SLUG" --source "$TEST_FILE")
+PUB2=$($HUB publish "$TEST_FILE" --audience pedro --slug "$SMOKE_SLUG" --source "$TEST_FILE")
 echo "$PUB2"
 assert_contains "re-publish reports unchanged" "$PUB2" "unchanged"
 

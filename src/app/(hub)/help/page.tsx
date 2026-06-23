@@ -231,38 +231,37 @@ export default async function HelpPage() {
               </p>
             </Section>
 
-            {/* ── Reading & audiences ──────────────────────────────────── */}
+            {/* ── Reading & visibility ─────────────────────────────────── */}
             <Section id="reading" role={role}>
               <p style={pStyle}>
-                Every doc has one <strong>audience</strong> — and an audience is a{" "}
-                <strong>group</strong>. A member sees a doc when its audience is{" "}
-                <em>visible to all members</em> <strong>OR</strong> when they have
-                been added to that audience&rsquo;s member list. So a hidden{" "}
-                {code("bob")} audience with Bob&rsquo;s user added to it is seen
-                by exactly the admin + Bob. New docs default to the{" "}
-                {code("private")} audience (only the admin/author, until you add
-                members or pick another audience).
+                A doc lives inside a <strong>space</strong> (a git repo Desk
+                hosts), and visibility is set on the space. You see a doc when:
+                you&rsquo;re the <strong>admin</strong>; you&rsquo;re a{" "}
+                <strong>member</strong> of its space; the space&rsquo;s visibility
+                is <strong>public</strong> or <strong>unlisted</strong>; or
+                someone shared a <strong>capability link</strong> with you. A
+                space&rsquo;s visibility and membership are managed on the space
+                itself — see <a href="#spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>Spaces &amp; git</a>.
               </p>
               <p style={pStyle}>
                 Docs can also live in <strong>folders</strong> — a simple path
-                like {code("os/canon")} shown on the docs list as collapsible
+                like {code("os/canon")} shown inside a space as collapsible
                 groups. Folders are organizational only: they don&rsquo;t change
-                who can see a doc (that&rsquo;s the audience) or its identity
-                (that&rsquo;s the slug). The docs list can be filtered to a folder
+                who can see a doc (that&rsquo;s the space) or its identity
+                (that&rsquo;s the slug). The doc list can be filtered to a folder
                 with {code("?path=os")}.
               </p>
               <ul style={{ ...pStyle, paddingLeft: 20 }}>
                 <li style={{ marginBottom: 6 }}>
-                  <strong>Members</strong> see published docs in any audience
-                  that&rsquo;s visible to all members <em>or</em> that they belong
-                  to, can comment on them, and can view their own account at{" "}
-                  <InLink href="/me">/me</InLink> (their audience memberships show
-                  there).
+                  <strong>Members</strong> see published docs in spaces they
+                  belong to (plus any public/unlisted space), can comment on them,
+                  and can view their own account at{" "}
+                  <InLink href="/me">/me</InLink>.
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>The admin</strong> sees every doc — including
-                  unpublished drafts and docs in restricted audiences — plus the
-                  admin dashboard, where audience membership is managed.
+                  unpublished drafts and docs in private spaces — plus the admin
+                  dashboard, where spaces and membership are managed.
                 </li>
               </ul>
               <p style={mutedP}>
@@ -271,6 +270,14 @@ export default async function HelpPage() {
                 <strong>Download</strong> saves it as a file ({code(".md")} or{" "}
                 {code(".html")}). Share-link readers get the same two actions in
                 their header.
+              </p>
+              <p style={mutedP}>
+                An {code(".html")} doc renders in a <strong>sandboxed preview</strong>{" "}
+                — use the <strong>Rendered / Source</strong> toggle above it to flip
+                between the live page and the raw HTML. The preview runs in an
+                isolated frame, so artifact scripts can never reach Desk&rsquo;s
+                session or data. Readers of a shared {code(".html")} see the same
+                sandboxed render.
               </p>
               <div
                 style={{
@@ -283,18 +290,17 @@ export default async function HelpPage() {
                   {role === "admin" ? (
                     <>
                       You are the <strong>admin</strong>. You see everything and
-                      can publish, share, and manage users and audiences —
-                      including who belongs to each audience group. Members see a
-                      doc only when its audience is visible to all members or
-                      they&rsquo;ve been added to it.
+                      can publish, share, and manage users, spaces, and
+                      membership. Members see a doc only when they&rsquo;re in its
+                      space, or the space is public/unlisted.
                     </>
                   ) : (
                     <>
                       You are a <strong>member</strong>. You can read docs in
-                      audiences that are visible to all members or that
-                      you&rsquo;ve been added to, and comment on them. Publishing,
-                      sharing, and user management are admin-only — those sections
-                      are hidden from this page for you.
+                      spaces you belong to (plus any public/unlisted space) and
+                      comment on them. Publishing, sharing, and user management
+                      are admin-only — those sections are hidden from this page
+                      for you.
                     </>
                   )}
                 </p>
@@ -304,7 +310,7 @@ export default async function HelpPage() {
             {/* ── Search ───────────────────────────────────────────────── */}
             <Section id="search" role={role}>
               <p style={pStyle}>
-                The search box on <InLink href="/docs">/docs</InLink> runs a{" "}
+                The search box on <InLink href="/spaces">/spaces</InLink> runs a{" "}
                 <strong>full-text search</strong> over every doc&rsquo;s title
                 and current content — not just a title/slug filter. Results are
                 <strong> ranked by relevance</strong> (a title match outranks a
@@ -319,8 +325,8 @@ export default async function HelpPage() {
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>Scope.</strong> Search only ever returns docs you can
-                  already see — members get audiences visible to all members plus
-                  the ones they belong to; the admin sees everything (including
+                  already see — members see docs in spaces they belong to, plus
+                  public/unlisted spaces; the admin sees everything (including
                   unpublished). It respects the same boundaries as the rest of
                   Desk.
                 </li>
@@ -329,7 +335,7 @@ export default async function HelpPage() {
                 Agents get the same search over MCP: {code("search_docs")}{" "}
                 returns ranked results with snippets, and {code("list_docs")}{" "}
                 with a {code("q")} runs the same full-text search. Both are
-                audience-scoped exactly like the browser.
+                space-scoped exactly like the browser.
               </p>
             </Section>
 
@@ -337,25 +343,19 @@ export default async function HelpPage() {
             <Section id="publishing" role={role}>
               <p style={pStyle}>
                 Publishing is a deliberate act: a published doc gets a stable hub
-                page and can be shared. There are four ways to publish, all
+                page and can be shared. There are three ways to publish, all
                 equivalent — pick whatever fits your workflow:
               </p>
               <ul style={{ ...pStyle, paddingLeft: 20 }}>
                 <li style={{ marginBottom: 6 }}>
-                  <strong>Upload button</strong> — on{" "}
-                  <InLink href="/docs">/docs</InLink>, the Upload control takes a
-                  Markdown or HTML file. New docs publish as {code("private")};
-                  set who sees it from the doc&rsquo;s Sharing panel after.
-                </li>
-                <li style={{ marginBottom: 6 }}>
-                  <strong>Drag and drop</strong> — drop a file anywhere on the
-                  /docs page; a full-page overlay catches it and opens the same
-                  upload flow.
+                  <strong>Push to a space</strong> — commit a Markdown or HTML
+                  file and {code("git push")} it to the space&rsquo;s repo. Desk
+                  re-renders the changed paths within seconds. This is the primary
+                  path; see <a href="#spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>Spaces &amp; git</a>.
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>The {code("desk")} CLI</strong> — {code("desk publish ./file.md")}{" "}
-                  from your terminal ({code("--audience")} is optional, default{" "}
-                  {code("private")}). See the <a href="#cli" style={{ color: "var(--accent)", textDecoration: "none" }}>CLI</a> section.
+                  from your terminal. See the <a href="#cli" style={{ color: "var(--accent)", textDecoration: "none" }}>CLI</a> section.
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>The MCP API</strong> — an agent calls the{" "}
@@ -364,18 +364,11 @@ export default async function HelpPage() {
                 </li>
               </ul>
               <p style={mutedP}>
-                A doc&rsquo;s audience can be changed any time from its{" "}
-                <strong>Sharing</strong> panel; any audience you name must already
-                exist (create audiences in{" "}
-                <InLink href="/admin">/admin</InLink>). Uploaded content is capped
-                at 2&nbsp;MB. Re-publishing the same slug updates the doc in
-                place. Unpublishing it (from /admin or via the CLI / MCP) takes
-                the page down and revokes every link instantly. The Upload form
-                pre-fills the slug with a <strong>random value</strong> — you can
-                change it to something meaningful before publishing. The Upload
-                form also takes an optional <strong>folder</strong>, and a
-                doc&rsquo;s page has a <strong>Move…</strong> action to re-file
-                it later (folders are organizational only — they never change
+                Re-publishing the same slug updates the doc in place. Unpublishing
+                it (from /admin or via the CLI / MCP) takes the page down and
+                revokes every link instantly. A doc&rsquo;s page has a{" "}
+                <strong>Move…</strong> action to re-file it into another folder
+                later (folders are organizational only — they never change
                 visibility).
               </p>
             </Section>
@@ -391,7 +384,7 @@ export default async function HelpPage() {
               <ul style={{ ...pStyle, paddingLeft: 20 }}>
                 <li style={{ marginBottom: 6 }}>
                   <strong>Creator = owner.</strong> When you publish a new doc
-                  (Upload, drag-and-drop, CLI {code("desk publish")}, or MCP{" "}
+                  (push to a space, CLI {code("desk publish")}, or MCP{" "}
                   {code("publish_doc")}), the doc&rsquo;s owner is automatically
                   set to you. Existing docs created before ownership was
                   introduced have no owner ({code("null")}) — they behave as
@@ -400,14 +393,14 @@ export default async function HelpPage() {
                 <li style={{ marginBottom: 6 }}>
                   <strong>What the owner can do.</strong> On any doc they own:
                   publish a new version directly via Edit (saves immediately —
-                  no approval queue), upload a new version from the doc&rsquo;s{" "}
-                  {code("⋯")} overflow menu, and accept or reject revision
-                  proposals from other members.
+                  no approval queue) or by pushing to the space, and accept or
+                  reject revision proposals from other members.
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>What the owner cannot do.</strong> Create brand-new
                   docs from scratch, delete or unpublish docs, manage shares,
-                  move docs, or change audiences — those remain admin-only.
+                  move docs, or change a space&rsquo;s visibility — those remain
+                  admin-only.
                 </li>
                 {role === "admin" && (
                   <li style={{ marginBottom: 6 }}>
@@ -429,23 +422,20 @@ export default async function HelpPage() {
             {/* ── Sharing (admin) ──────────────────────────────────────── */}
             <Section id="sharing" role={role}>
               <p style={pStyle}>
-                There are two ways to share a doc, both managed from the
-                doc&rsquo;s consolidated <strong>Sharing</strong> panel:
+                There are two ways to share a doc:
               </p>
               <ul style={{ ...pStyle, paddingLeft: 20 }}>
                 <li style={{ marginBottom: 6 }}>
-                  <strong>Inside Desk — change the audience.</strong> The Sharing
-                  panel&rsquo;s visibility control sets the doc&rsquo;s audience
-                  and shows a live <em>Visible to:</em> preview ({code("only you")}
-                  {" "}/ {code("you + Bob")} / {code("all members")}). To let a
-                  specific teammate see it, add their user to an audience (in{" "}
-                  <InLink href="/admin">/admin</InLink>) and tag the doc with that
-                  audience — no link required.
+                  <strong>Inside Desk — add them to the space.</strong> To let a
+                  teammate with a Desk account see a doc, add them to the
+                  doc&rsquo;s <strong>space</strong> as a member (or make the
+                  space <strong>unlisted</strong> / <strong>public</strong>) — set
+                  on the space at <a href="#spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>/spaces/[slug]</a>. No link required.
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>Outside Desk — a capability link.</strong> For people
                   without a Desk account, create a share link (below) from the
-                  same panel.
+                  doc&rsquo;s <strong>Sharing</strong> panel.
                 </li>
               </ul>
               <p style={pStyle}>
@@ -517,14 +507,15 @@ export default async function HelpPage() {
               </p>
               <p style={pStyle}>
                 <strong>Folder shares.</strong> A capability link can also cover a
-                whole <em>folder</em>. From the <InLink href="/docs">docs</InLink>{" "}
-                tree, use <strong>Share folder…</strong> on a folder row to mint
+                whole <em>folder</em>. From a{" "}
+                <InLink href="/spaces">space</InLink>&rsquo;s doc tree, use{" "}
+                <strong>Share folder…</strong> on a folder row to mint
                 one link to every <em>published</em> doc under that path. The
                 visitor opens an index and reads each doc under the same token;{" "}
                 newly-published docs in the folder appear automatically, and one
                 revoke kills the lot. Folder shares are live-only (no pin), the
                 comments toggle applies folder-wide, and they list in the{" "}
-                <strong>Folder shares</strong> section on the docs page with a{" "}
+                <strong>Folder shares</strong> section with a{" "}
                 {code("folder · finance/")} chip. Create one over MCP with{" "}
                 {code("create_directory_share")}.
               </p>
@@ -619,13 +610,13 @@ export default async function HelpPage() {
               </p>
               <ul style={{ ...pStyle, paddingLeft: 20 }}>
                 <li style={{ marginBottom: 6 }}>
-                  <strong>By audience.</strong> Each audience group — which users
-                  are in it and which published docs are tagged to it.
+                  <strong>By space.</strong> Each space — which users are members
+                  of it and which published docs live in it.
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>By user.</strong> Each active user — their role, which
-                  audiences they can see, and a count of visible docs (members see
-                  flag-visible audiences plus the ones they belong to; admins see
+                  spaces they can see, and a count of visible docs (members see
+                  spaces they belong to plus public/unlisted ones; admins see
                   all).
                 </li>
                 <li style={{ marginBottom: 6 }}>
@@ -678,8 +669,8 @@ export default async function HelpPage() {
                   {code("Edit")} on the doc header; the editor opens with the
                   current version. When you save, the new version goes live
                   immediately — no approval, no queue. The button reads{" "}
-                  {code("Publish new version")}. You can also drop a file via{" "}
-                  {code("⋯")} → <strong>Upload new version</strong>.
+                  {code("Publish new version")}. You can also publish a new
+                  version by pushing to the doc&rsquo;s space.
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>Member (no ownership) — propose edit.</strong> On a
@@ -719,8 +710,8 @@ export default async function HelpPage() {
             <Section id="board" role={role}>
               <p style={pStyle}>
                 The <InLink href="/board">Board</InLink> is Desk&rsquo;s internal
-                kanban — a staff-only coordination surface (no audiences; it&rsquo;s
-                not shared externally). Cards live in <strong>buckets</strong>{" "}
+                kanban — a staff-only coordination surface (not shared
+                externally). Cards live in <strong>buckets</strong>{" "}
                 (columns) that start as {code("Backlog")}, {code("In Progress")},{" "}
                 {code("Review")}, {code("Done")} but are fully editable data.
               </p>
@@ -775,57 +766,44 @@ export default async function HelpPage() {
             {/* ── Catalog ──────────────────────────────────────────────── */}
             <Section id="catalog" role={role}>
               <p style={pStyle}>
-                The <InLink href="/catalog">Catalog</InLink> holds Desk&rsquo;s{" "}
-                <strong>schema-as-data registries</strong> — generic kinds like
-                findings, decisions, or RFCs. Each <strong>kind</strong> is data:
-                a label, an <em>id pattern</em> (a regex such as {code("F-\\d+")}),
-                and a JSON Schema for its structured fields. Items carry that
-                client-proposed id (validated against the pattern), a markdown
-                body, a status, and the schema-validated {code("data")} payload.
+                The <InLink href="/catalog">Catalog</InLink> is a{" "}
+                <strong>projection of a space directory&rsquo;s frontmatter</strong>
+                {" "}— not a separate database. Pick a <strong>space</strong> and a{" "}
+                <strong>directory</strong>; Desk reads every doc under it and renders
+                each doc&rsquo;s YAML frontmatter as rows. A page <em>is</em> a file;
+                its metadata <em>is</em> the file&rsquo;s frontmatter. Edit a value by
+                editing the doc (then {code("git push")}) — there is no second copy.
               </p>
               <ul style={{ ...pStyle, paddingLeft: 20 }}>
                 <li style={{ marginBottom: 6 }}>
-                  <strong>Typed links</strong> between items are derived
-                  automatically: when an item&rsquo;s body or data mentions
-                  another item&rsquo;s id, an edge is recorded. The item page
-                  shows them split <strong>outbound</strong> /{" "}
-                  <strong>inbound</strong> (inbound shows the inverse —{" "}
-                  {code("references")} → &ldquo;referenced by&rdquo;), all
-                  navigable.
+                  <strong>Auto mode</strong> (no schema): Desk shows the union of
+                  every frontmatter field it finds as a <strong>table</strong>, plus{" "}
+                  <strong>board</strong> and <strong>list</strong> views. Group,
+                  filter, and sort by any field — those choices are <em>display
+                  state</em>, never written back to the files.
                 </li>
                 <li style={{ marginBottom: 6 }}>
-                  Those same ids <strong>auto-link</strong> wherever they appear —
-                  in doc and card bodies, a {code("F-012")} becomes a link to its
-                  catalog item (on public share pages the ref stays plain text).
+                  <strong>Schema mode</strong>: drop a{" "}
+                  {code(".desk.collection.yml")} in the directory declaring{" "}
+                  <strong>fields</strong> (types / enums / required) and{" "}
+                  <strong>views</strong> (e.g. {code("board: {group_by}")},{" "}
+                  {code("table: {columns}")}). Desk reads it from the space&rsquo;s
+                  git at the current commit, renders the declared views, and{" "}
+                  <strong>validates</strong> every doc — surfacing{" "}
+                  <strong>drift</strong> (a missing required field, a value outside
+                  an enum) as a visible flag. Invalid docs are flagged, never hidden.
                 </li>
                 <li style={{ marginBottom: 6 }}>
-                  Browse a kind&rsquo;s items in a table with status and text
-                  filters; open one for its fields (in schema order) and links.
+                  The catalog is <strong>read / render-only</strong> for everyone —
+                  it reflects the repo. Web-editing frontmatter values lands later
+                  (the web-commit path: edit → commit → re-project).
                 </li>
               </ul>
-              {role === "admin" ? (
-                <p style={pStyle}>
-                  <strong>As admin</strong> you define kinds (the{" "}
-                  <strong>+ New kind</strong> form validates the label, regex, and
-                  JSON before creating) and edit a kind&rsquo;s schema with a live
-                  validation preview against its first item — breaking changes are
-                  flagged (&ldquo;would flag N items for migration&rdquo;), not
-                  blocked. Items are admin/agent-written.
-                </p>
-              ) : (
-                <p style={pStyle}>
-                  <strong>As a member</strong> the catalog is{" "}
-                  <strong>read-only</strong> — registries are written by admins and
-                  agents. You see every kind, every item, and the link graph; the
-                  schema editor and new-kind affordances are admin-only.
-                </p>
-              )}
               <p style={mutedP}>
-                Agents do the same over MCP — kinds ({code("list_catalog_kinds")},{" "}
-                {code("get_catalog_schema")}, {code("upsert_catalog_schema")}) and
-                items ({code("list_catalog_items")}, {code("get_catalog_item")},{" "}
-                {code("upsert_catalog_item")}, {code("delete_catalog_item")}) — and
-                every mutation appends a {code("catalog.*")} event.
+                Agents don&rsquo;t need a catalog tool: the truth is the repo, so an
+                agent writes frontmatter the same way it writes any file — commit and
+                push, and the projection refreshes. (The earlier Desk-authored
+                catalog tables are retained but dormant.)
               </p>
             </Section>
 
@@ -875,8 +853,8 @@ export default async function HelpPage() {
                 <li style={{ marginBottom: 6 }}>
                   Give a user <strong>multiple emails</strong>. A person can own
                   several verified addresses (e.g.{" "}
-                  {code("owner@example.com")} +{" "}
-                  {code("admin@example.com")}) on one account — signing in with{" "}
+                  {code("lucas@example.org")} +{" "}
+                  {code("lucas@example.net")}) on one account — signing in with{" "}
                   <em>any</em> of them resolves the same identity and the same
                   role. Each user row shows its emails as chips (★ marks the
                   primary/display address); use <strong>+ email</strong> to add
@@ -890,11 +868,84 @@ export default async function HelpPage() {
                   way to fold a second address into someone&rsquo;s account.
                 </li>
                 <li style={{ marginBottom: 6 }}>
-                  Manage <strong>audiences</strong> as groups — create them, set
-                  whether they&rsquo;re visible to all members, and add/remove
-                  individual members — and review the <strong>view log</strong>.
+                  Review the <strong>view log</strong>. Space membership and
+                  visibility are managed per space on{" "}
+                  <a href="#spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>/spaces/[slug]</a>, not here.
                 </li>
               </ul>
+            </Section>
+
+            {/* ── Spaces & git ─────────────────────────────────────────── */}
+            <Section id="spaces" role={role}>
+              <p style={pStyle}>
+                A <strong>space</strong> is an owned, access-controlled{" "}
+                <strong>git repo that Desk hosts</strong>. It is the unit of
+                write/clone access — the security boundary. The files in the
+                space&rsquo;s repo are the <strong>source of truth</strong>; what
+                you see in Desk (the rendered docs, the catalog, the board) is a{" "}
+                <strong>projection</strong> Desk rebuilds from those files. There
+                is exactly one copy of every document: editing it means editing
+                the file, through any door (a {code("git push")}, or — later — a
+                web edit that becomes a commit).
+              </p>
+              <p style={pStyle}>
+                Each member has a role <em>on a space</em>:{" "}
+                <strong>reader</strong> (clone/fetch), <strong>writer</strong>{" "}
+                (clone + push), or <strong>owner</strong>. Browse your spaces at{" "}
+                <a href="/spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>/spaces</a> (open one to manage
+                its members and visibility). Programmatically: manage roles from{" "}
+                {code("POST /api/spaces/[slug]/members")} or the MCP{" "}
+                {code("set_space_member")} tool; list spaces with{" "}
+                {code("list_spaces")} / {code("GET /api/spaces")}; create one with{" "}
+                {code("create_space")} / {code("POST /api/spaces")}.
+              </p>
+              <p style={pStyle}>
+                <strong>Get a push credential.</strong> Mint a{" "}
+                <strong>principal token</strong> at{" "}
+                <a href="/settings/tokens" style={{ color: "var(--accent)", textDecoration: "none" }}>/settings/tokens</a>{" "}
+                (it is shown <em>once</em> — store it then). Programmatically:{" "}
+                {code("POST /api/tokens")} / the MCP {code("create_token")} tool.
+                The token is bound to <em>your</em> user and carries your role on
+                each space.
+              </p>
+              <p style={pStyle}>
+                <strong>Cloning &amp; pushing.</strong> The git transport is
+                HTTPS smart-HTTP at{" "}
+                {code("https://<host>/api/git/<owner>/<space>.git")}. Authenticate
+                with a <strong>principal token</strong> as the HTTP Basic{" "}
+                <em>password</em> (any username):
+              </p>
+              <div style={codeBlock}>
+                {`# clone (reader, writer, or owner)
+git clone https://git:<token>@<host>/api/git/<owner>/<space>.git
+
+# push from an existing repo (writer or owner)
+git remote add desk https://git:<token>@<host>/api/git/<owner>/<space>.git
+git push desk HEAD:main`}
+              </div>
+              <p style={pStyle}>
+                <strong>Desk renders the {code("main")} branch.</strong> It indexes
+                only that ref, so always push to it explicitly with{" "}
+                {code("HEAD:main")} — a bare {code("git push desk HEAD")} from a
+                local {code("master")} branch is accepted by the server but renders
+                nothing (the {code("main")} ref never moves). Cloning a fresh space
+                gives you a repo already on {code("main")}.
+              </p>
+              <p style={pStyle}>
+                A <strong>reader</strong> token can clone but a push is rejected;
+                a <strong>writer</strong> or <strong>owner</strong> token can
+                push. A push re-renders the affected docs within seconds (the
+                projection re-indexes the changed paths). Access is{" "}
+                <strong>fail-closed</strong>: anonymous or no-access on a private
+                space returns a uniform 404 — never a hint that the space exists.
+              </p>
+              <p style={pStyle}>
+                <strong>Recovery.</strong> The projection is always rebuildable
+                from the repo. If it drifts, re-project a space with{" "}
+                {code("POST /api/spaces/[slug]/reindex")} (admin only). The bare
+                repos under {code("DESK_DATA_DIR")} are the canon — back them up
+                off-box.
+              </p>
             </Section>
 
             {/* ── Connecting an agent (MCP) ────────────────────────────── */}
@@ -904,52 +955,46 @@ export default async function HelpPage() {
                 agents (Claude Code and others) can call Desk directly. It speaks
                 the MCP <strong>Streamable HTTP</strong> transport and reuses the
                 same auth and authorization as the rest of the app: members get
-                read-only, audience-scoped access; mutations are admin-only.
+                read-only, space-scoped access; mutations are admin-only.
               </p>
               <div style={cardStyle}>
                 <div style={{ ...labelStyle, marginBottom: 6 }}>endpoint</div>
                 <p style={{ ...pStyle, margin: 0 }}>
                   {code("https://<hub-host>/mcp")} — the same host as this
-                  workspace, behind the same Cloudflare Access wall. There are 63
-                  tools covering everything the browser can do — docs and
-                  versions ({code("list_docs")}, {code("search_docs")},{" "}
-                  {code("get_doc")}, {code("get_version")}, {code("publish_doc")},{" "}
-                  {code("set_doc_path")}, {code("set_doc_owner")},{" "}
-                  {code("unpublish_doc")},{" "}
+                  workspace, behind the same Cloudflare Access wall.{" "}
+                  <strong>MCP is the agent surface; REST is the UI surface</strong>{" "}
+                  — deliberately not 1:1. There are 40 tools covering what an
+                  agent actually drives — docs and versions ({code("list_docs")},{" "}
+                  {code("search_docs")}, {code("get_doc")}, {code("get_version")},{" "}
+                  {code("publish_doc")}, {code("update_doc")}{" "}
+                  (move / reassign owner), {code("unpublish_doc")},{" "}
                   {code("delete_doc")}), the event log
                   ({code("list_events")}), shares ({code("create_share")},{" "}
                   {code("create_directory_share")}, {code("list_shares")},{" "}
                   {code("list_doc_shares")},{" "}
                   {code("revoke_share")}, {code("reveal_share")},{" "}
-                  {code("delete_share")},{" "}
-                  {code("set_share_comments")},{" "}
-                  {code("list_share_views")}), comments ({code("list_comments")},{" "}
+                  {code("delete_share")}), distribution{" "}
+                  ({code("distribution_overview")}), comments ({code("list_comments")},{" "}
                   {code("add_comment")}, {code("resolve_comment")},{" "}
-                  {code("delete_comment")}), audiences and their membership ({" "}
-                  {code("list_audiences")}, {code("create_audience")},{" "}
-                  {code("update_audience")}, {code("delete_audience")},{" "}
-                  {code("list_audience_members")}, {code("add_audience_member")},{" "}
-                  {code("remove_audience_member")}), users and access requests ({" "}
-                  {code("list_users")}, {code("create_user")},{" "}
-                  {code("update_user")}, {code("list_user_emails")},{" "}
-                  {code("add_user_email")}, {code("remove_user_email")},{" "}
-                  {code("list_access_requests")},{" "}
-                  {code("approve_access_request")},{" "}
-                  {code("dismiss_access_request")}), the board — buckets ({" "}
-                  {code("list_buckets")}, {code("create_bucket")},{" "}
-                  {code("update_bucket")}, {code("delete_bucket")}) and cards ({" "}
-                  {code("list_cards")}, {code("get_card")}, {code("create_card")},{" "}
-                  {code("update_card")}, {code("move_card")}, {code("assign_card")},{" "}
-                  {code("archive_card")}), the catalogs — kinds ({" "}
-                  {code("list_catalog_kinds")}, {code("get_catalog_schema")},{" "}
-                  {code("upsert_catalog_schema")}) and items ({" "}
-                  {code("list_catalog_items")}, {code("get_catalog_item")},{" "}
-                  {code("upsert_catalog_item")}, {code("delete_catalog_item")}),
-                  revisions ({code("propose_revision")},{" "}
+                  {code("delete_comment")}), revisions ({code("propose_revision")},{" "}
                   {code("list_revisions")}, {code("decide_revision")},{" "}
-                  {code("list_open_revisions")}),
-                  distribution ({code("distribution_overview")}),
+                  {code("list_open_revisions")}), the board — cards ({" "}
+                  {code("list_buckets")}, {code("list_cards")}, {code("get_card")},{" "}
+                  {code("create_card")}, {code("update_card")}, {code("move_card")},{" "}
+                  {code("assign_card")}, {code("archive_card")}),
+                  spaces and membership ({code("list_spaces")}, {code("create_space")},{" "}
+                  {code("set_space_member")}), principal tokens ({" "}
+                  {code("create_token")}, {code("list_tokens")},{" "}
+                  {code("revoke_token")}),
                   plus {code("whoami")}.
+                </p>
+                <p style={{ ...mutedP, marginTop: 10, marginBottom: 0 }}>
+                  Pure web-UI admin actions are <strong>REST-only</strong> (no MCP
+                  tool): user &amp; multi-email management, access-request triage,
+                  board-bucket lifecycle (create / rename / delete a column), and a
+                  share&rsquo;s view-log / comment-toggle. An agent that needs the
+                  &ldquo;who can see what&rdquo; audit uses{" "}
+                  {code("distribution_overview")} + {code("list_shares")}.
                 </p>
               </div>
 
@@ -1029,8 +1074,7 @@ export default async function HelpPage() {
                 is published.
               </p>
               <div style={codeBlock}>
-{`desk publish ~/docs/overview.md              # publishes as 'private'
-desk publish ~/docs/overview.md --audience team   # or name an audience
+{`desk publish ~/docs/overview.md              # publish a doc
 desk share overview --label "Partner review" --expires 7
 desk revoke "Partner review"
 desk list
@@ -1083,10 +1127,10 @@ desk sync --dry-run                          # plan only, touch nothing`}
                     cloud folder prefix to a local directory and adopts new docs
                     both ways — new cloud docs under the prefix are written
                     locally, and new local {code(".md")}/{code(".html")} files are
-                    published under that prefix to the given audience:
+                    published under that prefix:
                   </p>
                   <div style={codeBlock}>
-{`desk sync link-dir os ~/work/os             # new docs default to 'private'
+{`desk sync link-dir os ~/work/os             # adopt the folder both ways
 desk sync`}
                   </div>
                   <p style={mutedP}>
@@ -1137,8 +1181,8 @@ desk sync`}
                     </em>
                   </p>
                   <p style={{ ...pStyle, margin: "0 0 8px" }}>
-                    The agent calls {code("publish_doc")} (slug, path, audience,
-                    content), then {code("create_share")}, and replies with the{" "}
+                    The agent calls {code("publish_doc")} (slug, path, content),
+                    then {code("create_share")}, and replies with the{" "}
                     {code("share.<domain>/s/…")} URL. Anyone with the link can
                     read and comment — no account required.
                   </p>
@@ -1150,8 +1194,8 @@ desk sync`}
                     snapshot even after you publish a newer version.
                   </p>
                   <p style={{ ...mutedP, margin: 0 }}>
-                    <strong>UI alternative:</strong> Upload or drag the file
-                    onto <InLink href="/docs">/docs</InLink> → open the doc →
+                    <strong>UI alternative:</strong> {code("git push")} the file
+                    to a <InLink href="/spaces">space</InLink> → open the doc →
                     Sharing panel → New link.
                   </p>
                 </div>
@@ -1166,27 +1210,25 @@ desk sync`}
                   </div>
                   <p style={{ ...pStyle, margin: "0 0 8px" }}>
                     When the person has a Desk account, you don&rsquo;t need a
-                    link — make them part of the doc&rsquo;s audience group:
+                    link — add them to the doc&rsquo;s <strong>space</strong>:
                   </p>
                   <ol style={{ ...pStyle, paddingLeft: 20, margin: "0 0 8px" }}>
                     <li style={{ marginBottom: 4 }}>
-                      In <InLink href="/admin">/admin</InLink> → Audiences, find
-                      (or create) an audience for them — e.g. {code("bob")} —
-                      and <strong>add their user</strong> to it. Leave
-                      &ldquo;visible to all members&rdquo; off so only listed
-                      members see it.
+                      Open the doc&rsquo;s space at{" "}
+                      <InLink href="/spaces">/spaces/[slug]</InLink> and{" "}
+                      <strong>add their user</strong> as a member. Keep the space{" "}
+                      {code("private")} so only members see it.
                     </li>
                     <li style={{ marginBottom: 4 }}>
-                      On the doc&rsquo;s <strong>Sharing</strong> panel, set the
-                      audience to {code("bob")}. The preview reads{" "}
-                      {code("you + Bob")}.
+                      Or, to open it to everyone, set the space&rsquo;s visibility
+                      to {code("unlisted")} or {code("public")}.
                     </li>
                   </ol>
                   <p style={{ ...mutedP, margin: 0 }}>
-                    The teammate now sees the doc in their <InLink href="/docs">/docs</InLink>,
-                    search, and event feed — no link, no public URL. Over MCP this
-                    is {code("add_audience_member")} then{" "}
-                    {code("publish_doc")} (or PATCH the audience).{" "}
+                    The teammate now sees the space&rsquo;s docs in{" "}
+                    <InLink href="/spaces">/spaces</InLink>, search, and event feed
+                    — no link, no public URL. Over MCP this is{" "}
+                    {code("set_space_member")}.{" "}
                     <strong>Vs. a link:</strong> use a share link only for people{" "}
                     <em>without</em> a Desk account.
                   </p>
