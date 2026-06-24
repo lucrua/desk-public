@@ -78,6 +78,14 @@ export const EVENT_KINDS = [
   "space.updated",
   "space.member_added",
   "space.member_removed",
+  // External Collaboration (Slice E1) — invite lifecycle. An invite is a
+  // capability link an owner/admin mints; accepting it self-serves an external
+  // partner into the space. The payload may carry a target email (admin-audit
+  // data), so — like space.member_* — these are ADMIN-ONLY in the feed and never
+  // reach a member or the share host. invite_created: { slug, role, inviteId };
+  // invite_accepted: { slug, role, userId } (never the raw token).
+  "space.invite_created",
+  "space.invite_accepted",
 ] as const;
 
 export type EventKind = (typeof EVENT_KINDS)[number];
@@ -92,6 +100,8 @@ const ADMIN_ONLY_KINDS = new Set<string>([
   "space.updated",
   "space.member_added",
   "space.member_removed",
+  "space.invite_created",
+  "space.invite_accepted",
 ]);
 
 /**

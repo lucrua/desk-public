@@ -35,6 +35,7 @@ export const SPACE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 export type SpaceRole = "owner" | "writer" | "reader";
 export type SpaceVisibility = "private" | "unlisted" | "public";
+export type SpacePushPolicy = "direct" | "proposal";
 
 export type SpaceRow = typeof spaces.$inferSelect;
 
@@ -455,6 +456,31 @@ export async function setSpaceVisibility(
     await emitEvent(tx, {
       kind: "space.updated",
       payload: { slug: space.slug, visibility },
+      actorName,
+    });
+  });
+  return true;
+}
+
+/**
+ * Set a space's PUSH POLICY (direct|proposal) — the git-push branch-protection
+ * mode (External Collaboration, E1). `direct` (the default) lets writers push
+ * `main`; `proposal` routes non-owner writer pushes to `proposals/*` (ENFORCED in
+ * E2 — E1 only stores the setting + reflects it in the setup prompt + UI). Emits
+ * space.updated. Returns false when the slug is unknown.
+ */
+export async function setSpacePushPolicy(
+  spaceSlug: string,
+  pushPolicy: SpacePushPolicy,
+  actorName: string,
+): Promise<boolean> {
+  const space = await getSpaceBySlug(spaceSlug);
+  if (!space) return false;
+  await db.transaction(async (tx) => {
+    await tx.update(spaces).set({ pushPolicy }).where(eq(spaces.id, space.id));
+    await emitEvent(tx, {
+      kind: "space.updated",
+      payload: { slug: space.slug, pushPolicy },
       actorName,
     });
   });
