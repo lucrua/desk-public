@@ -162,6 +162,7 @@ describe("MCP route — protocol flow", () => {
         "create_share",
         "create_space",
         "create_token",
+        "decide_proposal",
         "decide_revision",
         "delete_comment",
         "delete_doc",
@@ -177,6 +178,7 @@ describe("MCP route — protocol flow", () => {
         "list_docs",
         "list_events",
         "list_open_revisions",
+        "list_proposals",
         "list_revisions",
         "list_shares",
         "list_spaces",
@@ -198,9 +200,9 @@ describe("MCP route — protocol flow", () => {
     );
   });
 
-  it("tools/list returns all 41 tools (member) — same list, authz is at call time", async () => {
+  it("tools/list returns all 43 tools (member) — same list, authz is at call time", async () => {
     const { json } = await toolsList("member");
-    expect(json.result.tools).toHaveLength(41);
+    expect(json.result.tools).toHaveLength(43);
   });
 });
 

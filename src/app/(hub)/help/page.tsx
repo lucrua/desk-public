@@ -963,7 +963,7 @@ git push desk HEAD:main`}
                   {code("https://<hub-host>/mcp")} — the same host as this
                   workspace, behind the same Cloudflare Access wall.{" "}
                   <strong>MCP is the agent surface; REST is the UI surface</strong>{" "}
-                  — deliberately not 1:1. There are 41 tools covering what an
+                  — deliberately not 1:1. There are 43 tools covering what an
                   agent actually drives — docs and versions ({code("list_docs")},{" "}
                   {code("search_docs")}, {code("get_doc")}, {code("get_version")},{" "}
                   {code("publish_doc")}, {code("update_doc")}{" "}
@@ -983,7 +983,8 @@ git push desk HEAD:main`}
                   {code("create_card")}, {code("update_card")}, {code("move_card")},{" "}
                   {code("assign_card")}, {code("archive_card")}),
                   spaces and membership ({code("list_spaces")}, {code("create_space")},{" "}
-                  {code("set_space_member")}, {code("create_invite")}), principal tokens ({" "}
+                  {code("set_space_member")}, {code("create_invite")}), proposals (PR review:{" "}
+                  {code("list_proposals")}, {code("decide_proposal")}), principal tokens ({" "}
                   {code("create_token")}, {code("list_tokens")},{" "}
                   {code("revoke_token")}),
                   plus {code("whoami")}.

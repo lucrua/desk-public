@@ -100,6 +100,7 @@ import {
   listSpaces,
   createSpace,
   setSpaceMemberRole,
+  listSpaceMembers,
   canManageSpace,
   getSpaceBySlug,
   mintPrincipalToken,
@@ -110,6 +111,11 @@ import {
 } from "@/lib/spaces";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
 import { createInvite } from "@/lib/invites/invites";
+import {
+  listProposalsForSpace,
+  acceptProposalForSpace,
+  rejectProposalForSpace,
+} from "@/lib/proposals-service";
 
 // ── Shared result shape ────────────────────────────────────────────────────────
 
@@ -787,6 +793,84 @@ const createInviteTool = defineTool({
   },
 });
 
+// ── Proposals (PR review) — External Collaboration, Slice E2 ───────────────────
+// In `proposal` push-policy mode a non-owner writer's push lands on a
+// `proposals/<name>` ref; the owner's AGENT may triage these. Parity with
+// GET /api/spaces/[slug]/proposals + the accept/reject routes (the MCP=agent
+// surface rule). list_proposals: admin/owner/writer (a contributor) may list.
+// decide_proposal: admin or the space OWNER only (mirrors canManageSpace).
+
+const listProposalsTool = defineTool({
+  name: "list_proposals",
+  description:
+    "List a space's open PROPOSALS — the `proposals/<name>` refs a non-owner writer pushed under the 'proposal' push policy (External Collaboration, E2). Each: { name, ref, tipSha, pusher, subject, createdAt }. Allowed for an admin, the space owner, or a writer (a contributor). A reader / non-member → an error (uniform, no existence leak). Mirrors GET /api/spaces/[slug]/proposals.",
+  inputSchema: {
+    slug: z.string().describe("Space slug."),
+  },
+  handler: async (principal, args) => {
+    if (!isStaff(principal)) return fail(STAFF_ONLY);
+    const space = await getSpaceBySlug(args.slug);
+    // Uniform error for unknown space OR a caller who may not see it — never
+    // distinguish (no existence leak).
+    if (!space) return fail("Not found");
+    const isAdmin = principal.kind === "admin";
+    let canSee = isAdmin;
+    if (!canSee) {
+      const myUserId = await resolvePrincipalUserId(principal);
+      if (myUserId != null) {
+        const members = (await listSpaceMembers(args.slug)) ?? [];
+        const myRole = members.find((m) => m.userId === myUserId)?.role ?? null;
+        canSee = myRole === "owner" || myRole === "writer";
+      }
+    }
+    if (!canSee) return fail("Not found");
+    const result = await listProposalsForSpace(args.slug);
+    if (!result.ok) return fail("Not found");
+    return ok({ proposals: result.proposals });
+  },
+});
+
+const decideProposalTool = defineTool({
+  name: "decide_proposal",
+  description:
+    "ACCEPT or REJECT a space proposal (External Collaboration, E2). decision='accept' merges `proposals/<name>` into main (fast-forward or a merge commit authored by you), reindexes the space, and deletes the proposal ref. decision='reject' deletes the ref (main untouched). Allowed for an admin or the space OWNER only. A merge conflict returns an error (main is left untouched). Mirrors POST /api/spaces/[slug]/proposals/[name]/accept|reject. Emits proposal.accepted / proposal.rejected.",
+  inputSchema: {
+    slug: z.string().describe("Space slug."),
+    name: z.string().describe("Proposal name (the <name> in proposals/<name>)."),
+    decision: z.enum(["accept", "reject"]).describe("'accept' (merge → main) or 'reject' (delete ref)."),
+  },
+  handler: async (principal, args) => {
+    if (!isStaff(principal)) return fail(STAFF_ONLY);
+    const space = await getSpaceBySlug(args.slug);
+    if (!space) return fail("Not found");
+    if (!(await canManageSpace(principal, space))) return fail("Not found");
+
+    if (args.decision === "reject") {
+      const r = await rejectProposalForSpace(args.slug, args.name, principal.name);
+      if (!r.ok) return fail("Not found");
+      return ok({ ok: true, decision: "reject", name: args.name });
+    }
+
+    const email = "email" in principal && principal.email ? principal.email : "desk@localhost";
+    const r = await acceptProposalForSpace(args.slug, args.name, {
+      name: principal.name,
+      email,
+    });
+    if (!r.ok) {
+      if (r.reason === "conflict") return fail("merge conflict — resolve and re-push the proposal");
+      return fail("Not found");
+    }
+    return ok({
+      ok: true,
+      decision: "accept",
+      name: args.name,
+      merged: r.merged,
+      newMainSha: r.newMainSha,
+      reindexed: r.reindexed,
+    });
+  },
+});
+
 // ── Principal tokens (document-host Phase 2) ────────────────────────────────────
 // The git Basic-auth credential, self-serve. Parity with /api/tokens. A token is
 // always scoped to the CALLER's user; a member touches only their own, an admin
@@ -1459,6 +1543,9 @@ export const TOOLS: ReadonlyArray<ToolDef> = [
   createSpaceTool,
   setSpaceMemberTool,
   createInviteTool,
+  // Proposals (PR review) — External Collaboration, E2.
+  listProposalsTool,
+  decideProposalTool,
   // Principal tokens — the git Basic-auth credential, self-serve.
   createTokenTool,
   listTokensTool,

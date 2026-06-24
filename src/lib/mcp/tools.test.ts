@@ -35,10 +35,10 @@ async function run(name: string, principal: Principal, args: Record<string, unkn
 }
 
 describe("MCP tools — registry shape", () => {
-  it("exposes exactly 41 uniquely-named tools, each with a description", () => {
-    expect(TOOLS).toHaveLength(41);
+  it("exposes exactly 43 uniquely-named tools, each with a description", () => {
+    expect(TOOLS).toHaveLength(43);
     const names = new Set(TOOLS.map((t) => t.name));
-    expect(names.size).toBe(41);
+    expect(names.size).toBe(43);
     for (const t of TOOLS) {
       expect(t.description.length).toBeGreaterThan(10);
       expect(typeof t.inputSchema).toBe("object");
