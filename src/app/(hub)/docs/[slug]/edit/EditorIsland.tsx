@@ -51,11 +51,22 @@ export default function EditorIsland({
   slug,
   initialContent,
   canPublishDirect = false,
+  spaceSlug,
+  baseCommit,
 }: {
   slug: string;
   initialContent: string;
-  /** When true, saves via POST /publish (direct, no approval); false → /revisions (propose). */
+  /** When true, saves via the git-truth space-docs endpoint (direct, no
+   * approval) when `spaceSlug` is given, else legacy POST /publish; false →
+   * /revisions (propose). */
   canPublishDirect?: boolean;
+  /** The owning space slug. When provided WITH canPublishDirect, the direct save
+   * commits to git via PUT /api/spaces/[spaceSlug]/docs (web-author) — the
+   * git-truth replacement for the legacy DB publish. */
+  spaceSlug?: string;
+  /** The commit the editor loaded (docs.currentCommit) — the CAS base so a
+   * concurrent change is caught as stale. Only meaningful with the git path. */
+  baseCommit?: string | null;
 }) {
   const router = useRouter();
   const [content, setContent] = useState(initialContent);
@@ -72,8 +83,25 @@ export default function EditorIsland({
     setError(null);
     setSubmitting(true);
     try {
-      if (canPublishDirect) {
-        // Owner / admin path: POST directly to /publish, return to doc.
+      if (canPublishDirect && spaceSlug) {
+        // Owner / admin GIT-TRUTH path: PUT the space-docs endpoint — the save
+        // becomes one git commit on main and re-projects. baseCommit drives the
+        // CAS so a concurrent edit is caught (409 stale).
+        const res = await fetch(`/api/spaces/${encodeURIComponent(spaceSlug)}/docs`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ slug, content, baseCommit: baseCommit ?? undefined }),
+        });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => null)) as { error?: string } | null;
+          setError(data?.error ?? `Could not save (${res.status})`);
+          setSubmitting(false);
+          return;
+        }
+        router.push(`/docs/${encodeURIComponent(slug)}`);
+        router.refresh();
+      } else if (canPublishDirect) {
+        // Legacy DB publish (no space context) — kept as a fallback.
         const res = await fetch(`/api/docs/${encodeURIComponent(slug)}/publish`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -85,7 +113,6 @@ export default function EditorIsland({
           setSubmitting(false);
           return;
         }
-        // Return to doc — new version is live.
         router.push(`/docs/${encodeURIComponent(slug)}`);
         router.refresh();
       } else {

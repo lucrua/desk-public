@@ -15,6 +15,8 @@ import { listUsers } from "@/lib/users";
 import { gitRepoUrl, gitRemoteBase } from "@/lib/git-url";
 import { renderSetupPrompt } from "@/lib/invites/setup-prompt";
 import { listProposalsForSpace } from "@/lib/proposals-service";
+import { listSpaceFiles } from "@/lib/web-author";
+import { slugForPath } from "@/lib/git/indexer";
 import SpaceVisibility from "./SpaceVisibility";
 import PushPolicy from "./PushPolicy";
 import InvitePanel from "./InvitePanel";
@@ -22,6 +24,9 @@ import SetupPromptView from "./SetupPromptView";
 import MembersPanel, { type MemberRow, type UserChoice } from "./MembersPanel";
 import PushHelp from "./PushHelp";
 import SpaceDocsTree from "./SpaceDocsTree";
+import SpaceFilesView from "./SpaceFilesView";
+import NewDocPanel from "./NewDocPanel";
+import UploadPanel from "./UploadPanel";
 import ProposalsPanel from "./ProposalsPanel";
 
 export const dynamic = "force-dynamic";
@@ -78,6 +83,21 @@ export default async function SpaceDetailPage({
   const ownerSlug = await ownerSlugForSpace(space);
   const repoUrl = gitRepoUrl(ownerSlug, space.slug, hdrs);
   const pushPolicy = (space.pushPolicy as "direct" | "proposal") ?? "direct";
+
+  // Web-author (Slice W1): an owner/admin (canManage) authors directly to main; a
+  // writer authors too (direct → main, proposal → a PR). Readers cannot author.
+  const canWebAuthor = canManage || myRole === "writer";
+  const canPublishDirect = canManage; // owner/admin commit straight to main
+  // Full git tree (every committed file, not just projected docs) — uploads of
+  // any type show here. Doc-type files link to their rendered page via the
+  // deterministic slug; other files link to the raw route.
+  const spaceFiles = canWebAuthor || isAdmin || myMembership
+    ? (await listSpaceFiles(space.slug)).map((f) => ({
+        path: f.path,
+        isDoc: f.isDoc,
+        docSlug: f.isDoc ? slugForPath(f.path) : undefined,
+      }))
+    : [];
 
   // The setup-prompt TEMPLATE for members: a `<token>` placeholder (not a live
   // credential — the live token is handed out once at invite-accept time, or
@@ -197,17 +217,53 @@ export default async function SpaceDetailPage({
         />
       </section>
 
+      {/* Author from the web (owner/admin direct; writer direct-or-proposal). */}
+      {canWebAuthor && (
+        <section style={{ marginBottom: 28 }}>
+          <h2 style={sectionLabel}>author from the web</h2>
+          <p style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--muted)" }}>
+            Every save is one git commit into this space&rsquo;s repo
+            {canPublishDirect
+              ? "."
+              : pushPolicy === "proposal"
+                ? " — your saves open a proposal for the owner to review."
+                : "."}
+          </p>
+          <div style={{ marginBottom: 16 }}>
+            <NewDocPanel
+              slug={space.slug}
+              pushPolicy={pushPolicy}
+              canPublishDirect={canPublishDirect}
+            />
+          </div>
+          <div>
+            <h3 style={{ ...sectionLabel, margin: "0 0 8px" }}>upload a file</h3>
+            <UploadPanel
+              slug={space.slug}
+              pushPolicy={pushPolicy}
+              canPublishDirect={canPublishDirect}
+            />
+          </div>
+        </section>
+      )}
+
       {/* Docs — collapsible folder tree by the doc `path` field. */}
-      <section>
+      <section style={{ marginBottom: 28 }}>
         <h2 style={sectionLabel}>docs in this space ({visibleDocs.length})</h2>
         {visibleDocs.length === 0 ? (
           <p style={{ fontSize: 13, color: "var(--faint)", margin: 0 }}>
-            No docs yet. Push files to this space (see above) and they&rsquo;ll
-            render here.
+            No docs yet. Create one above, push files to this space, and
+            they&rsquo;ll render here.
           </p>
         ) : (
           <SpaceDocsTree docs={visibleDocs} />
         )}
+      </section>
+
+      {/* Files — the full git tree (uploads of any type included). */}
+      <section>
+        <h2 style={sectionLabel}>files ({spaceFiles.length})</h2>
+        <SpaceFilesView slug={space.slug} files={spaceFiles} />
       </section>
     </div>
   );

@@ -21,6 +21,8 @@ export default function EditorLoader(props: {
   slug: string;
   initialContent: string;
   canPublishDirect: boolean;
+  spaceSlug?: string;
+  baseCommit?: string | null;
 }) {
   return <EditorIsland {...props} />;
 }

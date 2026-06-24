@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getPrincipal, isStaff } from "@/lib/auth";
 import { getDocBySlug, scopeForPrincipal } from "@/lib/docs";
 import { canPublishVersion } from "@/lib/permissions";
+import { getSpaceById } from "@/lib/spaces";
 import EditorLoader from "./EditorLoader";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +39,12 @@ export default async function DocEditPage({
 
   // Whether this principal can publish directly (skip approval queue).
   const canPublishDirect = canPublishVersion(principal, doc);
+
+  // Resolve the owning space slug so a direct save commits to GIT (web-author)
+  // rather than the legacy DB publish. baseCommit = the commit the projection
+  // was built from (docs.currentCommit) — the CAS base for a concurrent edit.
+  const space = await getSpaceById(doc.spaceId);
+  const spaceSlug = space?.slug;
 
   return (
     <div style={{ maxWidth: 1060, margin: "0 auto", padding: "26px 20px 80px" }}>
@@ -74,7 +81,13 @@ export default async function DocEditPage({
           : "Readers keep seeing the published version. Your edit queues as a proposed revision for an admin to review and accept."}
       </p>
 
-      <EditorLoader slug={doc.slug} initialContent={version.content} canPublishDirect={canPublishDirect} />
+      <EditorLoader
+        slug={doc.slug}
+        initialContent={version.content}
+        canPublishDirect={canPublishDirect}
+        spaceSlug={spaceSlug}
+        baseCommit={doc.currentCommit}
+      />
     </div>
   );
 }
