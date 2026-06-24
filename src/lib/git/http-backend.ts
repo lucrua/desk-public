@@ -39,6 +39,15 @@ export type BackendRequest = {
   /** The authenticated principal's id, surfaced to the backend as REMOTE_USER
    * (git records it; useful for audit). */
   remoteUser: string;
+  /** The pusher's resolved space role (owner|writer|reader). Passed to the
+   * pre-receive policy hook as DESK_PUSHER_ROLE for the E2 write-boundary
+   * enforcement (push-policy.ts). Verified to propagate git-http-backend →
+   * git-receive-pack → hook. Only meaningful for receive-pack; harmless on
+   * upload-pack. */
+  pusherRole?: string;
+  /** The target space's push policy (direct|proposal). Passed to the pre-receive
+   * hook as DESK_PUSH_POLICY (E2). */
+  pushPolicy?: string;
 };
 
 export type BackendResponse = {
@@ -75,6 +84,12 @@ export function runHttpBackend(req: BackendRequest): Promise<BackendResponse> {
       // Advertise both services; the auth gate already decided which is allowed,
       // and PATH_INFO scopes the actual operation.
       GIT_HTTP_RECEIVE_PACK: "1",
+      // E2 push-policy enforcement: surface the pusher's role + the space policy
+      // to the pre-receive hook (push-policy.ts). These propagate through
+      // git-http-backend → git-receive-pack → the hook (probed + tested). The
+      // hook FAILS CLOSED on an unset value, so always set them on a push.
+      ...(req.pusherRole != null ? { DESK_PUSHER_ROLE: req.pusherRole } : {}),
+      ...(req.pushPolicy != null ? { DESK_PUSH_POLICY: req.pushPolicy } : {}),
     };
 
     const child = spawn(httpBackendBin(), [], { env });

@@ -16,4 +16,17 @@ export async function register(): Promise<void> {
   // connections during static-analysis / build time.
   const { ensureBootstrapAdmin } = await import("@/lib/auth/cloudflare");
   await ensureBootstrapAdmin();
+
+  // External Collaboration E2: backfill the push-policy pre-receive hook onto
+  // every EXISTING bare repo. Spaces created before E2 have no policy hook;
+  // this sweep installs it so the git write boundary is enforced regardless of
+  // when a space was created. Idempotent + best-effort (a failure logs, never
+  // crashes boot).
+  try {
+    const { backfillPolicyHooks } = await import("@/lib/git/repo");
+    const n = await backfillPolicyHooks();
+    if (n > 0) console.log(`[startup] backfilled push-policy hook onto ${n} repo(s)`);
+  } catch (e) {
+    console.error("[startup] push-policy hook backfill failed:", (e as Error)?.message);
+  }
 }

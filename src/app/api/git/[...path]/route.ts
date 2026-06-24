@@ -29,6 +29,7 @@ import { parseGitRequest, segmentsAfterMount } from "@/lib/git/route-parse";
 import { runHttpBackend } from "@/lib/git/http-backend";
 import { bareRepoPath, initBareRepo, refTip } from "@/lib/git/repo";
 import { reindexSpaceByDisk } from "@/lib/git/indexer";
+import { getSpaceBySlug } from "@/lib/spaces";
 
 // Resolve fresh every request — auth must never be cached, and a push must
 // re-render immediately.
@@ -90,6 +91,16 @@ async function handle(req: Request): Promise<Response> {
   const isPush = parsed.service === "git-receive-pack" && req.method === "POST";
   const beforeSha = isPush ? await refTip(repoPath) : null;
 
+  // E2: resolve the space's push policy so the pre-receive hook can enforce the
+  // ref-level write boundary. The pre-receive hook FAILS CLOSED on a missing
+  // value, so we pass an explicit policy; default to 'direct' only when the row
+  // is somehow unreadable (authorizeGit already proved the space exists, so this
+  // is belt-and-suspenders — and 'proposal' would be the conservative default,
+  // but the hook itself defaults to 'proposal' when env is absent, so a missing
+  // value already errs strict). We resolve the real stored policy here.
+  const spaceRow = isPush ? await getSpaceBySlug(decision.spaceSlug) : null;
+  const pushPolicy = spaceRow?.pushPolicy ?? "direct";
+
   // ── Spawn git-http-backend ────────────────────────────────────────────────
   const bodyBuf = Buffer.from(await req.arrayBuffer());
   let backend;
@@ -102,6 +113,9 @@ async function handle(req: Request): Promise<Response> {
       contentType: req.headers.get("content-type") ?? "",
       body: bodyBuf,
       remoteUser: String(decision.userId),
+      // E2 push-policy enforcement env → the pre-receive hook.
+      pusherRole: decision.role,
+      pushPolicy,
     });
   } catch {
     return uniform404();

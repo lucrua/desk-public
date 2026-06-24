@@ -15,9 +15,10 @@
  * the caller already authorized the space.
  */
 import { spawn } from "node:child_process";
-import { mkdir, access } from "node:fs/promises";
+import { mkdir, access, writeFile, chmod, readdir } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import path from "node:path";
+import { preReceivePolicyHookScript } from "./push-policy";
 
 /** Root of all on-disk state. Configurable; defaults to <repo>/.desk-data so a
  * dev box works with zero config. Production sets DESK_DATA_DIR to a backed-up
@@ -88,31 +89,97 @@ export function runGit(
 
 /**
  * Initialize a bare repo at `repoPath` (idempotent — a no-op if it already
- * exists). Enables `http.receivepack` so the smart-HTTP push path works, and
- * installs the post-receive hook (re-projection trigger) when `hookScript` is
- * given. Returns the repo path.
+ * exists, EXCEPT the policy hook, which is always (re)installed so an existing
+ * repo can't be left without the E2 write-boundary enforcement). Enables
+ * `http.receivepack` so the smart-HTTP push path works, installs the
+ * push-policy `pre-receive` hook (E2 enforcement — see push-policy.ts), and
+ * installs the post-receive re-projection hook when `hookScript` is given.
+ * Returns the repo path.
  */
 export async function initBareRepo(
   repoPath: string,
   opts: { hookScript?: string } = {},
 ): Promise<string> {
-  if (await repoExists(repoPath)) return repoPath;
-  await mkdir(path.dirname(repoPath), { recursive: true });
-  const init = await runGit(["init", "--bare", "--initial-branch=main", repoPath]);
-  if (init.code !== 0) {
-    throw new Error(`git init --bare failed: ${init.stderr}`);
+  const alreadyExists = await repoExists(repoPath);
+  if (!alreadyExists) {
+    await mkdir(path.dirname(repoPath), { recursive: true });
+    const init = await runGit(["init", "--bare", "--initial-branch=main", repoPath]);
+    if (init.code !== 0) {
+      throw new Error(`git init --bare failed: ${init.stderr}`);
+    }
+    // Allow receive-pack over HTTP (the auth gate is in the route middleware).
+    await runGit(["config", "http.receivepack", "true"], { cwd: repoPath });
+    // Accept pushes to the checked-out branch of a bare repo (no working tree).
+    await runGit(["config", "receive.denyCurrentBranch", "ignore"], { cwd: repoPath });
   }
-  // Allow receive-pack over HTTP (the auth gate is in the route middleware).
-  await runGit(["config", "http.receivepack", "true"], { cwd: repoPath });
-  // Accept pushes to the checked-out branch of a bare repo (no working tree).
-  await runGit(["config", "receive.denyCurrentBranch", "ignore"], { cwd: repoPath });
+  // ALWAYS (re)install the push-policy pre-receive hook — even on an existing
+  // repo — so the E2 write boundary is enforced regardless of when the repo was
+  // created (the startup sweep relies on initBareRepo being safe to re-run).
+  await installPolicyHook(repoPath);
   if (opts.hookScript) {
-    const { writeFile, chmod } = await import("node:fs/promises");
     const hookPath = path.join(repoPath, "hooks", "post-receive");
     await writeFile(hookPath, opts.hookScript, { mode: 0o755 });
     await chmod(hookPath, 0o755);
   }
   return repoPath;
+}
+
+/**
+ * Install (or overwrite) the push-policy `pre-receive` hook on a bare repo — the
+ * E2 enforcement point (push-policy.ts). Idempotent: writes the current hook
+ * script with 0755 perms every time, so a repo always carries the latest policy
+ * logic. AUTH-SENSITIVE — this is the on-disk half of the write boundary.
+ */
+export async function installPolicyHook(repoPath: string): Promise<void> {
+  const hooksDir = path.join(repoPath, "hooks");
+  await mkdir(hooksDir, { recursive: true });
+  const hookPath = path.join(hooksDir, "pre-receive");
+  await writeFile(hookPath, preReceivePolicyHookScript(), { mode: 0o755 });
+  await chmod(hookPath, 0o755);
+}
+
+/**
+ * Backfill the push-policy pre-receive hook onto EVERY existing bare repo under
+ * `<DATA_DIR>/spaces/**`. Run once on server startup (instrumentation.register)
+ * so spaces created before E2 — which have no policy hook — gain the write-
+ * boundary enforcement without a manual touch. Best-effort + tolerant: a single
+ * unreadable/odd directory is skipped, never throwing (a backfill failure must
+ * not crash boot — but every failure is logged). Returns the count installed.
+ */
+export async function backfillPolicyHooks(): Promise<number> {
+  const root = spacesRoot();
+  let installed = 0;
+  let ownerDirs: string[];
+  try {
+    ownerDirs = await readdir(root);
+  } catch {
+    // No spaces root yet (fresh box) — nothing to backfill.
+    return 0;
+  }
+  for (const owner of ownerDirs) {
+    const ownerPath = path.join(root, owner);
+    let spaceDirs: string[];
+    try {
+      spaceDirs = await readdir(ownerPath);
+    } catch {
+      continue;
+    }
+    for (const space of spaceDirs) {
+      if (!space.endsWith(".git")) continue;
+      const repoPath = path.join(ownerPath, space);
+      if (!(await repoExists(repoPath))) continue;
+      try {
+        await installPolicyHook(repoPath);
+        installed++;
+      } catch (e) {
+        console.error(
+          `[git] backfill policy hook failed for ${repoPath}:`,
+          (e as Error)?.message,
+        );
+      }
+    }
+  }
+  return installed;
 }
 
 /** The default branch ref name we host on. */
