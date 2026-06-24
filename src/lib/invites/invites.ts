@@ -206,7 +206,7 @@ export async function acceptInvite(
   const tokenHash = hashToken(rawToken.trim());
 
   try {
-    return await db.transaction(async (tx) => {
+    const txOut = await db.transaction(async (tx) => {
       // EXPIRY is checked in JS (not SQL `now()`): the columns are `timestamp
       // without time zone` and a non-UTC DB session timezone makes a stored Date
       // (UTC wall-clock) vs `now()::timestamp` (local wall-clock) comparison off
@@ -314,18 +314,31 @@ export async function acceptInvite(
         label: `invite:${spaceRow.slug}`,
       });
 
-      const ownerSlug = await ownerSlugForSpace(spaceRow);
-
       return {
         ok: true as const,
         token,
         userId,
-        spaceSlug: spaceRow.slug,
-        ownerSlug,
+        spaceRow,
         role: invite.role as InviteRole,
         handle: email.split("@")[0] ?? "you",
       };
     });
+
+    if (!txOut.ok) return txOut;
+
+    // Resolve the owner slug AFTER the transaction commits (a read on an
+    // unrelated row — kept out of the txn so no nested non-tx query runs inside
+    // the committed transaction).
+    const ownerSlug = await ownerSlugForSpace(txOut.spaceRow);
+    return {
+      ok: true,
+      token: txOut.token,
+      userId: txOut.userId,
+      spaceSlug: txOut.spaceRow.slug,
+      ownerSlug,
+      role: txOut.role,
+      handle: txOut.handle,
+    };
   } catch {
     // Any unexpected failure rolls back the whole accept (use, user, member,
     // token) and surfaces as a uniform not-found — fail closed, never leak.
