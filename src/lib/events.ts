@@ -93,6 +93,14 @@ export const EVENT_KINDS = [
   // Payload: { slug, name, merged?, tipSha } — never file content.
   "proposal.accepted",
   "proposal.rejected",
+  // Web-author (Slice W1/W2) — a browser save that became a git commit. An
+  // owner/admin direct commit to `main` (doc.web_committed) or a non-owner
+  // writer's web write that opened a `proposals/<handle>` ref (proposal.opened).
+  // Like the rest of the space-write surface these are ADMIN-ONLY in the feed
+  // (a space-management/audit signal). Payload: { slug, ref, newSha, path? } —
+  // ids/refs/shas only, never file content.
+  "doc.web_committed",
+  "proposal.opened",
 ] as const;
 
 export type EventKind = (typeof EVENT_KINDS)[number];
@@ -111,6 +119,8 @@ const ADMIN_ONLY_KINDS = new Set<string>([
   "space.invite_accepted",
   "proposal.accepted",
   "proposal.rejected",
+  "doc.web_committed",
+  "proposal.opened",
 ]);
 
 /**
