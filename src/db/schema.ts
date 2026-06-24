@@ -35,6 +35,15 @@ export const spaceVisibilityEnum = pgEnum("space_visibility", [
 // to one repo.
 export const spaceRoleEnum = pgEnum("space_role", ["owner", "writer", "reader"]);
 
+// A space's PUSH POLICY — the write boundary's branch-protection mode (External
+// Collaboration, Slice E1; enforced in Slice E2). `direct` (the DEFAULT, and the
+// only behaviour before this feature) lets every writer push the hosted `main`
+// branch. `proposal` is the protected mode: a NON-OWNER writer's pushes to `main`
+// are rejected (E2) and must go to `proposals/*`, surfacing as a PR the owner
+// reviews. Owner/admin always push direct. In E1 the column + its UI exist and
+// the setup-prompt template switches on it; the git-transport ENFORCEMENT is E2.
+export const spacePushPolicyEnum = pgEnum("space_push_policy", ["direct", "proposal"]);
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").unique(),          // humans (CF-verified email) — PRIMARY/display email; every email (incl. this one) is mirrored into user_emails
@@ -112,6 +121,11 @@ export const spaces = pgTable("spaces", {
     .notNull()
     .references(() => users.id),
   visibility: spaceVisibilityEnum("visibility").notNull().default("private"),
+  // The git-push branch-protection mode (External Collaboration, E1). `direct`
+  // (default — preserves all pre-feature behaviour) lets writers push `main`;
+  // `proposal` routes non-owner writer pushes to `proposals/*` (enforced in E2).
+  // NOT NULL default 'direct' so every existing space keeps today's behaviour.
+  pushPolicy: spacePushPolicyEnum("push_policy").notNull().default("direct"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -156,6 +170,47 @@ export const principalTokens = pgTable("principal_tokens", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   index("principal_tokens_user_idx").on(t.userId),
+]);
+
+// Space invites — a capability link that lets an EXTERNAL partner self-serve into
+// a space (External Collaboration, Slice E1). An owner/admin mints an invite
+// scoped to ONE space + a target role (writer|reader) + an expiry + a use-limit +
+// (optionally) a target email. The accept flow is PUBLIC (on the share host,
+// CF-Access-bypassed) — external recipients can't pass CF Access, so the invite
+// LINK ITSELF is the authorization. Only the sha256 HASH of the token is stored
+// (mirrors `shares` / `principal_tokens`): the raw token is shown ONCE on mint
+// and at no other time. Resolution is by tokenHash; EVERY failure (unknown /
+// expired / over-maxUses / revoked) collapses to a uniform 404 (no existence
+// leak). Accepting: find-or-create the user, upsert a space_members row at the
+// invite's role, bump `uses`, and mint a principal token — all in one
+// transaction. ACCOUNT CREATION IS GATED BY A VALID INVITE: no invite, no
+// account; the created user is scoped to this one space.
+export const spaceInvites = pgTable("space_invites", {
+  id: serial("id").primaryKey(),
+  spaceId: integer("space_id")
+    .notNull()
+    .references(() => spaces.id),
+  // The space role the accepter is granted. Only writer|reader are invitable —
+  // ownership is never handed out via a link (owner transfer is out of scope).
+  role: spaceRoleEnum("role").notNull(),
+  tokenHash: text("token_hash").notNull().unique(), // sha256 hex — raw token never stored
+  // Optional target email. When set, the invite is "intended for" this address
+  // (surfaced to the owner); it does NOT restrict who may accept (the link is the
+  // capability) and is NEVER used to confirm whether an email already has an
+  // account (no existence leak). Normalized (trim + lowercase) on store.
+  email: text("email"),
+  createdByUserId: integer("created_by_user_id")
+    .notNull()
+    .references(() => users.id),
+  expiresAt: timestamp("expires_at"),          // null = never expires
+  maxUses: integer("max_uses").notNull().default(1),
+  uses: integer("uses").notNull().default(0),
+  // Soft-revoke (parity with shares/tokens): set ⇒ the link resolves to a
+  // uniform 404 immediately, regardless of expiry/uses.
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("space_invites_space_idx").on(t.spaceId),
 ]);
 
 export const docs = pgTable("docs", {

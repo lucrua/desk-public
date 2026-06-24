@@ -6,7 +6,7 @@ import { ensureDefaultSpace, DEFAULT_SPACE_SLUG } from "@/lib/spaces";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
 
 export async function resetDb() {
-  await sql`TRUNCATE events, revisions, comments, share_views, shares, doc_versions, docs, audience_members, user_emails, users, audiences, access_requests, cards, buckets, catalog_links, catalog_items, catalog_schemas, space_members, principal_tokens, spaces RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE events, revisions, comments, share_views, shares, doc_versions, docs, audience_members, user_emails, users, audiences, access_requests, cards, buckets, catalog_links, catalog_items, catalog_schemas, space_invites, space_members, principal_tokens, spaces RESTART IDENTITY CASCADE`;
 }
 
 /**
