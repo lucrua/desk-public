@@ -12,8 +12,12 @@ import {
   type SpaceRole,
 } from "@/lib/spaces";
 import { listUsers } from "@/lib/users";
-import { gitRepoUrl } from "@/lib/git-url";
+import { gitRepoUrl, gitRemoteBase } from "@/lib/git-url";
+import { renderSetupPrompt } from "@/lib/invites/setup-prompt";
 import SpaceVisibility from "./SpaceVisibility";
+import PushPolicy from "./PushPolicy";
+import InvitePanel from "./InvitePanel";
+import SetupPromptView from "./SetupPromptView";
 import MembersPanel, { type MemberRow, type UserChoice } from "./MembersPanel";
 import PushHelp from "./PushHelp";
 import SpaceDocsTree from "./SpaceDocsTree";
@@ -64,6 +68,19 @@ export default async function SpaceDetailPage({
   const visibleDocs = docs.filter((d) => isAdmin || !d.unpublished);
   const ownerSlug = await ownerSlugForSpace(space);
   const repoUrl = gitRepoUrl(ownerSlug, space.slug, hdrs);
+  const pushPolicy = (space.pushPolicy as "direct" | "proposal") ?? "direct";
+
+  // The setup-prompt TEMPLATE for members: a `<token>` placeholder (not a live
+  // credential — the live token is handed out once at invite-accept time, or
+  // minted at /settings/tokens). The push line already reflects push_policy.
+  const setupPrompt = renderSetupPrompt({
+    ownerSlug,
+    spaceSlug: space.slug,
+    gitHostBase: gitRemoteBase(hdrs),
+    token: "<token>",
+    pushPolicy,
+    handle: myMembership?.tokenName ?? (myMembership?.email ? myMembership.email.split("@")[0] : "you"),
+  });
 
   // For the members panel's "add by email" select, surface active users (admins
   // only — the only ones who can add members).
@@ -115,11 +132,42 @@ export default async function SpaceDetailPage({
         )}
       </section>
 
+      {/* Push policy */}
+      <section style={{ marginBottom: 28 }}>
+        <h2 style={sectionLabel}>push policy</h2>
+        {canManage ? (
+          <PushPolicy slug={space.slug} current={pushPolicy} />
+        ) : (
+          <p style={{ fontSize: 13, color: "var(--muted)", margin: 0 }}>
+            This space&rsquo;s push policy is <strong>{pushPolicy}</strong>.{" "}
+            {pushPolicy === "proposal"
+              ? "Non-owner writers push to proposals/* (opens a PR for the owner)."
+              : "Writers push the hosted main branch directly."}
+          </p>
+        )}
+      </section>
+
+      {/* Invites (owner/admin) */}
+      {canManage && (
+        <section style={{ marginBottom: 28 }}>
+          <h2 style={sectionLabel}>invite an external partner</h2>
+          <InvitePanel slug={space.slug} />
+        </section>
+      )}
+
       {/* Push help */}
       <section style={{ marginBottom: 28 }}>
         <h2 style={sectionLabel}>push to this space</h2>
         <PushHelp repoUrl={repoUrl} canPush={canManage || myRole === "writer"} />
       </section>
+
+      {/* Setup prompt (members) — paste-able onboarding for an agent. */}
+      {myMembership && (
+        <section style={{ marginBottom: 28 }}>
+          <h2 style={sectionLabel}>agent setup prompt</h2>
+          <SetupPromptView prompt={setupPrompt} />
+        </section>
+      )}
 
       {/* Members */}
       <section style={{ marginBottom: 28 }}>
