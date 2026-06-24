@@ -827,7 +827,7 @@ describe("MCP parity — 4 new tools registered", () => {
     expect(TOOLS.find((t) => t.name === "distribution_overview")).toBeDefined();
   });
 
-  it("total tool count is 40 (Slice-2 D6: catalog tools removed)", () => {
-    expect(TOOLS.length).toBe(40);
+  it("total tool count is 41 (E1: create_invite added)", () => {
+    expect(TOOLS.length).toBe(41);
   });
 });

@@ -109,6 +109,7 @@ import {
   tokenOwnerUserId,
 } from "@/lib/spaces";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
+import { createInvite } from "@/lib/invites/invites";
 
 // ── Shared result shape ────────────────────────────────────────────────────────
 
@@ -732,6 +733,57 @@ const setSpaceMemberTool = defineTool({
     const out = await setSpaceMemberRole(args.slug, args.user_id, args.role, principal.name);
     if (!out.ok) return fail(out.error);
     return ok({ ok: true, role: out.role });
+  },
+});
+
+const createInviteTool = defineTool({
+  name: "create_invite",
+  description:
+    "Mint an INVITE capability link for a space — a self-serve onboarding link for an EXTERNAL partner (External Collaboration, E1). Allowed for an admin or the space OWNER. role is 'writer'|'reader' (ownership is never invitable). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `max_uses` defaults to 1. `email` is an optional target (audit only — it never restricts who may accept). Returns the one-time invite URL (`<SHARE_BASE_URL>/invite/<token>`); the raw token appears EXACTLY ONCE. Mirrors POST /api/spaces/[slug]/invites. Emits space.invite_created.",
+  inputSchema: {
+    slug: z.string().describe("Space slug to invite into."),
+    role: z.enum(["writer", "reader"]).describe("Space role the accepter is granted."),
+    email: z.string().optional().describe("Optional target email (audit only; never restricts who may accept and never leaks existence)."),
+    expires_in_days: z
+      .number()
+      .nonnegative()
+      .optional()
+      .describe("Days until expiry: omit = 7 days; 0 = never; positive = that many days."),
+    max_uses: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("How many times the invite may be accepted (default 1)."),
+  },
+  handler: async (principal, args) => {
+    if (!isStaff(principal)) return fail(STAFF_ONLY);
+    const space = await getSpaceBySlug(args.slug);
+    if (!space) return fail("Unknown space");
+    if (!(await canManageSpace(principal, space))) return fail(ADMIN_ONLY);
+    const createdByUserId = await resolvePrincipalUserId(principal);
+    if (createdByUserId == null) return fail("Cannot resolve your user identity");
+
+    // 0 means "never expire" → null; otherwise pass as-is (undefined = 7d default).
+    const expiresInDays = args.expires_in_days === 0 ? null : args.expires_in_days;
+
+    const out = await createInvite({
+      spaceSlug: args.slug,
+      role: args.role,
+      createdByUserId,
+      email: args.email,
+      expiresInDays,
+      maxUses: args.max_uses,
+      actorName: principal.name,
+    });
+    if (!out.ok) return fail(out.error);
+    return ok({
+      id: out.id,
+      inviteUrl: out.inviteUrl,
+      role: out.role,
+      expiresAt: out.expiresAt,
+      maxUses: out.maxUses,
+    });
   },
 });
 
@@ -1406,6 +1458,7 @@ export const TOOLS: ReadonlyArray<ToolDef> = [
   listSpacesTool,
   createSpaceTool,
   setSpaceMemberTool,
+  createInviteTool,
   // Principal tokens — the git Basic-auth credential, self-serve.
   createTokenTool,
   listTokensTool,

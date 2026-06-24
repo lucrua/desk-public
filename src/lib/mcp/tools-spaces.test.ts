@@ -67,4 +67,32 @@ describe("MCP space tools (parity with /api/spaces)", () => {
     const listed = await run("list_spaces", member);
     expect((listed.structuredContent?.spaces as unknown[]).length).toBe(0);
   });
+
+  describe("create_invite (External Collaboration E1)", () => {
+    it("admin mints an invite → one-time inviteUrl", async () => {
+      await run("create_space", admin, { slug: "proj" });
+      const r = await run("create_invite", admin, { slug: "proj", role: "writer" });
+      expect(r.isError).toBeFalsy();
+      const sc = r.structuredContent as { inviteUrl: string; role: string };
+      expect(sc.inviteUrl).toContain("/invite/");
+      expect(sc.role).toBe("writer");
+    });
+
+    it("a non-owner member is rejected (admin/owner only)", async () => {
+      await run("create_space", admin, { slug: "proj" });
+      const r = await run("create_invite", member, { slug: "proj", role: "reader" });
+      expect(r.isError).toBe(true);
+    });
+
+    it("anonymous is rejected", async () => {
+      await run("create_space", admin, { slug: "proj" });
+      const r = await run("create_invite", anon, { slug: "proj", role: "reader" });
+      expect(r.isError).toBe(true);
+    });
+
+    it("unknown space → error", async () => {
+      const r = await run("create_invite", admin, { slug: "nope", role: "writer" });
+      expect(r.isError).toBe(true);
+    });
+  });
 });

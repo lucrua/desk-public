@@ -138,7 +138,7 @@ describe("MCP route — protocol flow", () => {
     expect(json.result.protocolVersion).toBeTruthy();
   });
 
-  it("tools/list returns all 40 tools (admin)", async () => {
+  it("tools/list returns all 41 tools (admin)", async () => {
     const { json } = await toolsList("admin");
     const names = json.result.tools.map((t: { name: string }) => t.name).sort();
     expect(names).toEqual(
@@ -158,6 +158,7 @@ describe("MCP route — protocol flow", () => {
         "assign_card",
         "create_card",
         "create_directory_share",
+        "create_invite",
         "create_share",
         "create_space",
         "create_token",
@@ -197,9 +198,9 @@ describe("MCP route — protocol flow", () => {
     );
   });
 
-  it("tools/list returns all 40 tools (member) — same list, authz is at call time", async () => {
+  it("tools/list returns all 41 tools (member) — same list, authz is at call time", async () => {
     const { json } = await toolsList("member");
-    expect(json.result.tools).toHaveLength(40);
+    expect(json.result.tools).toHaveLength(41);
   });
 });
 
