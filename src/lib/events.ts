@@ -86,6 +86,13 @@ export const EVENT_KINDS = [
   // invite_accepted: { slug, role, userId } (never the raw token).
   "space.invite_created",
   "space.invite_accepted",
+  // External Collaboration (Slice E2) — proposals (PR) lifecycle. In `proposal`
+  // push-policy mode a non-owner writer's push lands on `proposals/*`; an
+  // owner/admin accepts (merge → main + reindex + delete ref) or rejects (delete
+  // ref). Admin-only in the feed (a space-management surface, like space.*).
+  // Payload: { slug, name, merged?, tipSha } — never file content.
+  "proposal.accepted",
+  "proposal.rejected",
 ] as const;
 
 export type EventKind = (typeof EVENT_KINDS)[number];
@@ -102,6 +109,8 @@ const ADMIN_ONLY_KINDS = new Set<string>([
   "space.member_removed",
   "space.invite_created",
   "space.invite_accepted",
+  "proposal.accepted",
+  "proposal.rejected",
 ]);
 
 /**
