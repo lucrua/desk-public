@@ -25,9 +25,14 @@ export type RouteDecision = "pass" | "not-found";
  *   1. shareHost unset → always pass (local dev / hub hostname).
  *   2. Request host does not match shareHost → pass (hub hostname).
  *   3. Request host matches shareHost:
- *      - /s/*       → pass (capability links — the only public surface).
- *      - /robots.txt → pass (disallow-all; harmless to serve on share host).
- *      - /_next/*   → pass (static assets needed by the /s/* pages).
+ *      - /s/*           → pass (capability links — share/read surface).
+ *      - /invite/*      → pass (the PUBLIC invite accept PAGE — External
+ *                         Collaboration E1; an external recipient can't pass CF
+ *                         Access, so the accept flow must be reachable here).
+ *      - /api/invite/*  → pass (the invite ACCEPT API the page POSTs to). Only
+ *                         the /invite/* API subtree is admitted — no other /api/*.
+ *      - /robots.txt    → pass (disallow-all; harmless to serve on share host).
+ *      - /_next/*       → pass (static assets needed by the public pages).
  *      - everything else → not-found.
  */
 export function decideRoute(
@@ -47,6 +52,10 @@ export function decideRoute(
   // Rule 3: share hostname — allow only the public surfaces.
   if (pathname === "/robots.txt") return "pass";
   if (pathname.startsWith("/s/")) return "pass";
+  // The public invite accept page + the single accept-API subtree it POSTs to.
+  // Scoped tightly: only the /api/invite/* subtree is admitted — NOT all of /api.
+  if (pathname.startsWith("/invite/")) return "pass";
+  if (pathname.startsWith("/api/invite/")) return "pass";
   if (pathname.startsWith("/_next/")) return "pass";
 
   return "not-found";

@@ -122,6 +122,21 @@ const cases: Case[] = [
     shareHost: "share.example.com",
     want: "pass",
   },
+  // ── External Collaboration (E1): the public invite accept page + its API ────
+  {
+    desc: "share host + /invite/<token> → pass (public accept page)",
+    host: "share.example.com",
+    pathname: "/invite/abc123",
+    shareHost: "share.example.com",
+    want: "pass",
+  },
+  {
+    desc: "share host + /api/invite/<token>/accept → pass (accept API)",
+    host: "share.example.com",
+    pathname: "/api/invite/abc123/accept",
+    shareHost: "share.example.com",
+    want: "pass",
+  },
 
   // ── share host: blocked paths → not-found ─────────────────────────────────
   {
@@ -170,6 +185,16 @@ const cases: Case[] = [
     desc: "share host + /mcp → not-found",
     host: "share.example.com",
     pathname: "/mcp",
+    shareHost: "share.example.com",
+    want: "not-found",
+  },
+  {
+    // The CREATE-invite endpoint is /api/spaces/<slug>/invites — an OWNER action
+    // behind the hub wall — and must NOT be reachable on the share host. Only the
+    // /api/invite/* accept subtree is admitted.
+    desc: "share host + /api/spaces/x/invites → not-found (owner action, hub-only)",
+    host: "share.example.com",
+    pathname: "/api/spaces/proj/invites",
     shareHost: "share.example.com",
     want: "not-found",
   },
