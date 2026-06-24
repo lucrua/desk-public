@@ -9,9 +9,11 @@
  *   - `direct`   → `git push origin HEAD:main`
  *   - `proposal` → `git push origin HEAD:proposals/<handle>` (opens a PR for the owner)
  *
- * The clone URL is token-bearing: `https://<token>@<git-host>/api/git/<owner>/<space>.git`.
- * (The token is the HTTP Basic password; the username half is ignored by the git
- * transport — see src/lib/git/auth.ts.) The raw token appears here exactly once,
+ * The clone URL is token-bearing: `https://git:<token>@<git-host>/api/git/<owner>/<space>.git`.
+ * (The token is the HTTP Basic password; the `git` username half is ignored by the
+ * git transport — see src/lib/git/auth.ts — but must be present so git doesn't
+ * treat the token as the username and block on a password prompt.) The raw token
+ * appears here exactly once,
  * the same way it does on mint — the caller never persists the rendered prompt.
  *
  * SECURITY: the rendered string carries a LIVE credential. It is returned only on
@@ -45,9 +47,13 @@ function noTrailingSlash(s: string): string {
 
 /**
  * The token-bearing clone URL:
- *   `https://<token>@<git-host>/api/git/<owner>/<space>.git`
- * The token is the Basic-auth password; git accepts `<password>@host` (no user)
- * and our transport ignores the username, so this single-segment form works.
+ *   `https://git:<token>@<git-host>/api/git/<owner>/<space>.git`
+ * The token is the Basic-auth PASSWORD; the username half is ignored by our
+ * transport (see src/lib/git/auth.ts), so we use a fixed `git` placeholder.
+ * The username is REQUIRED in the URL: with the bare `https://<token>@host`
+ * form, git reads the token as the *username* and then blocks asking for a
+ * password — so a headless agent's clone fails. The `git:<token>` form
+ * supplies both halves and authenticates non-interactively.
  */
 export function tokenCloneUrl(input: {
   gitHostBase: string;
@@ -60,7 +66,7 @@ export function tokenCloneUrl(input: {
   const m = /^(https?:\/\/)(.+)$/i.exec(base);
   const scheme = m ? m[1] : "https://";
   const hostAndMaybePath = m ? m[2] : base;
-  return `${scheme}${input.token}@${hostAndMaybePath}/api/git/${input.ownerSlug}/${input.spaceSlug}.git`;
+  return `${scheme}git:${input.token}@${hostAndMaybePath}/api/git/${input.ownerSlug}/${input.spaceSlug}.git`;
 }
 
 /** The proposal-mode branch handle, sanitized to git-ref-safe characters. */

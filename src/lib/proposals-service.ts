@@ -19,7 +19,7 @@ import {
   ownerSlugForUser,
   type SpaceRow,
 } from "@/lib/spaces";
-import { bareRepoPath } from "@/lib/git/repo";
+import { bareRepoPath, repoExists } from "@/lib/git/repo";
 import {
   listProposals,
   getProposal,
@@ -57,6 +57,10 @@ export async function listProposalsForSpace(
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return { ok: false, reason: "unknown-space" };
   const repoPath = await repoPathForSpace(space);
+  // A space whose bare repo has not been created yet (never pushed) has no
+  // proposals — and spawning git in a non-existent cwd throws `spawn git
+  // ENOENT`, which would crash the space detail page. Treat absent as empty.
+  if (!(await repoExists(repoPath))) return { ok: true, proposals: [] };
   let proposals = await listProposals(repoPath);
   if (opts.pusherFilter != null) {
     proposals = proposals.filter((p) => p.pusher === opts.pusherFilter);

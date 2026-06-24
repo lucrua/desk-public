@@ -14,13 +14,15 @@ describe("setup-prompt", () => {
   };
 
   describe("tokenCloneUrl", () => {
-    it("injects the token as userinfo and points at the git transport path", () => {
+    it("injects the token as the password (git: username) at the git transport path", () => {
       const url = tokenCloneUrl(base);
-      expect(url).toBe("https://TKN123@desk.example.com/api/git/acme/proj.git");
+      // `git:` username is required — without it git treats the token as the
+      // username and blocks on a password prompt (headless clone fails).
+      expect(url).toBe("https://git:TKN123@desk.example.com/api/git/acme/proj.git");
     });
     it("handles a trailing slash + http scheme", () => {
       const url = tokenCloneUrl({ ...base, gitHostBase: "http://localhost:3000/" });
-      expect(url).toBe("http://TKN123@localhost:3000/api/git/acme/proj.git");
+      expect(url).toBe("http://git:TKN123@localhost:3000/api/git/acme/proj.git");
     });
   });
 
@@ -53,7 +55,7 @@ describe("setup-prompt", () => {
 
     it("includes the token-bearing clone URL + an INSTRUCTIONS.md instruction", () => {
       const p = renderSetupPrompt({ ...base, pushPolicy: "direct" });
-      expect(p).toContain("https://TKN123@desk.example.com/api/git/acme/proj.git");
+      expect(p).toContain("https://git:TKN123@desk.example.com/api/git/acme/proj.git");
       expect(p).toContain("INSTRUCTIONS.md");
       expect(p).toContain("acme/proj");
     });
