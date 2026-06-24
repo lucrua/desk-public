@@ -62,3 +62,19 @@ Branch off `main`. **E1 then E2** (E2 after the orchestrator verifies E1's bound
 
 ## Outcomes
 _(appended after each slice.)_
+
+### Slice E2 — push-policy enforcement + proposals (PR) review (built, branch `feat/external-collab-e2`)
+
+**Enforcement mechanism: pre-receive hook via env (probe-confirmed).** A throwaway probe verified that custom env (`DESK_PUSHER_ROLE`, `DESK_PUSH_POLICY`) set on the `git-http-backend` CGI spawn propagates cleanly through `git-http-backend → git-receive-pack → the pre-receive hook`, alongside the `<old> <new> <ref>` lines on stdin. A non-zero hook exit declines the push with the `remote:` message visible to the client. **The route-fallback was not needed.** The route (`/api/git/[...path]`) sets both env vars on every receive-pack spawn (`http-backend.ts`); the per-repo `pre-receive` hook (`push-policy.ts` → `preReceivePolicyHookScript`) reads them and rejects any non-`proposals/*` ref update by a non-owner writer in `proposal` mode.
+
+**Env-presence = HTTP-push invariant (the security model).** The HTTP route is the only untrusted write ingress and ALWAYS sets `DESK_PUSH_POLICY`. So *env present ⟺ a route-mediated HTTP push*; *env absent ⟺ a trusted local/server-side push* (operator, the accept-merge, seed). The hook therefore **allows when the policy env is absent** (a local push) and **enforces, fail-closed on the role, when it is present**. This does not widen what an HTTP client can do (the route always supplies the policy) — it only avoids breaking trusted local git on the host.
+
+**Ref-authz matrix enforced** (`refUpdateAllowed` + the hook, kept in lockstep + asserted): `direct` mode → every writer pushes any ref (unchanged). `proposal` mode → owner/admin push anything; a **non-owner writer** may push ONLY `refs/heads/proposals/<name>` (a concrete, traversal-safe name) — `main`, any other branch, and tags are **rejected** (default-deny).
+
+**Backfill:** `backfillPolicyHooks()` (run from `instrumentation.register`) sweeps `<DESK_DATA_DIR>/spaces/**`, installing the hook on every existing bare repo (idempotent, tolerant of junk dirs). `initBareRepo` also (re)installs the hook on every call — even on an existing repo — so a pre-E2 repo gains enforcement.
+
+**Accept-merge in a bare repo:** a temporary `git worktree` checks out `main`, merges the proposal tip (fast-forward when `main` is an ancestor; else a `--no-ff` merge commit authored by the accepting owner), then the worktree is removed. The empty-`main` case fast-forwards via `update-ref`. Accept then **reindexes** `main` (so merged content projects) and **deletes** the proposal ref. Reject just deletes the ref (main untouched). Accept/reject run server-side (no receive-pack) so the policy hook never blocks them.
+
+**Surfaces:** `GET /api/spaces/[slug]/proposals` (list) + `/[name]/diff` (GET) — admin/owner/writer; `POST /[name]/accept|reject` — admin/owner only; every denial → uniform 404 (no existence leak). MCP `list_proposals` / `decide_proposal` (agent surface; tool count 41 → 43, `/help` updated). The space-detail page renders a Proposals panel (diff + Accept/Reject for owner/admin; read-only list for a writer).
+
+**Tests:** ref-authz matrix (`push-policy.test.ts`, 48), proposals git-plumbing ff+non-ff+reject (`proposals.test.ts`), route authz (`proposals/route.test.ts`), hook install + backfill (`repo-hooks.test.ts`), and a live clone→push-to-proposal→accept transport e2e (`proposals-e2e.test.ts`, 9) covering direct-mode-unchanged, proposal-mode reject-main / allow-proposals / owner-direct, and accept (ff + merge-commit) + reject. **Commit + STOP — not deployed.**
