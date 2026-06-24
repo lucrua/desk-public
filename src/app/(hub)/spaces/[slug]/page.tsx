@@ -14,6 +14,7 @@ import {
 import { listUsers } from "@/lib/users";
 import { gitRepoUrl, gitRemoteBase } from "@/lib/git-url";
 import { renderSetupPrompt } from "@/lib/invites/setup-prompt";
+import { listProposalsForSpace } from "@/lib/proposals-service";
 import SpaceVisibility from "./SpaceVisibility";
 import PushPolicy from "./PushPolicy";
 import InvitePanel from "./InvitePanel";
@@ -21,6 +22,7 @@ import SetupPromptView from "./SetupPromptView";
 import MembersPanel, { type MemberRow, type UserChoice } from "./MembersPanel";
 import PushHelp from "./PushHelp";
 import SpaceDocsTree from "./SpaceDocsTree";
+import ProposalsPanel from "./ProposalsPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +64,13 @@ export default async function SpaceDetailPage({
 
   // Manage rights (visibility + members) = admin OR the space owner.
   const canManage = isAdmin || myRole === "owner";
+
+  // Proposals (E2): admin / owner / writer may see the list; only owner/admin
+  // (canManage) may accept/reject. Fetch only when the caller may see them.
+  const canSeeProposals = canManage || myRole === "writer";
+  const proposals = canSeeProposals
+    ? (await listProposalsForSpace(slug).then((r) => (r.ok ? r.proposals : [])))
+    : [];
 
   const docs = (await docsInSpace(slug)) ?? [];
   // Unpublished docs are admin-only; everyone else sees the published set.
@@ -146,6 +155,14 @@ export default async function SpaceDetailPage({
           </p>
         )}
       </section>
+
+      {/* Proposals (PR review) — owner/admin act; a writer sees the list. */}
+      {canSeeProposals && (pushPolicy === "proposal" || proposals.length > 0) && (
+        <section style={{ marginBottom: 28 }}>
+          <h2 style={sectionLabel}>proposals ({proposals.length})</h2>
+          <ProposalsPanel slug={space.slug} proposals={proposals} canDecide={canManage} />
+        </section>
+      )}
 
       {/* Invites (owner/admin) */}
       {canManage && (

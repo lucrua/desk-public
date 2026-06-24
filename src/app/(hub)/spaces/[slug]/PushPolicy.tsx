@@ -70,7 +70,7 @@ export default function PushPolicy({
         </select>
         <span style={{ fontSize: 12, color: "var(--faint)" }}>
           {selected === "proposal"
-            ? "non-owner pushes open a PR for the owner (enforced soon)"
+            ? "a non-owner writer's push to main is rejected; it must go to proposals/* (opens a PR)"
             : "every writer pushes the hosted main branch directly"}
         </span>
       </div>
