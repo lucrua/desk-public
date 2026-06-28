@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { renderTokenSetupPrompt } from "@/lib/tokens/setup-prompt";
+import TokenSetupPromptView from "./TokenSetupPromptView";
 
 export type TokenRow = {
   id: number;
@@ -59,9 +61,13 @@ function fmt(iso: string | null): string {
 export default function TokensClient({
   initialTokens,
   resolvable,
+  gitHostBase,
 }: {
   initialTokens: TokenRow[];
   resolvable: boolean;
+  /** Git transport origin (scheme + host) used to render the once-shown
+   *  global-setup prompt for a just-minted token. */
+  gitHostBase: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -208,6 +214,11 @@ export default function TokensClient({
             <strong>Store it now — this token won&rsquo;t be shown again.</strong>{" "}
             Desk only keeps its hash. If you lose it, revoke it and mint a new one.
           </p>
+          {/* Global-setup prompt: rendered ephemerally from the LIVE token (never
+              stored in state or logged — same lifecycle as the token above). */}
+          <TokenSetupPromptView
+            prompt={renderTokenSetupPrompt({ gitHostBase, token: fresh.token })}
+          />
           <button
             type="button"
             onClick={() => setFresh(null)}

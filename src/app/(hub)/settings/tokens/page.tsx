@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { getPrincipal } from "@/lib/auth";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
 import { listTokensForUser } from "@/lib/spaces";
+import { gitRemoteBase } from "@/lib/git-url";
 import TokensClient, { type TokenRow } from "./TokensClient";
 
 export const dynamic = "force-dynamic";
@@ -13,11 +14,15 @@ export const dynamic = "force-dynamic";
  * gates anonymous); every token here is scoped to YOUR user.
  */
 export default async function TokensPage() {
-  const principal = await getPrincipal(await headers());
+  const hdrs = await headers();
+  const principal = await getPrincipal(hdrs);
   // Layout blocks anonymous — principal is admin | member here.
   const userId = await resolvePrincipalUserId(principal);
   const tokens: TokenRow[] = userId == null ? [] : await projectTokens(userId);
   const resolvable = userId != null;
+  // The git transport origin (scheme + host) for the global-setup prompt shown
+  // once on mint. Derived the same way as the space/invite setup prompts.
+  const gitHostBase = gitRemoteBase(hdrs);
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "32px 20px 80px" }}>
@@ -32,7 +37,7 @@ export default async function TokensPage() {
         shown <strong>once</strong> at mint time — store it then; Desk only keeps
         its hash.
       </p>
-      <TokensClient initialTokens={tokens} resolvable={resolvable} />
+      <TokensClient initialTokens={tokens} resolvable={resolvable} gitHostBase={gitHostBase} />
     </div>
   );
 }
