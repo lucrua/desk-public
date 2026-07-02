@@ -30,14 +30,13 @@ import {
   listSpaceMembers,
   type SpaceRole,
 } from "@/lib/spaces";
-import { getDocBySlug } from "@/lib/docs";
+import { getDocBySlug, getLiveDocBySpacePath } from "@/lib/docs";
 import { refTip, bareRepoPath, DEFAULT_BRANCH } from "@/lib/git/repo";
 import { ownerSlugForUser } from "@/lib/spaces";
 import { webAuthorCommit, type WebAuthorIdentity } from "@/lib/web-author";
 import { isSafeRepoPath } from "@/lib/git/web-commit";
 import { MAX_CONTENT_CHARS } from "@/lib/limits";
 import { normalizePath } from "@/lib/path";
-import { slugForPath } from "@/lib/git/indexer";
 import { slugFromFilename } from "@/lib/slug";
 import { db } from "@/db";
 import { users } from "@/db/schema";
@@ -182,11 +181,12 @@ async function handleNewDoc(req: Request, g: Resolved): Promise<NextResponse> {
   const repoPath = folder ? `${folder}/${baseName}.md` : `${baseName}.md`;
   if (!isSafeRepoPath(repoPath)) return err(400, "Invalid document path");
 
-  // Uniqueness against the live projection slug index (docs_slug_idx).
-  const derivedSlug = slugForPath(repoPath);
-  const existing = await getDocBySlug(derivedSlug, { includeUnpublished: true });
+  // Uniqueness against the PROJECTION KEY: at most one live doc per (space,
+  // source path). Identity is now the opaque slug, so this must key on the path,
+  // not a path-derived slug.
+  const existing = await getLiveDocBySpacePath(g.spaceId, repoPath);
   if (existing) {
-    return err(409, `A document already exists at that path (slug: ${derivedSlug})`);
+    return err(409, `A document already exists at that path (${repoPath})`);
   }
 
   // Prepend an H1 title when the content lacks one (so the projection has a title).
@@ -203,12 +203,16 @@ async function handleNewDoc(req: Request, g: Resolved): Promise<NextResponse> {
   });
 
   if (!result.ok) return failResponse(result.reason, result.detail);
+  // The real opaque slug is minted by the indexer on the main-commit reindex.
+  // A proposal write hasn't projected a doc yet → no slug to return.
+  const projected =
+    result.target === "main" ? await getLiveDocBySpacePath(g.spaceId, repoPath) : null;
   return NextResponse.json(
     {
       ok: true,
       target: result.target,
       ref: result.ref,
-      slug: derivedSlug,
+      slug: projected?.slug ?? null,
       path: repoPath,
       newSha: result.newSha,
       proposalName: result.proposalName,

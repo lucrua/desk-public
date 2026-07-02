@@ -3,6 +3,15 @@
 > **Status: APPROVED for implementation (2026-07-02).** Owner: Lucas.
 > Supersedes the path-derived `slug` identity for git-projected docs.
 > Revised 2026-07-02 after adversarial self-review (findings folded in below).
+> **Revision 2 (2026-07-02, during implementation):** the `(space_id, source_path)`
+> index is **NON-unique** (a lookup index), not a unique constraint. Rationale:
+> the collision fix lives in the indexer *keying* on `(spaceId, sourcePath)` +
+> opaque slugs — a DB uniqueness constraint is not needed for correctness, and it
+> would have imposed a new invariant on the legacy `publishDoc` path (where
+> `source_path` is a non-unique "provenance stamp") that ~10 test files and
+> potential real callers violate. So the `publishDoc` conflict-guard from §6 was
+> dropped; the web-create app-level guard (§6) stays. A unique constraint remains
+> a clean future hardening step IF the publish path is first made path-aware.
 
 ## Problem
 
@@ -33,7 +42,7 @@ Split the two roles.
 | Role | Today | New |
 | --- | --- | --- |
 | **Public identity** (`docs.slug`) | derived from path, globally unique | **permanent random opaque id** (`randomSlug()`), minted once per file, never derived, never changed on rename |
-| **Projection key** | *also* `slug` (global) | **`(spaceId, sourcePath)`** — unique per space, includes the extension |
+| **Projection key** | *also* `slug` (global) | the indexer keys on **`(spaceId, sourcePath)`** (non-unique lookup index); includes the extension |
 
 Web-authored docs already use `randomSlug()` (ids like `nss907zy7`); this makes
 *all* docs consistent. Identity survives a file rename/move via **git rename
@@ -58,24 +67,19 @@ only stop *deriving* new ones and add the new projection index.
 
 ### 1. Schema — `src/db/schema.ts` + `drizzle/0018_doc_source_path_uniq.sql`
 
-- Add partial unique index (hand-authored raw SQL, matching the
-  `docs_slug_idx` style in `0013_lifecycle_distribution.sql:22`):
+- Add a NON-unique lookup index (hand-authored raw SQL; the drizzle-kit
+  `generate` path is blocked by a pre-existing 0013/0014 meta-snapshot collision,
+  so 0018 is hand-authored + a `_journal.json` entry — `migrate` needs no
+  snapshot):
   ```sql
-  CREATE UNIQUE INDEX "docs_space_source_path_idx"
-    ON "docs" ("space_id","source_path") WHERE "deleted_at" IS NULL;
+  CREATE INDEX "docs_space_source_path_idx" ON "docs" ("space_id","source_path");
   ```
-  and the mirrored `uniqueIndex("docs_space_source_path_idx").on(t.spaceId,
-  t.sourcePath).where(sql\`${t.deletedAt} IS NULL\`)` in `schema.ts`, plus the
-  drizzle meta snapshot bump.
-- Keep `docs_slug_idx` (random ids are globally unique for free).
-- **Pre-migration guard (MANDATORY, run on dev + staging + prod before shipping):**
-  ```sql
-  SELECT space_id, source_path, count(*) FROM docs
-  WHERE deleted_at IS NULL
-  GROUP BY space_id, source_path HAVING count(*) > 1;
-  ```
-  Must return zero rows, else `CREATE UNIQUE INDEX` aborts. Reconcile any dupes
-  (they can only come from `publish_doc`, see §6) before migrating.
+  mirrored as `index("docs_space_source_path_idx").on(t.spaceId, t.sourcePath)`
+  in `schema.ts`. Backs every `(spaceId, sourcePath)` query (indexer upsert,
+  tombstone, rename, `listSpaceFiles`, the web create-guard).
+- Keep `docs_slug_idx` (random opaque ids are globally unique for free).
+- No pre-migration dup guard needed (the index is non-unique). The collision fix
+  is the indexer *keying* on this pair, not a constraint.
 
 ### 2. Repo — `src/lib/git/repo.ts` (`changedPaths`)
 
@@ -167,21 +171,19 @@ These build the *public* slug from the repo path and would 404 under random ids:
 - The existing `SpaceDocsTree.tsx:140` path is already DB-sourced (`d.slug`) —
   no change.
 
-### 6. Create-doc endpoint + `publishDoc` reconciliation (blockers from review)
+### 6. Create-doc endpoint (blocker from review)
 
-- `src/app/api/spaces/[slug]/docs/route.ts` `handleNewDoc` (`:186`): currently
-  pre-checks uniqueness and returns the created slug via `slugForPath(repoPath)`.
-  **Fix:** (a) replace the 409 guard with a real `(spaceId, source_path)`
-  live-doc existence check; (b) after `webAuthorCommit`, look up and return the
+- `src/app/api/spaces/[slug]/docs/route.ts` `handleNewDoc` (`:186`): previously
+  pre-checked uniqueness and returned the created slug via `slugForPath(repoPath)`
+  (both wrong under opaque ids). **Fix:** (a) replace the 409 guard with a real
+  `(spaceId, source_path)` live-doc existence check (`getLiveDocBySpacePath` in
+  `docs.ts`); (b) after `webAuthorCommit` on `main`, look up and return the
   **actual** `docs.slug` for `(spaceId, source_path)` (the random id minted by the
-  indexer), not a path-derived one.
-- `publishDoc` (`src/lib/docs.ts:287`) upserts by **slug** and accepts a free-form
-  `source_path`, so two slugs could claim one `(space, source_path)` and either
-  block the migration (existing dupes) or throw a raw 500 (future). **Fix:** wrap
-  the insert/update so a `docs_space_source_path_idx` unique violation surfaces as
-  a clean domain error (`{ ok:false, reason:"source_path_conflict" }` / 409 at the
-  MCP+REST boundary), never an uncaught 500. (Full "publish upserts by
-  source_path" semantics are out of scope; we only make the collision safe.)
+  indexer), not a path-derived one. A proposal write returns `slug: null` (not
+  projected yet).
+- `publishDoc` reconciliation is **dropped** (see Revision 2): with a non-unique
+  index there is no DB violation to convert, and `source_path` stays a non-unique
+  provenance stamp on the legacy publish path.
 
 ## Tests (boundary-critical — the access boundary is sacred)
 
@@ -204,7 +206,6 @@ These build the *public* slug from the repo path and would 404 under random ids:
 - **`listSpaceFiles`** surfaces the real random `docs.slug` for a projected path
   (not a path-derived slug), and `undefined` for a non-doc/unprojected path.
 - **`handleNewDoc`** returns a slug that actually resolves via `getDocBySlug`.
-- **`publishDoc` source_path conflict** returns the clean domain error, not a 500.
 - **OG metadata**: doc + share `generateMetadata` return the doc title in
   `openGraph.title` and a non-empty `description`; a non-visible doc leaks no
   title.
@@ -225,6 +226,12 @@ These build the *public* slug from the repo path and would 404 under random ids:
 
 ## Rollout / landing posture (per AGENTS.md)
 
-Branch `feat/doc-identity-opaque-id`. TDD. Run the dup-check query (§1), then the
-full suite + `pnpm typecheck` + `pnpm build`, then **STOP for review** before any
-deploy push. No `--force`, no `--no-verify`.
+Branch `feat/doc-identity-opaque-id`. TDD. Run the full suite + `pnpm typecheck`
++ `pnpm build`, then **STOP for review** before any deploy push. No `--force`, no
+`--no-verify`.
+
+**Test-suite note:** many existing tests seed multiple docs at a shared
+`source_path` (a "provenance stamp") and assert path-derived slugs. Those
+assertions were retargeted to `sourcePath`/the real opaque slug (`indexer.test.ts`,
+`import.test.ts`, `read-path.test.ts`). The non-unique index means the shared
+`source_path` seeding keeps working — no fixture rewrite needed.

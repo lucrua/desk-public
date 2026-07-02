@@ -1,8 +1,10 @@
 import { headers } from "next/headers";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPrincipal } from "@/lib/auth";
 import { getDocBySlug, listVersions, getVersionContent, listDocs, scopeForPrincipal } from "@/lib/docs";
+import { docPreviewDescription } from "@/lib/preview";
 import { canPublishVersion } from "@/lib/permissions";
 import { getUserById } from "@/lib/users";
 import { unifiedDiff } from "@/lib/diff";
@@ -30,6 +32,38 @@ import {
 } from "../view-model";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Link-preview metadata (Open Graph / Twitter) for the hub doc viewer.
+ *
+ * SECURITY: resolves the doc through the SAME access-scoped `getDocBySlug` the
+ * page uses (admin/member scope + published gate). A doc the caller can't see —
+ * or that doesn't exist — yields neutral default metadata and NEVER emits the
+ * doc's title or description, so OG tags cannot leak a private doc's title.
+ * This mirrors the page's own `notFound()` branch (uniform, no existence signal).
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const principal = await getPrincipal(await headers());
+  const result = await getDocBySlug(slug, {
+    includeUnpublished: principal.kind === "admin",
+    scope: await scopeForPrincipal(principal),
+  });
+  // Not visible / not found → neutral, leak-free default (no title, no description).
+  if (!result) return { title: "Desk" };
+
+  const title = result.doc.title;
+  const description = docPreviewDescription(result.doc);
+  return {
+    title,
+    openGraph: { title, description, type: "article" },
+    twitter: { card: "summary", title, description },
+  };
+}
 
 const diffColors = {
   ctx: { bg: "transparent", fg: "var(--muted)" },

@@ -265,7 +265,16 @@ export const docs = pgTable("docs", {
 }, (t) => [
   // PARTIAL unique index: only one LIVE doc may hold a given slug.
   // Deleted docs (deletedAt IS NOT NULL) are excluded, freeing the slug for reuse.
+  // The slug is now a PERMANENT OPAQUE id (randomSlug), never derived from the
+  // path — so this stays globally unique for free (see doc-identity spec).
   uniqueIndex("docs_slug_idx").on(t.slug).where(sql`${t.deletedAt} IS NULL`),
+  // The PROJECTION-KEY lookup index: the indexer, tombstone, rename, file-view,
+  // and create-guard all resolve a doc by (spaceId, sourcePath). NON-unique by
+  // design — `sourcePath` is a provenance stamp (see the column comment), and
+  // the legacy publish path may stamp the same path on more than one doc. The
+  // collision FIX lives in the indexer keying on this pair + an opaque slug, not
+  // in a DB constraint.
+  index("docs_space_source_path_idx").on(t.spaceId, t.sourcePath),
   index("docs_search_tsv_idx").using("gin", t.searchTsv),
   index("docs_space_idx").on(t.spaceId),
 ]);

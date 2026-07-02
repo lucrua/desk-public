@@ -115,11 +115,13 @@ describe("git import — repo → space", () => {
 
     // Projection: docs from the renderable files only.
     const docs = await db.select().from(schema.docs).where(eq(schema.docs.spaceId, space!.id));
-    const slugs = docs.map((d) => d.slug).sort();
-    expect(slugs).toEqual(["docs-guide", "readme"]);
-    const guide = docs.find((d) => d.slug === "docs-guide")!;
+    // Identity is now an opaque id — docs are addressed by sourcePath.
+    const sourcePaths = docs.map((d) => d.sourcePath).sort();
+    expect(sourcePaths).toEqual(["README.md", "docs/guide.md"]);
+    const guide = docs.find((d) => d.sourcePath === "docs/guide.md")!;
     expect(guide.title).toBe("Guide");
     expect(guide.spaceId).toBe(space!.id);
+    expect(guide.slug).toMatch(/^[a-z0-9]{9}$/); // opaque, not path-derived
 
     // Secrets never entered the bare repo — verify via ls-tree of the seed commit.
     const tree = await runGit(["ls-tree", "-r", "--name-only", "HEAD"], { cwd: res.repoPath });

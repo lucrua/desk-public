@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import Link from "next/link";
 import Markdown from "@/components/Markdown";
+import { docPreviewDescription } from "@/lib/preview";
 import { resolveShareDoc, recordView } from "@/lib/shares";
 import { listComments } from "@/lib/comments";
 import { formatStamp } from "../load-share";
@@ -26,10 +27,13 @@ export async function generateMetadata({
     // Uniform — never leak whether the slug exists / is outside the prefix.
     return { title: "Desk", description: "Shared document" };
   }
+  const title = resolved.doc.title;
+  const description = docPreviewDescription(resolved.doc);
   return {
-    title: resolved.doc.title,
-    description: "Shared document",
-    openGraph: { title: resolved.doc.title, type: "article" },
+    title,
+    description,
+    openGraph: { title, description, type: "article" },
+    twitter: { card: "summary", title, description },
   };
 }
 

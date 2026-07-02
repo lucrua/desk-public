@@ -71,11 +71,21 @@ describe("document-host read path", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  // Identity is an opaque id now — resolve a doc's real slug by its sourcePath.
+  const slugOf = async (sourcePath: string) => {
+    const [d] = await db
+      .select({ slug: schema.docs.slug })
+      .from(schema.docs)
+      .where(eq(schema.docs.sourcePath, sourcePath))
+      .limit(1);
+    return d.slug;
+  };
+
   it("getDocBySlug serves git-sourced content after indexing", async () => {
     const sha = await commit(bareRepo, { "note.md": "# Note\nversion one" }, "c1");
     await reindexSpaceByDisk("acme", bareRepo, { fromSha: null, toSha: sha, actorName: "t" });
 
-    const result = await getDocBySlug("note", { includeUnpublished: true });
+    const result = await getDocBySlug(await slugOf("note.md"), { includeUnpublished: true });
     expect(result).not.toBeNull();
     expect(result!.doc.title).toBe("Note");
     expect(result!.version?.content).toContain("version one");
@@ -86,7 +96,7 @@ describe("document-host read path", () => {
     await reindexSpaceByDisk("acme", bareRepo, { fromSha: null, toSha: sha1, actorName: "t" });
 
     // Create a live (non-pinned) share over the doc.
-    const share = await createShareOk("note", "Coworker", "t");
+    const share = await createShareOk(await slugOf("note.md"), "Coworker", "t");
 
     // Push a new version + reindex.
     const sha2 = await commit(bareRepo, { "note.md": "# Note\nv2-updated" }, "c2");
@@ -101,7 +111,7 @@ describe("document-host read path", () => {
   it("deleting a path tombstones the doc; the share then 404s (uniform)", async () => {
     const sha1 = await commit(bareRepo, { "note.md": "# Note\nv1", "keep.md": "# Keep" }, "c1");
     await reindexSpaceByDisk("acme", bareRepo, { fromSha: null, toSha: sha1, actorName: "t" });
-    const share = await createShareOk("note", "Coworker", "t");
+    const share = await createShareOk(await slugOf("note.md"), "Coworker", "t");
 
     // Delete note.md via a commit.
     const work = await mkdtemp(path.join(tmpdir(), "desk-rp-del-"));
@@ -114,7 +124,7 @@ describe("document-host read path", () => {
 
     await reindexSpaceByDisk("acme", bareRepo, { fromSha: sha1, toSha: sha2, actorName: "t" });
 
-    const doc = await db.select().from(schema.docs).where(eq(schema.docs.slug, "note"));
+    const doc = await db.select().from(schema.docs).where(eq(schema.docs.sourcePath, "note.md"));
     expect(doc[0].unpublishedAt).not.toBeNull();
     // An unpublished doc's share resolves to null (uniform 404 at the route).
     const resolved = await resolveShare(share.token);
