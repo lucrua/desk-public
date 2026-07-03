@@ -16,7 +16,6 @@ import { gitRepoUrl, gitRemoteBase } from "@/lib/git-url";
 import { renderSetupPrompt } from "@/lib/invites/setup-prompt";
 import { listProposalsForSpace } from "@/lib/proposals-service";
 import { listSpaceFiles } from "@/lib/web-author";
-import { slugForPath } from "@/lib/git/indexer";
 import SpaceVisibility from "./SpaceVisibility";
 import PushPolicy from "./PushPolicy";
 import InvitePanel from "./InvitePanel";
@@ -95,7 +94,7 @@ export default async function SpaceDetailPage({
     ? (await listSpaceFiles(space.slug)).map((f) => ({
         path: f.path,
         isDoc: f.isDoc,
-        docSlug: f.isDoc ? slugForPath(f.path) : undefined,
+        docSlug: f.docSlug, // the REAL projected slug (opaque id), not path-derived
       }))
     : [];
 

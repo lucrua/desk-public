@@ -85,9 +85,7 @@ export async function publishDocOk(
 ): Promise<{ slug: string; versionId: number; versionNumber: number; isNewDoc: boolean; isNewVersion: boolean }> {
   const out = await publishDoc(input);
   if (!out.ok) {
-    throw new Error(
-      `publishDocOk expected success, got conflict (current ${out.currentVersionId})`,
-    );
+    throw new Error(`publishDocOk expected success, got failure: ${JSON.stringify(out)}`);
   }
   return { slug: out.slug, versionId: out.versionId, versionNumber: out.versionNumber, isNewDoc: out.isNewDoc, isNewVersion: out.isNewVersion };
 }

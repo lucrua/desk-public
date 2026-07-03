@@ -127,7 +127,7 @@ describe("git transport — live clone/push round-trip", () => {
       expect(pushRejected).toBe(true);
 
       // 4. The projection re-indexed on the owner's push: a doc exists.
-      const docs = await db.select().from(schema.docs).where(eq(schema.docs.slug, "hello"));
+      const docs = await db.select().from(schema.docs).where(eq(schema.docs.sourcePath, "hello.md"));
       expect(docs.length).toBe(1);
       expect(docs[0].title).toBe("Hello");
     } finally {

@@ -206,7 +206,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
       expect(accepted.ok).toBe(true);
       if (accepted.ok) {
         // ff-doc projected into the index.
-        const docs = await db.select().from(schema.docs).where(eq(schema.docs.slug, "ff-doc"));
+        const docs = await db.select().from(schema.docs).where(eq(schema.docs.sourcePath, "ff-doc.md"));
         expect(docs.length).toBe(1);
         expect(docs[0].title).toBe("FF Doc");
       }
@@ -237,8 +237,8 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
       expect(ls.stdout).toContain("from-proposal.md");
       expect(ls.stdout).toContain("from-owner.md");
       // Both projected.
-      const fp = await db.select().from(schema.docs).where(eq(schema.docs.slug, "from-proposal"));
-      const fo = await db.select().from(schema.docs).where(eq(schema.docs.slug, "from-owner"));
+      const fp = await db.select().from(schema.docs).where(eq(schema.docs.sourcePath, "from-proposal.md"));
+      const fo = await db.select().from(schema.docs).where(eq(schema.docs.sourcePath, "from-owner.md"));
       expect(fp.length).toBe(1);
       expect(fo.length).toBe(1);
     });

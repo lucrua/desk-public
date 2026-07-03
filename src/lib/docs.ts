@@ -624,6 +624,27 @@ export async function setDocOwner(
 type DocRow = typeof docs.$inferSelect;
 type VersionRow = typeof docVersions.$inferSelect;
 
+/**
+ * Resolve the doc projected at (spaceId, sourcePath) — the PROJECTION KEY. This
+ * is how a repo file maps to its doc row (identity is the opaque `slug`;
+ * addressing during projection/create is by path). Excludes only deleted docs
+ * (an unpublished/tombstoned row still occupies its (space, path)). NOT
+ * viewer-scoped — callers are already inside the space's write boundary.
+ */
+export async function getLiveDocBySpacePath(
+  spaceId: number,
+  sourcePath: string,
+): Promise<DocRow | null> {
+  const [row] = await db
+    .select()
+    .from(docs)
+    .where(
+      and(eq(docs.spaceId, spaceId), eq(docs.sourcePath, sourcePath), isNull(docs.deletedAt)),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
 export async function getDocBySlug(
   slug: string,
   opts?: { includeUnpublished?: boolean; scope?: ViewerScope }

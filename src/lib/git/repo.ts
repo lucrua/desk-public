@@ -266,12 +266,15 @@ export async function readBlob(
 }
 
 /**
- * The paths that CHANGED between two commits (added/modified/deleted), as a
- * {path, status} list. When `fromSha` is null (first push into an empty repo),
- * every path in `toSha`'s tree is reported as added. Used by the incremental
- * indexer.
+ * The paths that CHANGED between two commits, as a discriminated union. When
+ * `fromSha` is null (first push into an empty repo), every path in `toSha`'s
+ * tree is reported as added. Renames (`git diff -M`) surface as `R` records that
+ * carry BOTH the old and new path — the incremental indexer uses these to keep a
+ * doc's opaque id stable across a file move (spec: doc-identity-opaque-id §2).
  */
-export type ChangedPath = { path: string; status: "A" | "M" | "D" };
+export type ChangedPath =
+  | { status: "A" | "M" | "D"; path: string }
+  | { status: "R"; oldPath: string; path: string };
 
 export async function changedPaths(
   repoPath: string,
@@ -282,19 +285,32 @@ export async function changedPaths(
     const tree = await listTree(repoPath, toSha);
     return tree.map((e) => ({ path: e.path, status: "A" as const }));
   }
+  // `-M` turns a delete+add of the same (or identical) content into a single
+  // rename record. In the `-z` stream a rename is THREE tokens
+  // (`R100\0<old>\0<new>`) while A/M/D are TWO (`X\0<path>`), so we walk with a
+  // VARIABLE stride dispatched on the first char of each status token — a fixed
+  // `i += 2` loop would desync (and drop a record) the moment a rename appears.
   const r = await runGit(
-    ["diff", "--name-status", "-z", "--no-renames", fromSha, toSha],
+    ["diff", "--name-status", "-z", "-M", fromSha, toSha],
     { cwd: repoPath },
   );
   if (r.code !== 0) return [];
   const out: ChangedPath[] = [];
   const tokens = r.stdout.toString("utf8").split("\0").filter(Boolean);
-  // With -z and --no-renames, tokens alternate: status, path, status, path…
-  for (let i = 0; i + 1 < tokens.length; i += 2) {
-    const statusChar = tokens[i][0];
-    const filePath = tokens[i + 1];
-    const status = statusChar === "A" ? "A" : statusChar === "D" ? "D" : "M";
-    out.push({ path: filePath, status });
+  let i = 0;
+  while (i < tokens.length) {
+    const c = tokens[i][0];
+    if (c === "R" || c === "C") {
+      // Rename (or copy, defensively — `C` needs `-C` to appear): two paths.
+      out.push({ status: "R", oldPath: tokens[i + 1], path: tokens[i + 2] });
+      i += 3;
+    } else {
+      // Any non-R/C status (including `T` typechange) maps to a single-path
+      // record so an unexpected status can't desync the stride.
+      const status = c === "A" ? "A" : c === "D" ? "D" : "M";
+      out.push({ status, path: tokens[i + 1] });
+      i += 2;
+    }
   }
   return out;
 }

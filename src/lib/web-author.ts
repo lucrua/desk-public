@@ -16,8 +16,8 @@
  * the ref-level half. (READ boundary is the route's job, mirroring page.tsx.)
  */
 import { db } from "@/db";
-import { users } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { users, docs } from "@/db/schema";
+import { eq, and, isNull } from "drizzle-orm";
 import {
   getSpaceBySlug,
   ownerSlugForUser,
@@ -102,14 +102,22 @@ export type SpaceFileEntry = {
   path: string;
   /** True iff this file projects to a rendered doc (markdown/HTML). */
   isDoc: boolean;
+  /**
+   * The projected doc's OPAQUE slug (the stable id), for a doc-type file that is
+   * currently a live/published projection. Undefined for non-doc files and for
+   * doc-type files that aren't (yet) a live doc. Identity is this slug — NEVER
+   * re-derive it from the path (that was the old collision-prone scheme).
+   */
+  docSlug?: string;
 };
 
 /**
  * List EVERY committed file in a space's `main` tree (the full git tree, not
- * just the projected docs). Doc-type files (markdown/HTML) carry isDoc=true so
- * the UI can link them to their rendered page; everything else (uploads) links
- * to the raw route. Returns [] for a never-pushed space. Pure read — the CALLER
- * gates who may see the space (same read boundary as the space page).
+ * just the projected docs). Doc-type files (markdown/HTML) carry isDoc=true and,
+ * when live, their real projected slug so the UI can link them to their rendered
+ * page; everything else (uploads) links to the raw route. Returns [] for a
+ * never-pushed space. Pure read — the CALLER gates who may see the space (same
+ * read boundary as the space page).
  */
 export async function listSpaceFiles(spaceSlug: string): Promise<SpaceFileEntry[]> {
   const space = await getSpaceBySlug(spaceSlug);
@@ -120,8 +128,22 @@ export async function listSpaceFiles(spaceSlug: string): Promise<SpaceFileEntry[
   if (!tip) return [];
   const tree = await listTree(repoPath, tip);
   const { isDocPath } = await import("@/lib/git/indexer");
+  // Resolve each committed doc-file to its REAL projected slug by (space, path).
+  // Non-doc files and unprojected/unpublished paths carry no slug and fall back
+  // to the raw route in the UI.
+  const projected = await db
+    .select({ sourcePath: docs.sourcePath, slug: docs.slug })
+    .from(docs)
+    .where(
+      and(eq(docs.spaceId, space.id), isNull(docs.deletedAt), isNull(docs.unpublishedAt)),
+    );
+  const slugByPath = new Map(projected.map((d) => [d.sourcePath, d.slug]));
   return tree
-    .map((e) => ({ path: e.path, isDoc: isDocPath(e.path) }))
+    .map((e) => ({
+      path: e.path,
+      isDoc: isDocPath(e.path),
+      docSlug: slugByPath.get(e.path),
+    }))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 

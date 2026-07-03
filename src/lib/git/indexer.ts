@@ -27,7 +27,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { docs, docVersions, spaces } from "@/db/schema";
 import { emitEvent } from "@/lib/events";
-import { titleFromContent } from "@/lib/slug";
+import { titleFromContent, randomSlug } from "@/lib/slug";
 import { normalizePath } from "@/lib/path";
 import { parseFrontmatter } from "./frontmatter";
 import { listTree, readBlob, changedPaths, refTip, bareRepoPath } from "./repo";
@@ -112,30 +112,53 @@ async function indexFile(
   content: Buffer,
   commit: string,
   actorName: string,
+  opts: { lookupPath?: string } = {},
 ): Promise<number | null> {
   const text = content.toString("utf8");
   const format = DOC_FORMATS[extOf(repoPath)] ?? "md";
-  const slug = slugForPath(repoPath);
+  // Human-ish fallback title derived from the path — NOT the identity. The doc's
+  // identity is a random opaque `slug` minted on first projection (below).
+  const titleFallback = slugForPath(repoPath);
+  // The CURRENT sourcePath to match the existing row on. Equals repoPath for an
+  // add/modify; for a RENAME it is the OLD path, and the update moves sourcePath
+  // to the new repoPath so the doc's id + slug survive the move.
+  const lookupPath = opts.lookupPath ?? repoPath;
   const folder = folderPathForRepoPath(repoPath);
   const { frontmatter, body } = parseFrontmatter(text);
   const title =
     (typeof frontmatter.title === "string" && frontmatter.title.trim()) ||
-    titleFromContent(format === "md" ? body : text, slug);
+    titleFromContent(format === "md" ? body : text, titleFallback);
   const contentHash = sha256(text);
   // Render cache = the body (frontmatter stripped) for md; the raw html for html.
   const renderedCache = format === "md" ? body : text;
 
   return db.transaction(async (tx) => {
+    // PROJECTION KEY: exactly one live doc per (space, sourcePath). This is what
+    // keeps a `.md` and a `.html` at the same stem — or two spaces with the same
+    // path — as INDEPENDENT docs (the old global path-derived slug collided).
     const existing = await tx
       .select()
       .from(docs)
-      .where(and(eq(docs.slug, slug), isNull(docs.deletedAt)))
+      .where(and(eq(docs.spaceId, spaceId), eq(docs.sourcePath, lookupPath), isNull(docs.deletedAt)))
       .limit(1);
 
     let docId: number;
+    let slug: string;
     let currentVersionId: number | null;
 
     if (existing.length === 0) {
+      // Mint a fresh opaque id; re-roll on the (astronomically rare) live clash
+      // against the global docs_slug_idx. The unique index is the final backstop.
+      slug = randomSlug();
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const [clash] = await tx
+          .select({ id: docs.id })
+          .from(docs)
+          .where(and(eq(docs.slug, slug), isNull(docs.deletedAt)))
+          .limit(1);
+        if (!clash) break;
+        slug = randomSlug();
+      }
       const [inserted] = await tx
         .insert(docs)
         .values({
@@ -155,8 +178,9 @@ async function indexFile(
       currentVersionId = null;
     } else {
       docId = existing[0].id;
+      slug = existing[0].slug;
       currentVersionId = existing[0].currentVersionId;
-      // Refresh the projection fields (title/format/path/commit/cache/fm).
+      // Refresh the projection fields; sourcePath/path move too (handles renames).
       await tx
         .update(docs)
         .set({
@@ -225,19 +249,19 @@ async function indexFile(
 /** Tombstone (unpublish) the doc projected from a now-deleted repo path. The git
  * history is untouched; only the projection reflects the removal. */
 async function tombstonePath(spaceId: number, repoPath: string, actorName: string): Promise<boolean> {
-  const slug = slugForPath(repoPath);
   return db.transaction(async (tx) => {
+    // Keyed by the PROJECTION KEY (space, sourcePath) — same as indexFile.
     const [doc] = await tx
       .select()
       .from(docs)
-      .where(and(eq(docs.slug, slug), eq(docs.spaceId, spaceId), isNull(docs.deletedAt)))
+      .where(and(eq(docs.sourcePath, repoPath), eq(docs.spaceId, spaceId), isNull(docs.deletedAt)))
       .limit(1);
     if (!doc || doc.unpublishedAt !== null) return false;
     await tx.update(docs).set({ unpublishedAt: new Date() }).where(eq(docs.id, doc.id));
     await emitEvent(tx, {
       kind: "doc.unpublished",
       docId: doc.id,
-      payload: { slug, audience: doc.audience, source: "git" },
+      payload: { slug: doc.slug, audience: doc.audience, source: "git" },
       actorName,
     });
     return true;
@@ -293,6 +317,35 @@ export async function reindexSpaceByDisk(
   let tombstoned = 0;
   let skipped = 0;
   for (const ch of changes) {
+    // A rename carries BOTH paths. Dispatch on the doc-ness of each so identity
+    // moves with the file — and a doc renamed to a non-doc extension is retired,
+    // never left as a live orphan pointing at a path that no longer renders.
+    if (ch.status === "R") {
+      const oldIsDoc = isDocPath(ch.oldPath);
+      const newIsDoc = isDocPath(ch.path);
+      if (oldIsDoc && newIsDoc) {
+        const blob = await readBlob(repoPath, opts.toSha, ch.path);
+        if (blob !== null) {
+          const id = await indexFile(spaceRow.id, ch.path, blob, opts.toSha, actorName, {
+            lookupPath: ch.oldPath, // match the OLD row → keep id + slug
+          });
+          if (id !== null) indexed++;
+        }
+      } else if (oldIsDoc) {
+        // doc → non-doc: no longer renderable; tombstone the old row.
+        if (await tombstonePath(spaceRow.id, ch.oldPath, actorName)) tombstoned++;
+      } else if (newIsDoc) {
+        // non-doc → doc: a brand-new projection at the new path.
+        const blob = await readBlob(repoPath, opts.toSha, ch.path);
+        if (blob !== null) {
+          const id = await indexFile(spaceRow.id, ch.path, blob, opts.toSha, actorName);
+          if (id !== null) indexed++;
+        }
+      } else {
+        skipped++; // non-doc → non-doc
+      }
+      continue;
+    }
     if (!isDocPath(ch.path)) {
       skipped++;
       continue;
