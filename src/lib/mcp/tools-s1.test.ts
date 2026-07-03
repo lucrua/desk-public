@@ -232,7 +232,7 @@ describe("MCP create_directory_share", () => {
   });
 
   it("admin creates a directory share → directory mode + 43-char token", async () => {
-    const res = await run("create_directory_share", admin, { path_prefix: "finance", label: "Folder" });
+    const res = await run("create_directory_share", admin, { space: "workspace", path_prefix: "finance", label: "Folder" });
     expect(res.isError).toBeFalsy();
     const out = structured(res);
     expect(out.mode).toBe("directory");
@@ -244,13 +244,23 @@ describe("MCP create_directory_share", () => {
     expect(await resolveShareDoc(token, "fin-q3")).not.toBeNull();
   });
 
+  it("missing space → error (space is required — Slice 1)", async () => {
+    const res = await run("create_directory_share", admin, { path_prefix: "finance", label: "Folder" });
+    expect(res.isError).toBe(true);
+  });
+
+  it("unknown space → error", async () => {
+    const res = await run("create_directory_share", admin, { space: "no-such-space", path_prefix: "finance", label: "x" });
+    expect(res.isError).toBe(true);
+  });
+
   it("root prefix ('') → error", async () => {
-    const res = await run("create_directory_share", admin, { path_prefix: "", label: "Root" });
+    const res = await run("create_directory_share", admin, { space: "workspace", path_prefix: "", label: "Root" });
     expect(res.isError).toBe(true);
   });
 
   it("member → admin-only error", async () => {
-    const res = await run("create_directory_share", member, { path_prefix: "finance", label: "x" });
+    const res = await run("create_directory_share", member, { space: "workspace", path_prefix: "finance", label: "x" });
     expect(res.isError).toBe(true);
   });
 });

@@ -76,21 +76,31 @@ describe("POST /api/shares", () => {
   });
 
   // ── directory mode ──────────────────────────────────────────────────────────
-  it("directory mode (pathPrefix) → 200 with directory mode + 43-char token", async () => {
-    const res = await POST(postReq({ pathPrefix: "os", label: "Folder" }));
+  it("directory mode (pathPrefix + space) → 200 with directory mode + 43-char token", async () => {
+    const res = await POST(postReq({ space: "workspace", pathPrefix: "os", label: "Folder" }));
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.mode).toBe("directory");
     expect(json.shareUrl.split("/").pop()).toHaveLength(43);
   });
 
+  it("directory mode WITHOUT space → 400 (space is required — Slice 1)", async () => {
+    const res = await POST(postReq({ pathPrefix: "os", label: "Folder" }));
+    expect(res.status).toBe(400);
+  });
+
+  it("directory mode with an unknown space → 404", async () => {
+    const res = await POST(postReq({ space: "no-such-space", pathPrefix: "os", label: "Folder" }));
+    expect(res.status).toBe(404);
+  });
+
   it("directory mode with root prefix ('') → 400", async () => {
-    const res = await POST(postReq({ pathPrefix: "", label: "Root" }));
+    const res = await POST(postReq({ space: "workspace", pathPrefix: "", label: "Root" }));
     expect(res.status).toBe(400);
   });
 
   it("directory mode member → 403", async () => {
-    const res = await POST(postReq({ pathPrefix: "os", label: "Folder" }, "member"));
+    const res = await POST(postReq({ space: "workspace", pathPrefix: "os", label: "Folder" }, "member"));
     expect(res.status).toBe(403);
   });
 

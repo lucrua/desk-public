@@ -29,4 +29,20 @@ export async function register(): Promise<void> {
   } catch (e) {
     console.error("[startup] push-policy hook backfill failed:", (e as Error)?.message);
   }
+
+  // Convergence fix-pass, Slice 1: backfill shares.space_id on pre-migration
+  // rows so every directory share is space-scoped (finding 3). Doc shares take
+  // the doc's space; ambiguous/empty directory shares are revoked (fail-closed,
+  // D-C7). Idempotent + best-effort (a failure logs, never crashes boot).
+  try {
+    const { backfillShareSpaceIds } = await import("@/lib/shares");
+    const r = await backfillShareSpaceIds();
+    if (r.docFilled > 0 || r.dirFilled > 0 || r.dirRevoked > 0) {
+      console.log(
+        `[startup] share space_id backfill: ${r.docFilled} doc + ${r.dirFilled} dir filled, ${r.dirRevoked} dir revoked (ambiguous/empty)`,
+      );
+    }
+  } catch (e) {
+    console.error("[startup] share space_id backfill failed:", (e as Error)?.message);
+  }
 }

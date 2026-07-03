@@ -307,6 +307,16 @@ export const shares = pgTable("shares", {
   // Null on a doc share. Root ('') is disallowed at create — a root share would
   // expose everything.
   pathPrefix: text("path_prefix"),
+  // The owning SPACE — the read-boundary scope (convergence fix-pass, Slice 1;
+  // finding 3). A DIRECTORY share filters its docs by (path prefix AND this
+  // space); without it, same-named folders in two spaces leak through one link.
+  // REQUIRED for directory shares going forward (createDirectoryShare demands a
+  // space). A DOC share derives its space from the doc, but carries it here too
+  // for uniformity. Nullable at the column level only to admit the one-shot
+  // backfill (backfillShareSpaceIds) of pre-migration rows; every live share
+  // resolves fail-closed when it is null (an unscoped directory share is exactly
+  // the leak, so it must NOT resolve).
+  spaceId: integer("space_id").references(() => spaces.id),
   label: text("label").notNull(),              // "Pedro", "PartnerCo intro"
   createdBy: text("created_by").notNull(),
   allowComments: integer("allow_comments").notNull().default(1), // 1|0 — link visitors may comment

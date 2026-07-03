@@ -1,6 +1,6 @@
 import { eq, and, sql, desc, gte, or, like, isNull, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
-import { shares, shareViews, docs, docVersions } from "@/db/schema";
+import { shares, shareViews, docs, docVersions, spaces } from "@/db/schema";
 import { mintToken, hashToken } from "@/lib/tokens";
 import { encryptToken, decryptToken } from "@/lib/crypto";
 import { normalizePath } from "@/lib/path";
@@ -37,6 +37,7 @@ export type CreateShareError =
 /** Result discriminant for createDirectoryShare. */
 export type CreateDirectoryShareError =
   | "invalid-prefix"   // not a valid path, OR root ('' — disallowed)
+  | "unknown-space"    // the required space slug does not resolve to a space
   ;
 
 export type ShareListItem = {
@@ -130,6 +131,10 @@ export async function createShare(
     tokenHash,
     ...(tokenEnc != null ? { tokenEnc } : {}),
     docId: doc.id,
+    // Carry the doc's space for uniformity with directory shares. A doc share's
+    // read boundary is still the doc itself (via doc_id), but stamping space_id
+    // keeps every share row space-scoped. doc.spaceId is NOT NULL.
+    spaceId: doc.spaceId,
     label: effectiveLabel,
     createdBy: by,
     ...(expiresAt !== null ? { expiresAt } : {}),
@@ -154,18 +159,25 @@ export type CreateDirectoryShareOutcome =
   | { ok: false; error: CreateDirectoryShareError };
 
 /**
- * Create a capability-link DIRECTORY share scoped to a folder `pathPrefix`.
+ * Create a capability-link DIRECTORY share scoped to a folder `pathPrefix`
+ * WITHIN a single space (`spaceSlug`).
+ *
+ * SECURITY (Slice 1, finding 3): a directory share is scoped to ONE space. Two
+ * spaces that each own a `reports/` folder must NOT leak through one link, so
+ * the owning space is REQUIRED — the resolver filters docs by (space AND prefix).
  *
  * The prefix is validated + canonicalized via normalizePath (same alphabet /
  * max-depth as docs.path). The ROOT prefix ('') is DISALLOWED — a root share
  * would expose everything; a non-empty prefix is required (returns
- * { ok:false, error:"invalid-prefix" } for an invalid or empty prefix).
+ * { ok:false, error:"invalid-prefix" } for an invalid or empty prefix). An
+ * unknown space slug returns { ok:false, error:"unknown-space" }.
  *
  * `allowComments` defaults on (folder-wide). The raw token is returned exactly
- * once. The share carries pathPrefix (docId NULL) — the DB CHECK enforces the
- * exactly-one-of invariant.
+ * once. The share carries pathPrefix + spaceId (docId NULL) — the DB CHECK
+ * enforces the exactly-one-of (docId, pathPrefix) invariant.
  */
 export async function createDirectoryShare(
+  spaceSlug: string,
   rawPrefix: string,
   label: string | undefined,
   by: string,
@@ -177,6 +189,17 @@ export async function createDirectoryShare(
   if (prefix === null || prefix.length === 0) {
     return { ok: false, error: "invalid-prefix" };
   }
+
+  // The space is the read-boundary scope — it MUST resolve (fail-closed). A
+  // missing/blank slug is treated as unknown (the wire schema requires it, but
+  // guard here too so an unvalidated caller can't reach the query with undefined).
+  if (!spaceSlug) return { ok: false, error: "unknown-space" };
+  const [space] = await db
+    .select({ id: spaces.id })
+    .from(spaces)
+    .where(eq(spaces.slug, spaceSlug))
+    .limit(1);
+  if (!space) return { ok: false, error: "unknown-space" };
 
   const token = mintToken();
   const tokenHash = hashToken(token);
@@ -198,6 +221,7 @@ export async function createDirectoryShare(
     ...(tokenEnc != null ? { tokenEnc } : {}),
     docId: null,
     pathPrefix: prefix,
+    spaceId: space.id,
     label: effectiveLabel,
     createdBy: by,
     allowComments: allowComments ? 1 : 0,
@@ -294,6 +318,10 @@ export type ResolvedDirectoryShare = {
   shareId: number;
   label: string;
   pathPrefix: string;
+  /** The owning space — the read-boundary scope. The per-doc + index resolvers
+   *  filter docs by this space (Slice 1, finding 3). Never null for a resolved
+   *  share (an unscoped directory share fails closed and never resolves). */
+  spaceId: number;
   allowComments: boolean;
   expiresAt: Date | null;
   createdBy: string;
@@ -346,10 +374,17 @@ export async function resolveDirectoryShare(
   // Must be a directory share (pathPrefix set). A doc share never resolves here.
   if (share.pathPrefix === null) return null;
 
+  // Space scoping (Slice 1, finding 3): a directory share MUST be scoped to one
+  // space. A legacy/unscoped share (space_id null) is exactly the cross-space
+  // leak — fail closed so it never resolves. Going forward createDirectoryShare
+  // always sets it and the backfill revokes any that can't be assigned.
+  if (share.spaceId === null) return null;
+
   return {
     shareId: share.id,
     label: share.label,
     pathPrefix: share.pathPrefix,
+    spaceId: share.spaceId,
     allowComments: share.allowComments === 1,
     expiresAt: share.expiresAt,
     createdBy: share.createdBy,
@@ -370,16 +405,21 @@ export async function resolveDirectoryShare(
 export async function listDocsUnderShare(
   shareId: number,
 ): Promise<DirectoryDocEntry[]> {
-  // Re-read the share to obtain the prefix from the trusted id.
+  // Re-read the share to obtain the prefix + owning space from the trusted id.
   const [share] = await db
-    .select({ pathPrefix: shares.pathPrefix })
+    .select({ pathPrefix: shares.pathPrefix, spaceId: shares.spaceId })
     .from(shares)
     .where(eq(shares.id, shareId))
     .limit(1);
-  if (!share || share.pathPrefix === null) return [];
+  // Fail closed: a non-directory share, or an unscoped directory share
+  // (space_id null — the Slice 1 leak) exposes nothing.
+  if (!share || share.pathPrefix === null || share.spaceId === null) return [];
   const prefix = share.pathPrefix;
+  const spaceId = share.spaceId;
 
-  // Boundary-safe SQL: path === prefix OR path LIKE 'prefix/%'. Escape LIKE
+  // Boundary-safe SQL: (space === the share's space) AND (path === prefix OR
+  // path LIKE 'prefix/%'). The space predicate is the finding-3 fix — without it
+  // a same-named folder in another space leaks through. Escape LIKE
   // metacharacters in the (validated) prefix defensively.
   const escaped = prefix.replace(/[%_\\]/g, "\\$&");
   const rows = await db
@@ -397,6 +437,7 @@ export async function listDocsUnderShare(
     .leftJoin(docVersions, eq(docVersions.id, docs.currentVersionId))
     .where(
       and(
+        eq(docs.spaceId, spaceId),
         isNull(docs.unpublishedAt),
         isNull(docs.deletedAt),
         or(eq(docs.path, prefix), like(docs.path, `${escaped}/%`)),
@@ -461,6 +502,13 @@ export async function resolveShareDoc(
 
   // Published only — unpublish kills visibility through the directory too.
   if (doc.unpublishedAt !== null) return null;
+
+  // SPACE guard (Slice 1, finding 3) — the doc MUST live in the share's space.
+  // Without this, a slug from ANOTHER space that happens to sit under the same
+  // prefix would resolve through this link. Paired with the prefix guard below;
+  // both are boundary-safe and both collapse to a uniform null. doc.spaceId is
+  // NOT NULL; share.spaceId is guaranteed non-null by resolveDirectoryShare.
+  if (doc.spaceId !== share.spaceId) return null;
 
   // THE prefix guard — boundary-safe. A doc not under the shared prefix is
   // indistinguishable from one that doesn't exist (uniform null).
@@ -841,4 +889,91 @@ export async function countRecentViews(days = 7): Promise<number> {
     .from(shareViews)
     .where(gte(shareViews.viewedAt, since));
   return row?.count ?? 0;
+}
+
+// ── backfillShareSpaceIds (one-shot boot backfill; Slice 1, D-C7) ─────────────
+
+export type ShareSpaceBackfillResult = {
+  /** Doc shares whose space_id was set from the doc's space. */
+  docFilled: number;
+  /** Directory shares assigned to their single owning space. */
+  dirFilled: number;
+  /** Directory shares REVOKED because they matched zero or >1 spaces. */
+  dirRevoked: number;
+};
+
+/**
+ * Backfill `shares.space_id` for pre-migration rows (convergence fix-pass,
+ * Slice 1). Runs once on server startup (instrumentation.register — the same
+ * best-effort precedent as backfillPolicyHooks), and is idempotent: it only
+ * touches shares whose space_id is still null, so a second run is a no-op.
+ *
+ * Policy (fail-closed, decision D-C7):
+ *   - DOC share: set space_id from the doc's space (docs.spaceId is NOT NULL).
+ *   - DIRECTORY share: resolve the set of spaces owning currently-matching docs
+ *     (path = prefix OR path LIKE prefix/%, EXCLUDING unpublished/deleted).
+ *       · exactly ONE space  → set space_id.
+ *       · ZERO or MORE-THAN-ONE → REVOKE the share (if not already revoked) and
+ *         log its id + prefix, so the owner re-mints it scoped to one space. The
+ *         share is left with space_id null; the resolver fails it closed anyway.
+ *
+ * AUTH-SENSITIVE: this reconciles a read-boundary column. It never widens
+ * access — an ambiguous share is revoked, never guessed at.
+ */
+export async function backfillShareSpaceIds(): Promise<ShareSpaceBackfillResult> {
+  let docFilled = 0;
+  let dirFilled = 0;
+  let dirRevoked = 0;
+
+  // ── Doc shares: space_id from the doc's space. ──────────────────────────────
+  const docShares = await db
+    .select({ id: shares.id, docId: shares.docId })
+    .from(shares)
+    .where(and(isNull(shares.spaceId), isNotNull(shares.docId)));
+  for (const s of docShares) {
+    const [doc] = await db
+      .select({ spaceId: docs.spaceId })
+      .from(docs)
+      .where(eq(docs.id, s.docId!))
+      .limit(1);
+    if (!doc) continue; // orphaned doc share (should not happen) — skip.
+    await db.update(shares).set({ spaceId: doc.spaceId }).where(eq(shares.id, s.id));
+    docFilled++;
+  }
+
+  // ── Directory shares: the single owning space, or revoke (fail-closed). ─────
+  const dirShares = await db
+    .select({ id: shares.id, pathPrefix: shares.pathPrefix, revokedAt: shares.revokedAt })
+    .from(shares)
+    .where(and(isNull(shares.spaceId), isNotNull(shares.pathPrefix)));
+  for (const s of dirShares) {
+    const prefix = s.pathPrefix!;
+    const escaped = prefix.replace(/[%_\\]/g, "\\$&");
+    const spaceRows = await db
+      .selectDistinct({ spaceId: docs.spaceId })
+      .from(docs)
+      .where(
+        and(
+          isNull(docs.unpublishedAt),
+          isNull(docs.deletedAt),
+          or(eq(docs.path, prefix), like(docs.path, `${escaped}/%`)),
+        ),
+      );
+    const spaceIds = spaceRows.map((r) => r.spaceId);
+    if (spaceIds.length === 1) {
+      await db.update(shares).set({ spaceId: spaceIds[0] }).where(eq(shares.id, s.id));
+      dirFilled++;
+    } else {
+      // Zero or ambiguous → revoke (don't guess). Log for re-mint.
+      if (s.revokedAt === null) {
+        await db.update(shares).set({ revokedAt: new Date() }).where(eq(shares.id, s.id));
+      }
+      dirRevoked++;
+      console.warn(
+        `[backfill] directory share ${s.id} (prefix "${prefix}") matched ${spaceIds.length} space(s) — revoked (fail-closed, D-C7). Re-mint it scoped to one space.`,
+      );
+    }
+  }
+
+  return { docFilled, dirFilled, dirRevoked };
 }

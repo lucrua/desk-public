@@ -173,7 +173,7 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `delete_doc` | admin | Stage-2 destructive delete: purges content, deletes its share links, frees the slug. |
 | `list_events` | staff | The append-only event log (cursor on `since`, optional `kinds`). Space-scoped for members. |
 | `create_share` | admin | Mint a capability link for a doc (`doc_slug`, `label`, optional `expires_in_days` / `pinned_version_id`). Returns the one-time URL. |
-| `create_directory_share` | admin | Mint a capability link for a whole folder (`path_prefix`, …). Exposes every published doc under the prefix; one revoke kills the lot. |
+| `create_directory_share` | admin | Mint a capability link for a whole folder in a space. **Space-scoped:** requires `space` (the space slug) + `path_prefix`; exposes every published doc under the prefix **in that space only** (a same-named folder in another space never leaks). One revoke kills the lot. |
 | `list_shares` | admin | All shares (doc + directory) with view stats. Each row carries `mode` + `docSlug`/`pathPrefix`. |
 | `list_doc_shares` | admin | Shares for one doc (`slug`), newest-first, with view stats. |
 | `revoke_share` | admin | Revoke a share by numeric `id`. |

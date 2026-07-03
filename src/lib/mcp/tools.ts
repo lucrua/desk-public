@@ -505,8 +505,11 @@ const createShareTool = defineTool({
 const createDirectoryShareTool = defineTool({
   name: "create_directory_share",
   description:
-    "Mint a capability-link DIRECTORY share for a whole folder (admin only). One URL exposes every PUBLISHED doc under `path_prefix` (the prefix or any descendant — boundary-safe, so 'finance' does not cover 'financial/'); newly-published docs under it appear automatically and one revoke kills the lot. Audience is bypassed by design. The ROOT prefix is NOT allowed — a non-empty folder path is required. Returns the one-time share URL (the raw token appears exactly once). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `label` optional — auto-named from folder path when omitted.",
+    "Mint a capability-link DIRECTORY share for a whole folder WITHIN a space (admin only). A directory share is SPACE-SCOPED: `space` (the space slug) is REQUIRED, and the link exposes every PUBLISHED doc under `path_prefix` IN THAT SPACE ONLY (the prefix or any descendant — boundary-safe, so 'finance' does not cover 'financial/', and a same-named folder in another space never leaks). Newly-published docs under it appear automatically and one revoke kills the lot. Audience is bypassed by design. The ROOT prefix is NOT allowed — a non-empty folder path is required. Returns the one-time share URL (the raw token appears exactly once). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `label` optional — auto-named from folder path when omitted.",
   inputSchema: {
+    space: z
+      .string()
+      .describe("REQUIRED space slug the folder lives in (e.g. 'workspace'). The share is scoped to this space; a same-named folder in another space is never exposed."),
     path_prefix: z
       .string()
       .describe("Non-empty folder path to share (e.g. 'finance' or 'os/canon'). Root ('') is disallowed."),
@@ -528,6 +531,7 @@ const createDirectoryShareTool = defineTool({
     const expiresInDays = args.expires_in_days === 0 ? null : args.expires_in_days;
 
     const result = await createDirectoryShare(
+      args.space,
       args.path_prefix,
       args.label,
       principal.name,
@@ -535,6 +539,7 @@ const createDirectoryShareTool = defineTool({
       args.allow_comments ?? true,
     );
     if (!result.ok) {
+      if (result.error === "unknown-space") return fail(`Space '${args.space}' not found`);
       return fail("Invalid folder — a non-empty, valid folder path is required (root is not allowed).");
     }
 

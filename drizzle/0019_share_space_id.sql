@@ -1,0 +1,24 @@
+-- 0019_share_space_id
+-- Directory-share space scoping (convergence fix-pass, Slice 1; finding 3).
+--
+-- The bug: a DIRECTORY share filtered its docs by path prefix ONLY, with no
+-- space predicate — so two spaces that each own a `reports/` folder both leaked
+-- through one link. This adds the owning space to `shares`:
+--   - directory shares REQUIRE it going forward (createDirectoryShare + POST
+--     /api/shares + MCP create_directory_share now demand a `space`);
+--   - doc shares derive their space from the doc, but carry it here too for
+--     uniformity.
+--
+-- The column is added NULLABLE only to admit the one-shot DATA BACKFILL, which
+-- runs as a boot backfill (backfillShareSpaceIds, wired into
+-- instrumentation.register — the same precedent as backfillPolicyHooks):
+--   - doc shares       → space_id from the doc's space;
+--   - directory shares → the single space owning currently-matching PUBLISHED
+--     docs (path = prefix OR path LIKE prefix/%). Exactly one space → set it;
+--     ZERO or MORE-THAN-ONE → REVOKE the share (fail-closed, decision D-C7) and
+--     log its id + prefix so the owner can re-mint it scoped to one space.
+--
+-- Every live share resolves fail-closed when space_id is null (an unscoped
+-- directory share is precisely the leak, so it must not resolve).
+ALTER TABLE "shares" ADD COLUMN "space_id" integer;--> statement-breakpoint
+ALTER TABLE "shares" ADD CONSTRAINT "shares_space_id_spaces_id_fk" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;

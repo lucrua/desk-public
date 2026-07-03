@@ -495,13 +495,13 @@ describe("shares service", () => {
 
   describe("createDirectoryShare — label optional", () => {
     it("omitted label → auto-named as 'Folder: <prefix>'", async () => {
-      const result = await createDirectoryShare("finance", undefined, "lucas");
+      const result = await createDirectoryShare("workspace", "finance", undefined, "lucas");
       if (!result.ok) throw new Error("Expected ok");
       expect(result.label).toBe("Folder: finance");
     });
 
     it("explicit label is preserved", async () => {
-      const result = await createDirectoryShare("finance", "Q3 finance pack", "lucas");
+      const result = await createDirectoryShare("workspace", "finance", "Q3 finance pack", "lucas");
       if (!result.ok) throw new Error("Expected ok");
       expect(result.label).toBe("Q3 finance pack");
     });

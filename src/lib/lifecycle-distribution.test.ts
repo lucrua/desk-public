@@ -152,7 +152,7 @@ describe("revealShareUrl", () => {
 
   it("reveal on a directory share returns the same URL", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const result = await createDirectoryShare("finance", "Folder", "lucas");
+    const result = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
     expect(result.ok).toBe(true);
     const created = result as { ok: true; id: number; shareUrl: string };
     const revealed = await revealShareUrl(created.id);
@@ -469,7 +469,7 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleted doc 404s on listDocsUnderShare (directory-share index)", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const dirShare = await createDirectoryShare("finance", "Folder", "lucas");
+    const dirShare = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
     expect(dirShare.ok).toBe(true);
     const dirShareOk = dirShare as { ok: true; id: number; token: string };
 
@@ -480,7 +480,7 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleted doc 404s on resolveShareDoc (directory-share per-doc path)", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const dirShare = await createDirectoryShare("finance", "Folder", "lucas");
+    const dirShare = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
     expect(dirShare.ok).toBe(true);
     const dirShareOk = dirShare as { ok: true; id: number; token: string };
 
@@ -760,7 +760,7 @@ describe("distribution", () => {
   it("links: includes doc shares and directory shares", async () => {
     await publishDocOk(docBase({ path: "finance" }));
     const docShare = await createShareOk("test-doc", "Pedro", "lucas");
-    const dirResult = await createDirectoryShare("finance", "Finance folder", "lucas");
+    const dirResult = await createDirectoryShare("workspace", "finance", "Finance folder", "lucas");
     expect(dirResult.ok).toBe(true);
 
     const links = await distributionLinks();
