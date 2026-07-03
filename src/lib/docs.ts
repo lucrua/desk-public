@@ -691,8 +691,6 @@ export async function getDocBySlug(
 export type DocListItem = {
   slug: string;
   title: string;
-  /** VESTIGIAL (Gen-2 consolidation) — no longer gates visibility. Nullable. */
-  audience: string | null;
   format: "md" | "html";
   /** Folder path ('' = root). */
   path: string;
@@ -761,7 +759,6 @@ export async function listDocs(opts?: {
     .select({
       slug: docs.slug,
       title: docs.title,
-      audience: docs.audience,
       format: docs.format,
       path: docs.path,
       unpublishedAt: docs.unpublishedAt,
@@ -791,7 +788,6 @@ export async function listDocs(opts?: {
   return filtered.map((r) => ({
     slug: r.slug,
     title: r.title,
-    audience: r.audience,
     format: r.format as "md" | "html",
     path: r.path,
     versionCount: r.versionCount,
@@ -883,7 +879,6 @@ export async function searchDocs(
     .select({
       slug: docs.slug,
       title: docs.title,
-      audience: docs.audience,
       format: docs.format,
       path: docs.path,
       unpublishedAt: docs.unpublishedAt,
@@ -925,7 +920,6 @@ export async function searchDocs(
   return filtered.map((r) => ({
     slug: r.slug,
     title: r.title,
-    audience: r.audience,
     format: r.format as "md" | "html",
     path: r.path,
     versionCount: r.versionCount,
