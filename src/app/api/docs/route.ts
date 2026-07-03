@@ -1,22 +1,32 @@
 import { NextResponse } from "next/server";
 import { getPrincipal, isStaff } from "@/lib/auth";
-import { publishDoc, listDocs, searchDocs, scopeForPrincipal } from "@/lib/docs";
+import { listDocs, searchDocs, getLiveDocBySpacePath, scopeForPrincipal } from "@/lib/docs";
+import {
+  webAuthorCommit,
+  liveMainTip,
+  resolveWebAuthorAccess,
+} from "@/lib/web-author";
+import { isSafeRepoPath } from "@/lib/git/web-commit";
 import { normalizePath } from "@/lib/path";
 
-import { SLUG_RE, MAX_CONTENT_CHARS } from "@/lib/limits";
-const VALID_FORMATS = ["md", "html"] as const;
-// Hard cap on stored content (covers both CLI and UI upload). Postgres `text`
-// has no practical limit, but a runaway paste/upload shouldn't reach the DB.
+import { MAX_CONTENT_CHARS } from "@/lib/limits";
 
 function err(status: number, message: string) {
   return NextResponse.json({ error: message }, { status });
 }
 
+/**
+ * POST /api/docs — publish a file into a SPACE by committing it to git (truth =
+ * git; the indexer projects it — no doc content is written to Postgres here).
+ * REQUIRES `space` (slug) + `path` (repo-relative file path). Content is
+ * committed via `webAuthorCommit`, honoring the space's push_policy: owner/admin
+ * (and writers under `direct`) → `main`; a non-owner writer under `proposal` →
+ * a `proposals/<handle>` ref. Returns { slug, url, ref } (slug/url null for a
+ * proposal write — no projection until it is accepted).
+ */
 export async function POST(req: Request) {
   const principal = await getPrincipal(req.headers as unknown as Headers);
-  if (principal.kind !== "admin") {
-    return err(403, "Forbidden — admin only");
-  }
+  if (!isStaff(principal)) return err(403, "Forbidden — staff only");
 
   let body: unknown;
   try {
@@ -26,23 +36,13 @@ export async function POST(req: Request) {
   }
 
   const b = body as Record<string, unknown>;
+  const { space, path, content, title, message } = b;
 
-  const { slug, title, sourcePath, format, content, path, baseVersionId } = b;
-
-  if (!slug || typeof slug !== "string" || !SLUG_RE.test(slug)) {
-    return err(400, "Missing or invalid slug (must match ^[a-z0-9][a-z0-9-]*$)");
+  if (!space || typeof space !== "string") {
+    return err(400, "Missing or invalid space (the space slug to publish into)");
   }
-  if (!title || typeof title !== "string") {
-    return err(400, "Missing title");
-  }
-  if (!sourcePath || typeof sourcePath !== "string") {
-    return err(400, "Missing sourcePath");
-  }
-  // Audience is VESTIGIAL (Gen-2 consolidation) — read access is space-scoped,
-  // so a doc's visibility follows its space, not a per-doc tag. The field is no
-  // longer accepted or validated here.
-  if (!format || !VALID_FORMATS.includes(format as (typeof VALID_FORMATS)[number])) {
-    return err(400, "Missing or invalid format (must be 'md' or 'html')");
+  if (!path || typeof path !== "string" || !isSafeRepoPath(path)) {
+    return err(400, "Missing or invalid path (repo-relative file path; no leading slash, no '..')");
   }
   if (!content || typeof content !== "string") {
     return err(400, "Missing content");
@@ -50,59 +50,54 @@ export async function POST(req: Request) {
   if (content.length > MAX_CONTENT_CHARS) {
     return err(413, `Content too large (${content.length} chars; max ${MAX_CONTENT_CHARS})`);
   }
-  // Optional folder path — validate + canonicalize. Absent → leave to the
-  // service (column default on create, unchanged on existing).
-  let normalizedPath: string | undefined;
-  if (path !== undefined) {
-    const np = normalizePath(path);
-    if (np === null) {
-      return err(400, "Invalid path — segments must match ^[a-z0-9][a-z0-9-]*$, max depth 6");
-    }
-    normalizedPath = np;
+
+  // READ/existence boundary + resolve space role (owner|writer|reader), FAIL-CLOSED.
+  const access = await resolveWebAuthorAccess(principal, space.trim());
+  if (!access.ok) {
+    // A non-member / reader / unknown space → 403 (no space-write authority).
+    return err(403, "Forbidden — you may not write to this space");
   }
-  // Optional optimistic-concurrency base.
-  let base: number | undefined;
-  if (baseVersionId !== undefined) {
-    if (typeof baseVersionId !== "number" || !Number.isInteger(baseVersionId) || baseVersionId <= 0) {
-      return err(400, "baseVersionId must be a positive integer");
-    }
-    base = baseVersionId;
-  }
-  const result = await publishDoc({
-    slug,
-    title,
-    sourcePath,
-    format: format as "md" | "html",
-    content,
-    by: principal.name,
-    ...(normalizedPath !== undefined ? { path: normalizedPath } : {}),
-    ...(base !== undefined ? { baseVersionId: base } : {}),
-    // Set the creator as the owner on initial create (principal.userId may be
-    // undefined in dev mode — harmless, owner stays null).
-    ...(principal.userId !== undefined ? { ownerUserId: principal.userId } : {}),
+
+  // Prepend an H1 for a markdown file with no heading when a title is given.
+  const lower = path.toLowerCase();
+  const isMd = lower.endsWith(".md") || lower.endsWith(".markdown");
+  const titleStr = typeof title === "string" ? title.trim() : "";
+  const finalContent =
+    titleStr && isMd && !/^#[ \t]+/m.test(content) ? `# ${titleStr}\n\n${content}` : content;
+
+  const baseMainTip = await liveMainTip(access.spaceSlug);
+  const result = await webAuthorCommit(access.spaceSlug, {
+    role: access.role,
+    identity: access.identity,
+    writes: [{ path, bytes: Buffer.from(finalContent, "utf8") }],
+    baseMainTip,
+    message: typeof message === "string" && message.trim() ? message.trim() : `publish ${path}`,
   });
 
   if (!result.ok) {
-    // Optimistic-concurrency conflict — the doc moved on under the caller.
-    return NextResponse.json(
-      {
-        error: "Version conflict — the doc has a newer version than your base",
-        current_version_id: result.currentVersionId,
-        current_content_hash: result.currentContentHash,
-      },
-      { status: 409 },
-    );
+    if (result.reason === "forbidden") return err(403, "Forbidden — you may not write to this space");
+    if (result.reason === "stale") {
+      return err(409, "The space changed while publishing — reload and retry.");
+    }
+    return err(500, result.detail ?? "Could not publish");
   }
 
-  const hubUrl = `${process.env.HUB_BASE_URL ?? "http://localhost:3000"}/docs/${slug}`;
+  const projected =
+    result.target === "main" ? await getLiveDocBySpacePath(access.spaceId, path) : null;
+  const slug = projected?.slug ?? null;
+  const url = slug
+    ? `${process.env.HUB_BASE_URL ?? "http://localhost:3000"}/docs/${slug}`
+    : null;
 
   return NextResponse.json({
-    slug: result.slug,
-    versionId: result.versionId,
-    versionNumber: result.versionNumber,
-    isNewDoc: result.isNewDoc,
-    isNewVersion: result.isNewVersion,
-    hubUrl,
+    ok: true,
+    slug,
+    url,
+    ref: result.ref,
+    target: result.target,
+    path,
+    newSha: result.newSha,
+    proposalName: result.proposalName ?? null,
   });
 }
 

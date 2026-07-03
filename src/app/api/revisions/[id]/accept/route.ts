@@ -46,6 +46,10 @@ export async function POST(req: Request, { params }: RouteContext) {
   const res = await acceptRevision(id, { by: principal.name });
   if (!res.ok) {
     if (res.reason === "not-found") return err(404, `Revision ${id} not found`);
+    if (res.reason === "stale") {
+      return err(409, "This doc changed while you were reviewing — reload and re-accept.");
+    }
+    if (res.reason === "error") return err(500, "Could not apply the revision.");
     return err(409, "Revision already decided");
   }
 

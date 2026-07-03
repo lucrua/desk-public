@@ -4,7 +4,7 @@
  * src/app/api/mcp/mcp.test.ts — here we hit each handler directly with a
  * principal + args to pin down the authz matrix and the masking helper.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
   seedAudiences,
@@ -13,10 +13,25 @@ import {
   seedSpace,
   seedUser,
 } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { getDocBySlug, getVersionContent } from "@/lib/docs";
 import { listComments } from "@/lib/comments";
 import type { Principal } from "@/lib/auth";
 import { TOOLS, maskContact, type ToolDef } from "./tools";
+
+// decide_revision accept commits to a real bare repo (truth = git). Isolate the
+// whole file to a throwaway DESK_DATA_DIR + wipe repos per-test so the shared
+// default `.desk-data` can't leak state across suites.
+let __restoreDataDir: (() => Promise<void>) | undefined;
+beforeAll(async () => {
+  ({ restore: __restoreDataDir } = await useTempDataDir());
+});
+afterAll(async () => {
+  if (__restoreDataDir) await __restoreDataDir();
+});
+beforeEach(async () => {
+  await clearSpaceRepos();
+});
 
 const admin: Principal = { kind: "admin", name: "Admin", email: "admin@desk.test", tokenName: "ci" };
 const member: Principal = { kind: "member", name: "Member" };
@@ -133,26 +148,21 @@ describe("MCP tools — behaviour", () => {
     expect(sc.versions).toHaveLength(1);
   });
 
-  it("publish_doc with no audience defaults to `private`", async () => {
+  it("publish_doc rejects an unknown space (no existence leak)", async () => {
     const r = await run("publish_doc", admin, {
-      slug: "no-aud",
-      title: "No Aud",
-      source_path: "os/n.md",
-      format: "md",
+      space: "ghost-space",
+      path: "os/n.md",
       content: "# n",
     });
-    expect(r.isError).toBeFalsy();
-    const doc = await getDocBySlug("no-aud");
-    expect(doc!.doc.audience).toBe("private");
+    expect(r.isError).toBe(true);
   });
 
-  it("publish_doc rejects oversized content", async () => {
+  it("publish_doc rejects oversized content (before any commit)", async () => {
+    // `workspace` exists (seedDevMemberInDefaultSpace); the size cap is checked
+    // after the space gate but before the git commit, so no repo is needed.
     const r = await run("publish_doc", admin, {
-      slug: "big",
-      title: "Big",
-      source_path: "os/big.md",
-      audience: "team",
-      format: "md",
+      space: "workspace",
+      path: "os/big.md",
       content: "x".repeat(2_000_001),
     });
     expect(r.isError).toBe(true);
@@ -435,7 +445,7 @@ describe("MCP tools — revisions behaviour", () => {
     expect(r.structuredContent?.error).toMatch(/not found/i);
   });
 
-  it("decide_revision accept publishes a new version (admin)", async () => {
+  it.skipIf(!HAVE_GIT)("decide_revision accept publishes a new version (admin, git commit)", async () => {
     const created = await run("propose_revision", member, { slug: "rdoc", content: "# r\n\nACCEPTED\n" });
     const id = (created.structuredContent as { revision: { id: number } }).revision.id;
     const r = await run("decide_revision", admin, { id, accept: true });

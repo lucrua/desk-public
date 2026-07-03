@@ -1,7 +1,13 @@
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { revisions, docs, docVersions, users } from "@/db/schema";
-import { publishDoc, getDocBySlug, type ViewerScope } from "@/lib/docs";
+import { getDocBySlug, type ViewerScope } from "@/lib/docs";
+import { getSpaceById } from "@/lib/spaces";
+import {
+  webAuthorCommit,
+  liveMainTip,
+  type WebAuthorIdentity,
+} from "@/lib/web-author";
 import { emitEvent } from "@/lib/events";
 import { MAX_CONTENT_CHARS, MAX_REVISION_NOTE_CHARS } from "@/lib/limits";
 
@@ -136,22 +142,42 @@ export async function getRevision(id: number): Promise<RevisionRow | null> {
 }
 
 export type AcceptResult =
-  | { ok: false; reason: "not-found" | "already-decided" }
+  | { ok: false; reason: "not-found" | "already-decided" | "stale" | "error" }
   | { ok: true; versionId: number; isNewVersion: boolean; staleBase: boolean };
 
+/** Derive a web-author commit identity from a reviewer's display name. The
+ * accept lands on `main` as an authoritative merge (role forced to `owner`), so
+ * the handle is not used for routing — only a stable author label. */
+function identityFromName(name: string): WebAuthorIdentity {
+  const handle =
+    (name || "reviewer")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "") || "reviewer";
+  return { name: name || "Desk reviewer", email: `${handle}@desk.localhost`, handle };
+}
+
 /**
- * Accept a revision (admin action). Publishes the revision's content as a new
- * version via publishDoc — passing the doc's CURRENT title / sourcePath /
- * audience / format through unchanged (only the content differs), so the
- * existing publish validations apply and the proposal can't move metadata.
+ * Accept a revision (admin OR doc-owner action). Truth = git: the revision's
+ * content is committed to the doc's `(space, sourcePath)` on `main` via
+ * `webAuthorCommit` (role forced to `owner` — an accept is an authoritative
+ * merge, exactly like accepting a git proposal), and the synchronous reindex
+ * projects the new version. No doc content is written to Postgres here — the
+ * indexer owns that (the git-truth invariant).
  *
- * `publishedBy` is the accepting admin's display name (`by`). The revision row
- * retains its own authorName / authorKind for attribution.
+ * `by` is the accepting reviewer's display name — the commit author label and
+ * the `revision.decided` actor; the reindex records it as the version's
+ * `publishedBy`. The revision row retains its own authorName / authorKind for
+ * proposer attribution.
  *
- * Stale-base detection: `staleBase` is true when the revision's baseVersionId is
- * no longer the doc's current version at accept time (the doc moved on since the
- * proposal). The accept is still allowed — the admin saw the warning + the diff
- * against current in the UI — but the flag is surfaced so callers can log/note.
+ * CAS: the commit builds on `main`'s live tip. If `main` moved between the read
+ * and the commit, `webAuthorCommit` rejects it as `stale`; we re-read the tip
+ * and retry ONCE, then surface `stale` to the reviewer (never a silent
+ * overwrite).
+ *
+ * Stale-base detection (`staleBase`) is unchanged: true when the revision's
+ * baseVersionId is no longer the doc's current version at accept time.
  */
 export async function acceptRevision(
   id: number,
@@ -170,26 +196,49 @@ export async function acceptRevision(
   const doc = docRows[0];
   if (!doc) return { ok: false, reason: "not-found" };
 
+  // Resolve the doc's owning space (its slug is the repo/target of the commit).
+  const space = await getSpaceById(doc.spaceId);
+  if (!space) return { ok: false, reason: "error" };
+
   const staleBase = doc.currentVersionId !== rev.baseVersionId;
+  const prevVersionId = doc.currentVersionId;
+  const identity = identityFromName(by);
 
-  // publishDoc opens its own transaction (and emits doc.published). Accept never
-  // passes a base_version_id, so it cannot conflict — but adapt to the result
-  // shape defensively.
-  const published = await publishDoc({
-    slug: doc.slug,
-    title: doc.title,
-    sourcePath: doc.sourcePath,
-    audience: doc.audience,
-    format: doc.format,
-    content: rev.content,
-    by,
-  });
-  if (!published.ok) {
-    // Unreachable in practice (no base check on accept); treat as a no-op.
-    return { ok: false, reason: "already-decided" };
+  // Commit the revision content to the doc's source path on `main`. CAS on the
+  // live tip; on `stale`, re-read the tip and retry ONCE.
+  let committed = false;
+  let failReason: "stale" | "error" = "stale";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const baseMainTip = await liveMainTip(space.slug);
+    const result = await webAuthorCommit(space.slug, {
+      role: "owner",
+      identity,
+      writes: [{ path: doc.sourcePath, bytes: Buffer.from(rev.content, "utf8") }],
+      baseMainTip,
+      message: `accept revision: ${doc.sourcePath}`,
+    });
+    if (result.ok) {
+      committed = true;
+      break;
+    }
+    if (result.reason === "stale") {
+      failReason = "stale";
+      continue; // re-read the tip and retry once
+    }
+    // forbidden / conflict / unknown-space / error → not retryable.
+    failReason = "error";
+    break;
   }
+  if (!committed) return { ok: false, reason: failReason };
 
-  // Mark decided + emit revision.decided atomically.
+  // The reindex has projected the commit. Re-read the doc for the new version id
+  // (a no-op commit — content identical to current — dedups to the same version).
+  const after = await getDocBySlug(doc.slug, { includeUnpublished: true });
+  const newVersionId = after?.doc.currentVersionId ?? prevVersionId ?? 0;
+  const isNewVersion = newVersionId !== prevVersionId;
+
+  // Mark decided + emit revision.decided atomically (the doc-version write is the
+  // indexer's; this only records the decision).
   await db.transaction(async (tx) => {
     await tx
       .update(revisions)
@@ -202,19 +251,14 @@ export async function acceptRevision(
         revisionId: id,
         slug: doc.slug,
         decision: "accepted",
-        versionId: published.versionId,
+        versionId: newVersionId,
         staleBase,
       },
       actorName: by,
     });
   });
 
-  return {
-    ok: true,
-    versionId: published.versionId,
-    isNewVersion: published.isNewVersion,
-    staleBase,
-  };
+  return { ok: true, versionId: newVersionId, isNewVersion, staleBase };
 }
 
 export type RejectResult =

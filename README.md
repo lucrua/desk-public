@@ -104,6 +104,8 @@ git push desk HEAD:main
 
 > Creating a new doc, editing a doc, or uploading a file **in the browser** lands as a real git commit for an owner/writer (a non-owner writer under `push_policy=proposal` opens a proposal for review instead). Guest (share-visitor) browser authoring (W2) is not yet built.
 
+**Every content write converges on a git commit** (truth = git; Postgres is a rebuildable projection). The **agent** (`publish_doc`) and **REST** (`POST /api/docs`) publish paths both take a required **`space`** + **`path`** and commit the file to the space's repo — the doc's stable opaque slug is minted by the projection, so you address by `(space, path)`, never by a chosen slug. They honor `push_policy` exactly like a `git push`: owner/admin (and writers under `direct`) land on `main`; a non-owner writer under `proposal` opens a `proposals/<handle>` ref for review. **Accepting a proposed revision** (`decide_revision` / the review UI) likewise commits the revision's content to `main` and lets the indexer project it — the DB is never written directly. After this convergence, **no production path writes doc content to Postgres except the indexer projecting git.**
+
 ---
 
 ## Tests and typecheck
@@ -167,8 +169,8 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `search_docs` | staff | Full-text search over title + content, ranked, with snippets. Space-scoped. |
 | `get_doc` | staff | One doc by `slug`: metadata, current content, version list. Viewer-scoped. |
 | `get_version` | staff | Raw content of a specific `version_id` of a doc (`slug`). Viewer-scoped; cross-doc ids rejected. |
-| `publish_doc` | admin / owner | Create (admin) or update (admin or owner) a doc (`slug`, `title`, `source_path`, `format`, `content`, optional `path`). Content capped at 2 MB. |
-| `update_doc` | admin | Move a doc to a folder (`path`) and/or reassign its owner (`owner_user_id`) — without publishing a new version. |
+| `publish_doc` | space member | Publish a file into a **space** by committing it to git. Requires `space` + `path` (repo-relative file path) + `content` (optional `title`, `message`). Honors `push_policy` (owner/admin → `main`; non-owner writer under `proposal` → a `proposals/*` ref). The opaque slug is minted by the projection. Returns `{ slug, url, ref }` (slug/url null for a proposal). Content capped at 2 MB. |
+| `update_doc` | admin | Move a doc to a folder (`path`) and/or reassign its owner (`owner_user_id`) — projection metadata, no new version. |
 | `unpublish_doc` | admin | Unpublish a doc by `slug` — kills the hub page and every share instantly. |
 | `delete_doc` | admin | Stage-2 destructive delete: purges content, deletes its share links, frees the slug. |
 | `list_events` | staff | The append-only event log (cursor on `since`, optional `kinds`). Space-scoped for members. |

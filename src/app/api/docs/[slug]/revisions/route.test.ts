@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
   publishDocOk,
@@ -6,12 +6,27 @@ import {
   seedSpace,
   seedUser,
 } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { publishDoc, getDocBySlug, listVersions, getVersionContent } from "@/lib/docs";
 import { getRevision } from "@/lib/revisions";
 import { GET, POST } from "./route";
 import { POST as acceptRoute } from "@/app/api/revisions/[id]/accept/route";
 import { POST as rejectRoute } from "@/app/api/revisions/[id]/reject/route";
 import { MAX_CONTENT_CHARS, MAX_REVISION_NOTE_CHARS } from "@/lib/limits";
+
+// acceptRevision commits to a real bare repo (truth = git) — isolate to a
+// throwaway DESK_DATA_DIR and wipe repos per-test (file-level; harmless for the
+// non-committing GET/POST-revision tests).
+let __restoreDataDir: (() => Promise<void>) | undefined;
+beforeAll(async () => {
+  ({ restore: __restoreDataDir } = await useTempDataDir());
+});
+afterAll(async () => {
+  if (__restoreDataDir) await __restoreDataDir();
+});
+beforeEach(async () => {
+  await clearSpaceRepos();
+});
 
 type Role = "admin" | "member" | "anonymous";
 
@@ -136,7 +151,7 @@ describe("POST /api/revisions/[id]/accept | reject", () => {
     return (await res.json()).revision as { id: number };
   }
 
-  it("admin accept publishes a new version + marks accepted", async () => {
+  it.skipIf(!HAVE_GIT)("admin accept publishes a new version + marks accepted (git commit)", async () => {
     const before = await listVersions("team-doc");
     const rev = await propose("# Hi\n\nACCEPTED\n");
     const res = await acceptRoute(
@@ -179,7 +194,7 @@ describe("POST /api/revisions/[id]/accept | reject", () => {
     expect((await listVersions("team-doc")).length).toBe(before.length);
   });
 
-  it("double-decide → 409", async () => {
+  it.skipIf(!HAVE_GIT)("double-decide → 409", async () => {
     const rev = await propose("# x");
     await acceptRoute(
       new Request("http://test", { method: "POST", headers: headers("admin") }),

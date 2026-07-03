@@ -18,12 +18,15 @@
 import { db } from "@/db";
 import { users, docs } from "@/db/schema";
 import { eq, and, isNull } from "drizzle-orm";
+import { isStaff, type Principal } from "@/lib/auth";
 import {
   getSpaceBySlug,
+  listSpaceMembers,
   ownerSlugForUser,
   type SpaceRole,
   type SpaceRow,
 } from "@/lib/spaces";
+import { resolvePrincipalUserId } from "@/lib/principal-user";
 import {
   bareRepoPath,
   initBareRepo,
@@ -95,6 +98,83 @@ async function repoPathForSpace(space: SpaceRow): Promise<string> {
   const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
   const ownerSlug = ownerSlugForUser(owner ?? null, space.ownerUserId);
   return bareRepoPath(ownerSlug, space.slug);
+}
+
+/**
+ * The live `main` tip for a space's bare repo (null when the space was never
+ * pushed / has no repo on disk yet). The CAS base a web/agent commit builds on.
+ * Non-throwing — an absent repo resolves to null (a first commit).
+ */
+export async function liveMainTip(spaceSlug: string): Promise<string | null> {
+  const space = await getSpaceBySlug(spaceSlug);
+  if (!space) return null;
+  const repoPath = await repoPathForSpace(space);
+  try {
+    return await refTip(repoPath, DEFAULT_BRANCH);
+  } catch {
+    return null; // repo absent — a never-pushed space.
+  }
+}
+
+/**
+ * The write access a principal has on a space, for a server-side commit that
+ * BYPASSES the git transport (MCP `publish_doc`, `POST /api/docs`, the
+ * space-scoped web-author route). Resolves the caller's SPACE ROLE + commit
+ * IDENTITY the same way the space page + git transport do, FAIL-CLOSED:
+ *   - a non-staff (anonymous) principal → forbidden;
+ *   - an unknown space slug → unknown-space (callers map to a uniform 404/error);
+ *   - a non-admin, non-member of the space → forbidden;
+ *   - admin OR the space owner → role `owner` (unrestricted); else the
+ *     membership role (writer/reader — a reader is rejected downstream by
+ *     `targetRefFor`).
+ *
+ * This is ONLY the read/existence + role resolution; the ref-level write
+ * boundary (push-policy) is re-applied inside `webAuthorCommit` (`targetRefFor`).
+ */
+export type WebAuthorAccess =
+  | { ok: true; role: SpaceRole; identity: WebAuthorIdentity; spaceId: number; spaceSlug: string }
+  | { ok: false; reason: "forbidden" | "unknown-space" };
+
+export async function resolveWebAuthorAccess(
+  principal: Principal,
+  spaceSlug: string,
+): Promise<WebAuthorAccess> {
+  if (!isStaff(principal)) return { ok: false, reason: "forbidden" };
+  const space = await getSpaceBySlug(spaceSlug);
+  if (!space) return { ok: false, reason: "unknown-space" };
+
+  const members = (await listSpaceMembers(spaceSlug)) ?? [];
+  const myUserId = await resolvePrincipalUserId(principal);
+  const myMembership =
+    myUserId != null ? members.find((m) => m.userId === myUserId) : undefined;
+  const isAdmin = principal.kind === "admin";
+
+  // READ boundary: an admin sees any space; a non-admin must be a member.
+  if (!isAdmin && !myMembership) return { ok: false, reason: "forbidden" };
+
+  // WRITE role: admin + the space owner act as `owner` (unrestricted); otherwise
+  // the membership role. A reader resolves to a role webAuthorCommit won't let
+  // write (forbidden downstream).
+  let role: SpaceRole;
+  if (isAdmin || myMembership?.isOwner) {
+    role = "owner";
+  } else {
+    role = (myMembership?.role as SpaceRole) ?? "reader";
+  }
+
+  const handle =
+    myMembership?.tokenName ??
+    (principal.email ? principal.email.split("@")[0] : undefined) ??
+    (myMembership?.email ? myMembership.email.split("@")[0] : undefined) ??
+    "web";
+
+  const identity: WebAuthorIdentity = {
+    name: principal.name || "Desk user",
+    email: principal.email ?? `${handle}@desk.localhost`,
+    handle,
+  };
+
+  return { ok: true, role, identity, spaceId: space.id, spaceSlug };
 }
 
 export type SpaceFileEntry = {

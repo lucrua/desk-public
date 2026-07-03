@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
   seedAudiences,
@@ -9,6 +9,7 @@ import {
   publishDocOk,
   createShareOk,
 } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
 import { db } from "@/db";
 import {
@@ -40,8 +41,19 @@ async function allKinds(): Promise<string[]> {
 }
 
 describe("events service", () => {
+  // The accept-revision test commits to a real bare repo (truth = git) — isolate
+  // those writes to a throwaway DESK_DATA_DIR and wipe repos per-test.
+  let restore: (() => Promise<void>) | undefined;
+  beforeAll(async () => {
+    ({ restore } = await useTempDataDir());
+  });
+  afterAll(async () => {
+    if (restore) await restore();
+  });
+
   beforeEach(async () => {
     await resetDb();
+    await clearSpaceRepos();
     await seedAudiences();
     // Pre-create the Phase-1 default space (inserted directly, emits no event)
     // so publishDoc doesn't lazily create it — and thereby emit a space.created
@@ -99,7 +111,7 @@ describe("events service", () => {
     expect(p).toMatchObject({ slug: "ev-doc", from_path: "", to_path: "os/canon" });
   });
 
-  it("createRevision emits revision.proposed; accept emits doc.published + revision.decided", async () => {
+  it.skipIf(!HAVE_GIT)("createRevision emits revision.proposed; accept emits doc.published + revision.decided", async () => {
     await publishDocOk(DOC);
     const doc = await getDocBySlug("ev-doc");
     const rev = await createRevision({

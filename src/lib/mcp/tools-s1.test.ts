@@ -4,9 +4,11 @@
  * path_prefix, pinned_version_id). Handlers are exercised directly, like
  * tools.test.ts.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import { resetDb, seedAudiences, publishDocOk, seedSpace, seedUser } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { getDocBySlug } from "@/lib/docs";
+import { createSpace } from "@/lib/spaces";
 import { resolveShare } from "@/lib/shares";
 import type { Principal } from "@/lib/auth";
 import { TOOLS, type ToolDef } from "./tools";
@@ -118,54 +120,54 @@ describe("MCP list_events", () => {
   });
 });
 
-describe("MCP publish_doc — path + base_version_id", () => {
+describe.skipIf(!HAVE_GIT)("MCP publish_doc — git-truth (space + path)", () => {
+  let restore: () => Promise<void>;
+  beforeAll(async () => {
+    ({ restore } = await useTempDataDir());
+  });
+  afterAll(async () => {
+    await restore();
+  });
   beforeEach(async () => {
     await resetDb();
+    await clearSpaceRepos();
     await seedAudiences();
+    const ownerId = await seedUser({ tokenName: "s1-owner", displayName: "Owner", role: "admin" });
+    const s = await createSpace("s1space", ownerId, "private", "t");
+    if (!s.ok) throw new Error(s.error);
   });
 
-  it("path on publish is stored", async () => {
+  it("commits a doc to main and projects it at (space, path); slug minted by the indexer", async () => {
     const res = await run("publish_doc", admin, {
-      slug: "mp",
-      title: "MP",
-      source_path: "os/mp.md",
-      audience: "team",
-      format: "md",
+      space: "s1space",
+      path: "os/mp.md",
       content: "# x",
-      path: "os/canon",
     });
     expect(res.isError).toBeFalsy();
-    const doc = await getDocBySlug("mp");
-    expect(doc!.doc.path).toBe("os/canon");
+    const out = structured(res);
+    expect(out.target).toBe("main");
+    expect(out.ref).toBe("refs/heads/main");
+    expect(typeof out.slug).toBe("string");
+    const doc = await getDocBySlug(out.slug as string, { includeUnpublished: true });
+    expect(doc!.doc.sourcePath).toBe("os/mp.md");
   });
 
-  it("invalid path → error", async () => {
+  it("rejects an unsafe path (traversal)", async () => {
     const res = await run("publish_doc", admin, {
-      slug: "mp2",
-      title: "MP",
-      source_path: "os/mp.md",
-      audience: "team",
-      format: "md",
+      space: "s1space",
+      path: "../escape.md",
       content: "# x",
-      path: "BAD",
     });
     expect(res.isError).toBe(true);
   });
 
-  it("stale base_version_id → conflict error result", async () => {
-    const v1 = await publishDocOk({ ...DOC, slug: "mp3", by: "lucas" });
-    await publishDocOk({ ...DOC, slug: "mp3", content: "# v2", by: "lucas" });
+  it("rejects an unknown space", async () => {
     const res = await run("publish_doc", admin, {
-      slug: "mp3",
-      title: "M",
-      source_path: "os/m.md",
-      audience: "team",
-      format: "md",
-      content: "# v3",
-      base_version_id: v1.versionId,
+      space: "no-such-space",
+      path: "os/mp.md",
+      content: "# x",
     });
     expect(res.isError).toBe(true);
-    expect(JSON.stringify(res)).toContain("conflict");
   });
 });
 
