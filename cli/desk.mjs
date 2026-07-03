@@ -8,7 +8,6 @@ import { createHash } from "node:crypto";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, basename, extname } from "node:path";
 import process from "node:process";
-import { runSync } from "./desk-sync.mjs";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -144,61 +143,11 @@ function parseFlags(args) {
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
-
-async function cmdPublish(args) {
-  const { flags, positional } = parseFlags(args);
-
-  const filePath = positional[0];
-  if (!filePath) die("Usage: desk publish <file> [--audience <a>] [--slug <s>] [--title <t>] [--source <path>]");
-
-  // Audience is optional now (Audiences v2): default to `private` when omitted.
-  const audience = flags["audience"] ?? "private";
-
-  const absPath = resolve(process.cwd(), filePath);
-  if (!existsSync(absPath)) die(`File not found: ${absPath}`);
-
-  const format = formatFromExt(filePath);
-  if (!format) die(`Cannot determine format from extension '${extname(filePath)}' — expected .md, .html, or .htm`);
-
-  const content = readFileSync(absPath, "utf8");
-
-  // Slug
-  const stem = basename(filePath, extname(filePath));
-  let slug = flags["slug"] ?? slugify(stem);
-  if (!SLUG_RE.test(slug)) {
-    die(`Slug '${slug}' does not match ^[a-z0-9][a-z0-9-]*$ — provide --slug manually`);
-  }
-
-  // Title
-  let title = flags["title"];
-  if (!title) {
-    if (format === "md") {
-      title = extractMdTitle(content) ?? stem;
-    } else {
-      title = stem;
-    }
-  }
-
-  // Source path
-  const sourcePath = flags["source"] ?? filePath;
-
-  const result = await apiFetch("/api/docs", {
-    method: "POST",
-    body: JSON.stringify({ slug, title, sourcePath, audience, format, content }),
-  });
-
-  const versionLabel = result.isNewVersion ? "new version" : "unchanged";
-  console.log(`published ${result.slug} v${result.versionId} (${versionLabel})`);
-  console.log(result.hubUrl);
-}
-
-async function cmdUnpublish(args) {
-  const slug = args[0];
-  if (!slug) die("Usage: desk unpublish <slug>");
-
-  await apiFetch(`/api/docs/${slug}`, { method: "DELETE" });
-  console.log(`unpublished ${slug}`);
-}
+//
+// Write commands (`desk publish`, `desk unpublish`, `desk sync`) were RETIRED in
+// the Convergence fix-pass (Slice 2): publishing is now a git push (truth = git),
+// so the CLI keeps only the READ + SHARE surface. To publish, `git push` to the
+// space's `main`; to unpublish, delete the file and push. See README "Publishing".
 
 async function cmdShare(args) {
   const { flags, positional } = parseFlags(args);
@@ -374,18 +323,14 @@ async function cmdStatus(_args) {
 }
 
 function cmdHelp() {
-  console.log(`hub — Desk CLI
+  console.log(`hub — Desk CLI  (read + share surface)
+
+Publishing is a git push — 'git push <remote> HEAD:main' to the space's repo
+(truth = git; Desk re-renders within seconds). The CLI's write commands
+(publish / unpublish / sync) were retired in the Convergence fix-pass. See the
+README "Publishing" section.
 
 Commands:
-  desk publish <file> [--audience <a>] [--slug <s>] [--title <t>] [--source <path>]
-      Publish a doc from a local file. Format inferred from extension (.md → md, .html/.htm → html).
-      Slug defaults to filename stem (lowercased, non-[a-z0-9-] → '-'). Title defaults to first
-      # heading (md) or filename stem. --source is stored as sourcePath (default: the file path given).
-      --audience is optional and defaults to `private` (only you + admins + members added to the group).
-
-  desk unpublish <slug>
-      Mark a doc as unpublished.
-
   desk share <slug> --label <label> [--expires <days>]
       Create a capability share link for a doc. URL printed once — save it.
 
@@ -397,25 +342,7 @@ Commands:
 
   desk status
       For each doc whose sourcePath resolves locally: compare sha256 of local file to
-      the published version. Prints: in sync | canon ahead — re-publish? | source file not found.
-
-  desk sync link <slug> <localPath>
-      Link a cloud doc to a local file (cloud becomes canon for it). Then 'desk sync'.
-
-  desk sync link-dir <cloudPrefix> <localDir> [--audience <a>]
-      Link a cloud folder prefix to a local directory. New docs on either side are
-      adopted: cloud docs → local files; new local .md/.html → published (admin).
-
-  desk sync unlink <slug|prefix>
-      Stop syncing a file or dir. The local file is kept; only the mapping is removed.
-
-  desk sync status [--json]
-      Table of every linked file: local/remote/base state, the pending action, last synced.
-
-  desk sync [--dry-run] [--json]
-      One-shot convergence of every linked file/dir. Local-only → push (base-checked);
-      remote-only → pull; both → 3-way merge (clean → push; conflict → proposed revision
-      + local set to cloud HEAD). Member tokens always file revisions. --dry-run plans only.
+      the published version. Prints: in sync | canon ahead (push?) | source file not found.
 
   desk help
       Show this usage.
@@ -425,7 +352,6 @@ Environment:
   HUB_DEV_ROLE       Dev-mode role header value (default: admin)
   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET
                      Cloudflare Access service token (if set, used instead of x-dev-role)
-  DESK_SYNC_MANIFEST Override the sync manifest path (default: ~/.config/desk/sync.json)
 
 Alias:
   alias desk='node ~/desk/cli/desk.mjs'
@@ -437,13 +363,16 @@ Alias:
 const [, , cmd, ...rest] = process.argv;
 
 switch (cmd) {
-  case "publish":    await cmdPublish(rest); break;
-  case "unpublish":  await cmdUnpublish(rest); break;
   case "share":      await cmdShare(rest); break;
   case "revoke":     await cmdRevoke(rest); break;
   case "list":       await cmdList(rest); break;
   case "status":     await cmdStatus(rest); break;
-  case "sync":       await runSync(rest, parseFlags); break;
+  case "publish":
+  case "unpublish":
+  case "sync":
+    console.error(`hub: '${cmd}' was retired — publishing is now 'git push' to the space's main branch (truth = git). See the README "Publishing" section.`);
+    process.exit(1);
+    break;
   case "help":
   case "--help":
   case "-h":
