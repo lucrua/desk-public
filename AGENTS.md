@@ -24,7 +24,8 @@
 ## Conventions
 - **Landing posture for risky / auth-sensitive changes:** branch, commit, run the full suite + `pnpm build` + `pnpm typecheck`, then **STOP for review** before pushing a deploy branch. Never `git push --force`, `git reset --hard`, or `--no-verify`.
 - **The access boundary is sacred:** any change to who-sees-what needs exhaustive tests (admin / member / non-member / public / share / anonymous) and fail-closed defaults (no existence leak — non-member on a private space gets a uniform 404).
-- **Deferred / queued (NOT built):** **web-commit** (edit a doc/frontmatter in the browser → commit to the file → re-project), **packs** (re-organized shareable subset of a space; read-packs first). Details in the decisions doc.
+- **Shipped (built):** **web authoring** (browser new-doc / edit / upload → a real git commit, CAS-on-ref; the feature formerly listed here as "web-commit") and **external collaboration** (invite links → self-serve onboarding; per-space `push_policy` `direct`/`proposal`; proposals-as-PRs).
+- **Deferred / queued (NOT built):** **packs** (re-organized shareable subset of a space; read-packs first) and the **headless-agent runner** (`card.assigned` → runner; the event/proposal primitives exist, the runner does not). The active build spec is `docs/specs/convergence-fix-pass.md`. Details in the decisions doc.
 
 <!-- BEGIN:nextjs-agent-rules -->
 # This is NOT the Next.js you know

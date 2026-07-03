@@ -126,23 +126,26 @@ Killing the manual upload-to-share does **not** mean "Desk renders the whole rep
 
 ## 9. Built today vs net-new
 
+> **Status update (2026-07-03):** the Phase-1 and most of the Phase-2 net-new work below has **landed on `main`**. README's "What's built vs. not" table is the canonical current inventory; this table now reflects reality. Audiences (the old per-doc read tag) were **retired** (consolidation D2) — read scoping is space-scoped only. The remaining not-built items are packs and the headless-agent runner.
+
 | Capability | State |
 |---|---|
-| Audiences, audience members, capability + directory shares, view-tracking, roles/principals, per-doc owner | 🟢 built — the **read-scoping** layer |
-| Proposed-revision (propose → review → accept) | 🟢 built — the **PR / reverse-merge review gate** reuses this |
-| Catalog schemas/items/links (schema-as-data + edges) | 🟡 built but Desk-authored — reframe to **projection of repo frontmatter** |
-| Events table (`card.assigned`, etc.) | 🟢 built — the **agent trigger** consumes it |
-| **`space`** (owned, access-controlled hosted git repo) | 🔴 net-new — the structural keystone |
-| **Desk hosts git** (smart-HTTP + token→ACL auth + post-receive re-project) | 🔴 net-new — the main new subsystem |
-| **Web-commit** (web edit → commit, CAS-on-ref) | 🔴 net-new — needed because owners may be web-only |
-| **Packs** (manifest view-repos; forward build; reviewed reverse-merge) | 🔴 net-new |
-| Content store moves **DB → git** (doc rows become an *index* of repo files) | 🔴 net-new — the core data-model refactor |
+| Capability + directory shares, view-tracking, roles/principals, per-doc owner | 🟢 built — the **read-scoping** layer (space-scoped; audiences retired) |
+| Proposed-revision (propose → review → accept) | 🟢 built — the DB review gate; git-native **proposals/PRs** now sit alongside it |
+| Catalog (projection of a space directory's frontmatter + optional `.desk.collection.yml` schema) | 🟢 built — reframed from Desk-authored to **projection of repo frontmatter** (D6) |
+| Events table (`card.assigned`, etc.) | 🟢 built — the **agent trigger** consumes it (poll-based; no webhook) |
+| **`space`** (owned, access-controlled hosted git repo) | 🟢 built — the structural keystone |
+| **Desk hosts git** (smart-HTTP + token→ACL auth + post-receive re-project) | 🟢 built — the main subsystem |
+| **Web authoring** (web new-doc / edit / upload → commit, CAS-on-ref) | 🟢 built — owner/writer direct or a proposal under `push_policy`; guest authoring (W2) deferred |
+| External collaboration (invites → self-serve onboarding; per-space `push_policy`; proposals-as-PRs) | 🟢 built |
+| Content store is **git, not DB** (doc rows are an *index* of repo files, via the indexer) | 🟢 built — a few legacy DB-direct write paths (`publish_doc`, `acceptRevision`) are being converged onto git commits (see `specs/convergence-fix-pass.md`) |
+| **Packs** (manifest view-repos; forward build; reviewed reverse-merge) | 🔴 not built |
 
 ## 10. Value-first build order
 
-- **Phase 1 — retire manual upload** (§14). Host one space as git; `git push` replaces manual upload; render + tier-share to a coworker-reader. The load-bearing primitive.
-- **Phase 2 — make it a host** (§16). Multi-space + membership; the headless agent as a write-member; catalogs/boards as projections; web-commit; read packs.
-- **Phase 3 / deferred** (§17). Remapped-writable pack reverse-merge; feedback round-trip into the repo; scheduled re-publish; read receipts (last-viewed already exists).
+- **Phase 1 — retire manual upload** (§14). Host one space as git; `git push` replaces manual upload; render + tier-share to a coworker-reader. The load-bearing primitive. ✅ **shipped.**
+- **Phase 2 — make it a host** (§16). Multi-space + membership; the headless agent as a write-member; catalogs/boards as projections; web authoring; external collaboration. ✅ **shipped** (except **read packs** — still deferred, and the **headless-agent runner** — the event/proposal primitives exist but the runner does not).
+- **Phase 3 / deferred** (§17). Remapped-writable pack reverse-merge; feedback round-trip into the repo; scheduled re-publish; read receipts (last-viewed already exists). ⏳ **deferred.**
 
 Each phase ships standalone value; none re-decides anything — the model is identical at every step.
 

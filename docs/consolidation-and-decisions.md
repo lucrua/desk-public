@@ -83,11 +83,13 @@ Decisions: **keep** Board + Catalog (D5/D6 → keep, reframe Catalog). Catalog d
 - **Catalog-as-projection (D6):** a catalog = docs in a space under a chosen directory, rendering each doc's `parsedFrontmatter` (already populated by the indexer). **Auto mode:** no schema → table of all frontmatter fields, UI group/filter by any field. **Schema mode:** read `.desk.collection.yml` from that dir (in the space's git) for declared fields/enums/views (board `group_by`, table columns, filters) + validate docs (flag drift). Replace the Gen-1 Desk-authored catalog UI; keep `catalog_*` tables dormant or repurpose (don't break the build). View prefs = Desk-side display state (no file writes).
 - Tests + build + typecheck green; branch off `feat/phase3-interface-docs`; commit, STOP, no deploy.
 
-**Next slices (queued):** **web-commit** (makes the catalog + docs web-editable via commit-on-save, §13.3) → **Packs** (read-packs first = directory-shares++; write-packs/reverse-merge later).
+**Shipped since (2026-07-03):** **web authoring** (web-author W1 — browser new-doc/edit/upload → real git commit, CAS-on-ref; the successor to what was queued here as "web-commit") and **external collaboration** (E1 invites + per-space `push_policy`; E2 proposals-as-PRs) both landed and are merged to `main`. **Doc identity** (stable opaque id, projection keyed on `(space, path)`) also landed.
+
+**Next (queued):** the **convergence fix-pass** (`specs/convergence-fix-pass.md`) — converge every write onto git commits (retire the DB-direct `publish_doc`/`acceptRevision` paths), space-scope directory shares, add anonymous share-visitor suggest-edit, add `source_mode` + GitHub mirror-out, delete retired legacy (audiences, P3 catalog registry, `desk sync`). Then **Packs** (read-packs first = directory-shares++; write-packs/reverse-merge later) and the **headless-agent runner**.
 
 ## What remains (your calls)
-- **D5 Board** (cards) — keep / reframe as `_attention.md` render / remove.
-- **D6 Catalog** — reframe as projection of repo frontmatter, or keep Desk-authored.
-- **Destructive cleanup** — drop the dormant `audiences`/`audience_members` tables + `docs.audience` column once you've confirmed the new model.
-- **Discovery** — make public/unlisted spaces appear in a non-admin's `/spaces` listing (read boundary already correct).
-- **Merge to `main`** — the whole Phase-2 + consolidation stack lives on branches; promoting to `main` (prod `desk`) is your call.
+- **D5 Board** (cards) — keep / reframe as `_attention.md` render / remove. *(Kept; agent-dispatch ergonomics tracked in the fix-pass agent runbook.)*
+- **D6 Catalog** — ✅ **decided:** reframed as a read-only projection of repo frontmatter (built).
+- **Destructive cleanup** — ✅ **authorized:** drop the dormant `audiences`/`audience_members` tables + `docs.audience` column, and the retired P3 `catalog_*` registry — scheduled as the fix-pass's final slice.
+- **Discovery** — make public/unlisted spaces appear in a non-admin's `/spaces` listing (read boundary already correct). *(Still open.)*
+- **Merge to `main`** — ✅ **done:** the whole Phase-2 + consolidation stack is merged to `main` in this repo. (The "lives on branches, `main` is pre-consolidation" language elsewhere describes the original private workspace, not this repo.)

@@ -47,9 +47,11 @@ Write and read have **different natural granularities**:
 | Projection: render cache, catalog/board indexes, doc rows as an index of repo files | 🟢 built |
 | Capability + directory shares, view-tracking, comments, proposed revisions / approvals | 🟢 built |
 | Board (kanban) | 🟢 built — native coordination |
-| Catalog (projection of a space directory's frontmatter; optional `.desk.collection.yml` schema + views + drift validation) | 🟢 built — read/render-only (web-editing frontmatter lands with web-commit) |
-| Hierarchical file view (collapsible folder tree by doc `path` on a space) | 🟢 built |
-| **Web-commit** (a web edit → a real commit, CAS-on-ref) | 🔴 not built — publishing is `git push` / CLI / MCP for now |
+| Catalog (projection of a space directory's frontmatter; optional `.desk.collection.yml` schema + views + drift validation) | 🟢 built — read/render-only (edit an item by editing its doc's frontmatter through web authoring) |
+| Hierarchical file view (full git-tree file browser on a space, incl. non-doc files) | 🟢 built |
+| External collaboration: invite links → self-serve onboarding, per-space `push_policy` (`direct`/`proposal`), proposals-as-PRs (diff + accept/reject) | 🟢 built |
+| Doc identity: stable opaque id per file, projection keyed on `(space, path)`, git `-M` rename tracking, link previews | 🟢 built |
+| **Web authoring** (browser new-doc / edit / upload → a real commit, CAS-on-ref) | 🟢 built — owner/writer commits direct (or opens a proposal under `push_policy=proposal`); guest (share-visitor) browser authoring (W2) not yet built |
 | **Headless-agent loop** (`card.assigned` → runner → propose → review → publish) | 🔴 not built — the event + revision primitives exist; the runner does not |
 | **Packs** (manifest-defined view-repos for scoped agent inputs) | 🔴 not built |
 
@@ -98,9 +100,9 @@ git remote add desk https://git:<token>@<host>/api/git/<owner>/<space>.git
 git push desk HEAD:main
 ```
 
-**Desk renders the `main` branch.** It indexes only that ref, so always push with `HEAD:main` explicitly — a bare `git push desk HEAD` from a local `master` branch is accepted but renders nothing (the `main` ref never moves). A push re-renders the affected docs within seconds (the projection re-indexes the changed paths). A reader token can clone but a push is rejected; a writer/owner token can push. The `desk` CLI (`desk publish ./file.md`) and the MCP `publish_doc` tool are equivalent publish paths.
+**Desk renders the `main` branch.** It indexes only that ref, so always push with `HEAD:main` explicitly — a bare `git push desk HEAD` from a local `master` branch is accepted but renders nothing (the `main` ref never moves). A push re-renders the affected docs within seconds (the projection re-indexes the changed paths). A reader token can clone but a push is rejected; a writer/owner token can push.
 
-> Web creation of a brand-new doc is **not yet built** (it lands with web-commit). Editing an existing markdown doc in the browser goes through the propose-revision / approval flow.
+> Creating a new doc, editing a doc, or uploading a file **in the browser** lands as a real git commit for an owner/writer (a non-owner writer under `push_policy=proposal` opens a proposal for review instead). Guest (share-visitor) browser authoring (W2) is not yet built.
 
 ---
 
@@ -157,7 +159,7 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
   --header "x-dev-role: admin"
 ```
 
-### Tools (40)
+### Tools (43)
 
 | Tool | Role | Description |
 |---|---|---|
@@ -197,6 +199,9 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `list_spaces` | staff | Spaces visible to the caller (admins: all; members: theirs + public/unlisted). |
 | `create_space` | admin | Create a space (`slug`, optional `visibility` / `owner_user_id`). |
 | `set_space_member` | admin / owner | Set (`writer`/`reader`) or remove (`null`) a user's role on a space. |
+| `create_invite` | admin / owner | Mint an invite capability link for a space (`slug`, `role`, optional `email` / `expires_in_days` / `max_uses`). Returns the one-time invite URL for self-serve onboarding. |
+| `list_proposals` | staff | List open `proposals/*` refs on a space (name, pusher, tip, created) — the PR queue under `push_policy=proposal`. |
+| `decide_proposal` | admin / owner | Accept (merge → `main` + reindex + drop ref) or reject (drop ref) a proposal by space + name. |
 | `create_token` | staff | Mint a principal (git) token for the caller. Returns the raw token ONCE. |
 | `list_tokens` | staff | List the caller's tokens (admin: `all=true` lists everyone's). |
 | `revoke_token` | staff | Revoke a token by `id` (own token, or any for an admin). |
