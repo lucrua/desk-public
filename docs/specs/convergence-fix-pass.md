@@ -96,6 +96,10 @@ Everything here funnels into `commitFiles` (CAS on ref tip, throwaway worktree, 
 
 Packs (scoped agent inputs) · headless runner infrastructure in Desk · webhooks/push dispatch · catalog cross-references (`[[wikilinks]]`/backlinks) · web-author W2 (guest browser authoring) · GitHub App auth · multiple mirror remotes per space · non-md/html rendering in shares (PDF/images; raw-serve exists for owners) · board browser-e2e tests · `og:image` + `desk_id` frontmatter anchor + readable URLs (per doc-identity spec).
 
+**Added during the build:**
+- **Push-time non-`main` warning.** Desk renders only `main` (bare-repo `HEAD`, which init sets to `main`; `DEFAULT_BRANCH`/`HOSTED_BRANCH`). A push to `master` or any other branch is **accepted silently and renders nothing** — a real footgun (hit on the `market-sas` repo, which is on `master`). Improvement: emit a git side-band warning on receive-pack when the pushed ref isn't `main`. Small, non-boundary change to the git route.
+- **Materialization backfill for legacy DB-only docs.** Docs created by the old (pre-Slice-2) DB-direct `publishDoc` have no blob at `main`; after Slice 2 they materialize **lazily** on their next accept/direct-publish. Until then they render from the projection but are **absent from a fresh clone** — so the Slice-4 GitHub mirror won't include them, and `update_doc` rename-as-commit / `unpublish_doc` delete-as-commit (Slice 2 items 5/6, deferred) stay blocked on them. Build a one-time boot backfill (commit each such doc's current version into its space repo) as part of Slice 4 prep. **Owner decision pending: confirm building this before/with Slice 4.**
+
 ## Landing
 
 Order: **0 → 1 → 2 → 3 → 4 → 5 → 6.** Rationale: hygiene unblocks everything and costs nothing; the boundary bug (1) precedes anything that increases share usage; convergence (2) must precede suggest-edit (3) because 3's accept path is 2's commit path; mirrors (4) come after convergence so every commit path that exists is mirrored; the runbook (5) is the acceptance gate; deletions (6) land last and alone.

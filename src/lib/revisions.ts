@@ -16,16 +16,17 @@ import { MAX_CONTENT_CHARS, MAX_REVISION_NOTE_CHARS } from "@/lib/limits";
  *
  * A revision is a full proposed doc body queued against the version the author
  * was reading (`baseVersionId`). Staff propose; an admin reviews the unified
- * diff and accepts (→ publishDoc creates a new immutable version) or rejects.
+ * diff and accepts (→ commits the new body to the doc's file on `main` via
+ * `webAuthorCommit`, and the indexer projects the new version) or rejects.
  *
  * Invariants enforced here:
  *   - the target doc must be `md` format (html docs get no editor) and visible
  *     to the author's scope (createRevision returns null otherwise);
  *   - content is capped at MAX_CONTENT_CHARS, note at MAX_REVISION_NOTE_CHARS;
- *   - accept only ever changes CONTENT — it re-publishes through publishDoc with
- *     the doc's CURRENT title / sourcePath / audience / format unchanged, so the
- *     existing publish validations (audience exists, etc.) still apply and an
- *     author can never move a doc's slug/audience/title via a revision.
+ *   - accept only ever changes CONTENT — it commits to the doc's CURRENT
+ *     sourcePath on `main` (title/format re-derive from the committed file via
+ *     the projection), so an author can never move a doc's path/slug/title via
+ *     a revision.
  *   - a revision can be decided (accepted/rejected) at most once.
  *
  * content / authorName / authorKind / note are DATA — always rendered through
