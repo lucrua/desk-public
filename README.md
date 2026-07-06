@@ -46,10 +46,14 @@ Write and read have **different natural granularities**:
 | Principal tokens (the git Basic-auth credential, self-serve) | 🟢 built |
 | Projection: render cache, catalog/board indexes, doc rows as an index of repo files | 🟢 built |
 | Capability + directory shares, view-tracking, comments, proposed revisions / approvals | 🟢 built |
+| Anonymous "suggest an edit" on a share (opt-in per share via `allow_edits`; queues as a revision the owner accepts → git commit, or rejects) | 🟢 built |
 | Board (kanban) | 🟢 built — native coordination |
-| Catalog (projection of a space directory's frontmatter; optional `.desk.collection.yml` schema + views + drift validation) | 🟢 built — read/render-only (web-editing frontmatter lands with web-commit) |
-| Hierarchical file view (collapsible folder tree by doc `path` on a space) | 🟢 built |
-| **Web-commit** (a web edit → a real commit, CAS-on-ref) | 🔴 not built — publishing is `git push` / CLI / MCP for now |
+| Catalog (projection of a space directory's frontmatter; optional `.desk.collection.yml` schema + views + drift validation) | 🟢 built — read/render-only (edit an item by editing its doc's frontmatter through web authoring) |
+| Hierarchical file view (full git-tree file browser on a space, incl. non-doc files) | 🟢 built |
+| External collaboration: invite links → self-serve onboarding, per-space `push_policy` (`direct`/`proposal`), proposals-as-PRs (diff + accept/reject) | 🟢 built |
+| Doc identity: stable opaque id per file, projection keyed on `(space, path)`, git `-M` rename tracking, link previews | 🟢 built |
+| **Web authoring** (browser new-doc / edit / upload → a real commit, CAS-on-ref) | 🟢 built — owner/writer commits direct (or opens a proposal under `push_policy=proposal`); guest (share-visitor) browser authoring (W2) not yet built |
+| **Source modes + GitHub mirroring** (per-space `hosted`/`mirrored`, one-way mirror-out to a paired GitHub repo, `mirrored`-space write refusal) | 🟢 built — see [`docs/remotes.md`](docs/remotes.md); deploy-key *generation* deferred (paste an existing private key instead) |
 | **Headless-agent loop** (`card.assigned` → runner → propose → review → publish) | 🔴 not built — the event + revision primitives exist; the runner does not |
 | **Packs** (manifest-defined view-repos for scoped agent inputs) | 🔴 not built |
 
@@ -98,9 +102,15 @@ git remote add desk https://git:<token>@<host>/api/git/<owner>/<space>.git
 git push desk HEAD:main
 ```
 
-**Desk renders the `main` branch.** It indexes only that ref, so always push with `HEAD:main` explicitly — a bare `git push desk HEAD` from a local `master` branch is accepted but renders nothing (the `main` ref never moves). A push re-renders the affected docs within seconds (the projection re-indexes the changed paths). A reader token can clone but a push is rejected; a writer/owner token can push. The `desk` CLI (`desk publish ./file.md`) and the MCP `publish_doc` tool are equivalent publish paths.
+**Desk renders the `main` branch.** It indexes only that ref, so always push with `HEAD:main` explicitly — a bare `git push desk HEAD` from a local `master` branch is accepted but renders nothing (the `main` ref never moves). A push re-renders the affected docs within seconds (the projection re-indexes the changed paths). A reader token can clone but a push is rejected; a writer/owner token can push.
 
-> Web creation of a brand-new doc is **not yet built** (it lands with web-commit). Editing an existing markdown doc in the browser goes through the propose-revision / approval flow.
+> Creating a new doc, editing a doc, or uploading a file **in the browser** lands as a real git commit for an owner/writer (a non-owner writer under `push_policy=proposal` opens a proposal for review instead). Guest (share-visitor) browser authoring (W2) is not yet built.
+
+**Every content write converges on a git commit** (truth = git; Postgres is a rebuildable projection). The **agent** (`publish_doc`) and **REST** (`POST /api/docs`) publish paths both take a required **`space`** + **`path`** and commit the file to the space's repo — the doc's stable opaque slug is minted by the projection, so you address by `(space, path)`, never by a chosen slug. They honor `push_policy` exactly like a `git push`: owner/admin (and writers under `direct`) land on `main`; a non-owner writer under `proposal` opens a `proposals/<handle>` ref for review. **Accepting a proposed revision** (`decide_revision` / the review UI) likewise commits the revision's content to `main` and lets the indexer project it — the DB is never written directly. After this convergence, **no production path writes doc content to Postgres except the indexer projecting git.**
+
+### Source modes & GitHub mirroring
+
+Every space has a `source_mode`: **`hosted`** (default — Desk is canon, and mirrors `main` out to a paired GitHub repo you configure) or **`mirrored`** (GitHub is canon; a GitHub Action forwards pushes in, and Desk refuses its own content writes). Configure mode, the mirror remote, "Mirror now", and an optional per-space deploy key on a space's settings page (owner/admin); the instance-wide GitHub PAT credential is set once on `/admin` (write-only — never revealed back). Full recipes (including the GitHub Action YAML for `mirrored` spaces) are in **[`docs/remotes.md`](docs/remotes.md)**.
 
 ---
 
@@ -136,7 +146,11 @@ desk status
 
 Desk exposes a **Model Context Protocol** server at **`/mcp`** so external agents (Claude Code, etc.) can call Desk tools directly. It speaks the MCP **Streamable HTTP** transport in stateless mode (each request is self-contained — no session to keep alive), and reuses the exact same authentication and authorization as the web app: the Cloudflare Access wall authenticates the request, `getPrincipal` resolves it to a principal, and each tool enforces space-scoped reads + admin/owner mutation rules.
 
-**MCP is the agent surface; REST is the UI surface — deliberately not 1:1.** MCP exposes what a headless agent actually drives. Pure web-UI admin actions (user & multi-email management, access-request triage, board-bucket lifecycle, a share's view-log / comment-toggle) are **REST-only and have no MCP tool**; an agent that needs the "who can see what" audit uses `distribution_overview` + `list_shares`.
+> **Building an autonomous agent?** [`docs/agent-runbook.md`](docs/agent-runbook.md) is the end-to-end recipe: a Docker bot that provisions its two credentials (a git principal token **and** an MCP identity), clones a space to read catalogs as files, publishes reports through the `push_policy` review gate, distributes them via a directory share, and picks up assigned cards by polling `list_events` (optionally with the `wait_seconds` long-poll for near-real-time dispatch).
+
+**MCP is the agent surface; REST is the UI surface — deliberately not 1:1.** MCP exposes what a headless agent actually drives. Pure web-UI admin actions (user & multi-email management, access-request triage, board-bucket lifecycle, a share's view-log / comment- and edits-toggle) are **REST-only and have no MCP tool**; an agent that needs the "who can see what" audit uses `distribution_overview` + `list_shares`.
+
+**Anonymous "suggest an edit" on a share.** A share whose owner flips on `allow_edits` (`PATCH /api/shares/[id]`, REST-only, admin — the sibling of the comments toggle, and independent of it) grows a "Suggest an edit" affordance on markdown docs. A link visitor (no account — the capability token is the credential) submits a full proposed body; it queues as a **revision** carrying a forced `link:<share label>` identity (never client-supplied), which the owner reviews in the existing diff UI and **accepts** (→ a real git commit on `main`, authored by the proposer) or **rejects** (nothing changes). Fail-closed: while `allow_edits` is off — or the token is revoked/expired, or the doc is HTML — the suggest endpoint returns a uniform 404, indistinguishable from a dead link. Rate-limited per share (5/hour).
 
 - **URL:** `https://desk.<domain>/mcp` (also reachable at `/api/mcp`; `/mcp` is the canonical public path).
 - **Auth:** the same CF Access service-token headers the CLI uses (`CF-Access-Client-Id` / `CF-Access-Client-Secret`). An unauthenticated request gets a JSON-RPC `401`. On `share.<domain>` the endpoint is unreachable (the host middleware 404s everything outside `/s/*`).
@@ -157,7 +171,7 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
   --header "x-dev-role: admin"
 ```
 
-### Tools (40)
+### Tools (43)
 
 | Tool | Role | Description |
 |---|---|---|
@@ -165,13 +179,13 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `search_docs` | staff | Full-text search over title + content, ranked, with snippets. Space-scoped. |
 | `get_doc` | staff | One doc by `slug`: metadata, current content, version list. Viewer-scoped. |
 | `get_version` | staff | Raw content of a specific `version_id` of a doc (`slug`). Viewer-scoped; cross-doc ids rejected. |
-| `publish_doc` | admin / owner | Create (admin) or update (admin or owner) a doc (`slug`, `title`, `source_path`, `format`, `content`, optional `path`). Content capped at 2 MB. |
-| `update_doc` | admin | Move a doc to a folder (`path`) and/or reassign its owner (`owner_user_id`) — without publishing a new version. |
+| `publish_doc` | space member | Publish a file into a **space** by committing it to git. Requires `space` + `path` (repo-relative file path) + `content` (optional `title`, `message`). Honors `push_policy` (owner/admin → `main`; non-owner writer under `proposal` → a `proposals/*` ref). The opaque slug is minted by the projection. Returns `{ slug, url, ref }` (slug/url null for a proposal). Content capped at 2 MB. |
+| `update_doc` | admin | Move a doc to a folder (`path`) and/or reassign its owner (`owner_user_id`) — projection metadata, no new version. |
 | `unpublish_doc` | admin | Unpublish a doc by `slug` — kills the hub page and every share instantly. |
 | `delete_doc` | admin | Stage-2 destructive delete: purges content, deletes its share links, frees the slug. |
-| `list_events` | staff | The append-only event log (cursor on `since`, optional `kinds`). Space-scoped for members. |
+| `list_events` | staff | The append-only event log (cursor on `since`, optional `kinds`). Space-scoped for members. Optional `wait_seconds` (0–55, default 0) long-polls — parks server-side until an event arrives or the timeout elapses, then returns (possibly empty). Near-real-time agent dispatch (e.g. `kinds:["card.assigned"]`) without tight polling. |
 | `create_share` | admin | Mint a capability link for a doc (`doc_slug`, `label`, optional `expires_in_days` / `pinned_version_id`). Returns the one-time URL. |
-| `create_directory_share` | admin | Mint a capability link for a whole folder (`path_prefix`, …). Exposes every published doc under the prefix; one revoke kills the lot. |
+| `create_directory_share` | admin | Mint a capability link for a whole folder in a space. **Space-scoped:** requires `space` (the space slug) + `path_prefix`; exposes every published doc under the prefix **in that space only** (a same-named folder in another space never leaks). One revoke kills the lot. |
 | `list_shares` | admin | All shares (doc + directory) with view stats. Each row carries `mode` + `docSlug`/`pathPrefix`. |
 | `list_doc_shares` | admin | Shares for one doc (`slug`), newest-first, with view stats. |
 | `revoke_share` | admin | Revoke a share by numeric `id`. |
@@ -197,14 +211,17 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `list_spaces` | staff | Spaces visible to the caller (admins: all; members: theirs + public/unlisted). |
 | `create_space` | admin | Create a space (`slug`, optional `visibility` / `owner_user_id`). |
 | `set_space_member` | admin / owner | Set (`writer`/`reader`) or remove (`null`) a user's role on a space. |
+| `create_invite` | admin / owner | Mint an invite capability link for a space (`slug`, `role`, optional `email` / `expires_in_days` / `max_uses`). Returns the one-time invite URL for self-serve onboarding. |
+| `list_proposals` | staff | List open `proposals/*` refs on a space (name, pusher, tip, created) — the PR queue under `push_policy=proposal`. |
+| `decide_proposal` | admin / owner | Accept (merge → `main` + reindex + drop ref) or reject (drop ref) a proposal by space + name. |
 | `create_token` | staff | Mint a principal (git) token for the caller. Returns the raw token ONCE. |
 | `list_tokens` | staff | List the caller's tokens (admin: `all=true` lists everyone's). |
 | `revoke_token` | staff | Revoke a token by `id` (own token, or any for an admin). |
 | `whoami` | staff | The resolved principal (kind, name, masked email/token) — "is my token wired right?" |
 
-> **REST-only admin actions** (no MCP tool): user CRUD + multi-email (`/api/users/**`), access-request triage (`/api/access-requests/**`), board-bucket lifecycle (`/api/buckets/**`), and a share's view-log / comment-toggle (`GET /api/shares/[id]/views`, `PATCH /api/shares/[id]`).
+> **REST-only admin actions** (no MCP tool): user CRUD + multi-email (`/api/users/**`), access-request triage (`/api/access-requests/**`), board-bucket lifecycle (`/api/buckets/**`), and a share's view-log / comment- and edits-toggle (`GET /api/shares/[id]/views`, `PATCH /api/shares/[id]` — `{ allowComments?, allowEdits? }`).
 >
-> **No catalog tools.** The catalog was reframed (D6) from a Desk-authored registry into a **read-only projection of a space directory's doc frontmatter** (+ an optional `.desk.collection.yml` schema). Its truth is the repo, so an agent "writes" a catalog by committing frontmatter — there is no catalog MCP/REST authoring surface. The dormant `catalog_*` tables are retained.
+> **No catalog tools.** The catalog was reframed (D6) from a Desk-authored registry into a **read-only projection of a space directory's doc frontmatter** (+ an optional `.desk.collection.yml` schema). Its truth is the repo, so an agent "writes" a catalog by committing frontmatter — there is no catalog MCP/REST authoring surface. The dormant P3 registry (`catalog_schemas` / `catalog_items` / `catalog_links` tables + the inert auto-linker) was **removed** in the convergence fix-pass (Slice 6).
 
 ### Verify with curl
 
@@ -321,6 +338,8 @@ desk/
 ├── docs/
 │   ├── cutover-checklist.md  # Supervised cloud cutover runbook
 │   ├── account-merge-runbook.md
+│   ├── agent-runbook.md    # Autonomous reporting-bot recipe (provision → loop → review → distribute → dispatch)
+│   ├── remotes.md          # Source modes + GitHub mirroring (hosted/mirrored recipes)
 │   └── plans/              # Implementation phase plans
 ├── drizzle/                # Generated migration SQL files
 ├── docker-compose.dev.yml  # Local Postgres 16 for development

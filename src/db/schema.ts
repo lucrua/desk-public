@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, text, timestamp, integer, doublePrecision, jsonb, pgEnum, uniqueIndex, customType, index, check, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, text, timestamp, integer, boolean, doublePrecision, jsonb, pgEnum, uniqueIndex, customType, index, check, primaryKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // Postgres `tsvector` — there is no built-in drizzle column type for it. The
@@ -44,6 +44,31 @@ export const spaceRoleEnum = pgEnum("space_role", ["owner", "writer", "reader"])
 // the setup-prompt template switches on it; the git-transport ENFORCEMENT is E2.
 export const spacePushPolicyEnum = pgEnum("space_push_policy", ["direct", "proposal"]);
 
+// A space's SOURCE MODE — which side of the one-way GitHub mirror is CANON
+// (convergence fix-pass, Slice 4b; decision D-C3). `hosted` (the DEFAULT, and the
+// only behaviour before this feature): Desk is canon and, when a mirror_remote_url
+// is set, Desk mirror-pushes `main` OUT to a paired GitHub repo after every
+// main-advancing write (one-way, conflict-free by construction). `mirrored`:
+// GitHub is canon; content arrives via a GitHub Action that `git push`es to Desk
+// (the normal git transport stays open), and every DESK-ORIGINATED content write
+// (web-author / publish_doc / revision accept / proposal accept) is REFUSED
+// server-side. Invariant: every repo has exactly ONE push target; the other side
+// is read-only.
+export const spaceSourceModeEnum = pgEnum("space_source_mode", ["hosted", "mirrored"]);
+
+// The persisted status of a space's last mirror-out attempt (spaces.mirror_state,
+// jsonb). Surfaces the last success + last error to the eventual space-settings
+// UI + "Mirror now" button. Never carries a credential.
+export type MirrorState = {
+  /** The `main` sha that last successfully reached the mirror remote (null until
+   *  a first successful push). */
+  lastMirroredSha: string | null;
+  /** ISO timestamp of the last attempt (success OR failure). */
+  lastAttemptAt: string | null;
+  /** The last attempt's error message, or null on success. */
+  lastError: string | null;
+};
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").unique(),          // humans (CF-verified email) — PRIMARY/display email; every email (incl. this one) is mirrored into user_emails
@@ -83,30 +108,6 @@ export const accessRequests = pgTable("access_requests", {
   hits: integer("hits").notNull().default(1), // times this email has hit the wall unresolved
 });
 
-export const audiences = pgTable("audiences", {
-  id: serial("id").primaryKey(),
-  key: text("key").notNull().unique(),       // ^[a-z0-9][a-z0-9-]*$ — the value stored on docs.audience
-  label: text("label").notNull(),            // human-facing name, e.g. "Team", "PartnerCo"
-  memberVisible: integer("member_visible").notNull().default(0), // 1|0 — members see docs in this audience
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
-
-// Audience membership — the row that makes an audience a real GROUP. A user
-// "belongs to" an audience; a doc tagged with that audience is visible to every
-// member of the audience (PLUS everyone, when the audience's member_visible flag
-// is on). One row per (audience, user); the unique index makes add idempotent at
-// the DB layer. Both FKs cascade-irrelevant here (we delete memberships
-// explicitly before deleting a user/audience), so plain references suffice.
-export const audienceMembers = pgTable("audience_members", {
-  id: serial("id").primaryKey(),
-  audienceId: integer("audience_id").notNull().references(() => audiences.id),
-  userId: integer("user_id").notNull().references(() => users.id),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-}, (t) => [
-  uniqueIndex("audience_members_uniq").on(t.audienceId, t.userId),
-  index("audience_members_user_idx").on(t.userId),
-]);
-
 // ── Spaces (Phase-1 document host) ───────────────────────────────────────────
 // A SPACE is an owned, access-controlled git repo that Desk hosts — the unit of
 // write/clone access and the security boundary (§3). Truth = the bare repo on
@@ -126,7 +127,36 @@ export const spaces = pgTable("spaces", {
   // `proposal` routes non-owner writer pushes to `proposals/*` (enforced in E2).
   // NOT NULL default 'direct' so every existing space keeps today's behaviour.
   pushPolicy: spacePushPolicyEnum("push_policy").notNull().default("direct"),
+  // ── Source mode + GitHub mirror-out (convergence fix-pass, Slice 4b) ─────────
+  // `source_mode` (D-C3) decides which side is canon. NOT NULL default 'hosted'
+  // so every existing space keeps today's behaviour (Desk is canon). A `mirrored`
+  // space refuses Desk-originated writes; a `hosted` space with a mirror URL
+  // pushes `main` out after every main-advancing write.
+  sourceMode: spaceSourceModeEnum("source_mode").notNull().default("hosted"),
+  // The paired GitHub repo URL (https or ssh). NULL = no mirror. Data egress —
+  // same trust class as a share (D-C4): it lives in Postgres (owner/admin-set),
+  // never in-repo. Only meaningful for a `hosted` space.
+  mirrorRemoteUrl: text("mirror_remote_url"),
+  // Last mirror attempt status (see MirrorState). NULL until the first attempt.
+  mirrorState: jsonb("mirror_state").$type<MirrorState>(),
+  // Optional PER-SPACE deploy-key override (D-C5): the SSH PRIVATE key,
+  // AES-256-GCM-encrypted with DESK_TOKEN_KEY (same helper as share-token
+  // reveal). Preferred over the instance-level PAT when present. WRITE-ONLY — no
+  // API path ever decrypts this back to a caller; only the mirror push reads it.
+  mirrorDeployKeyEnc: text("mirror_deploy_key_enc"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Instance-level settings — a tiny key→encrypted-value store for secrets that are
+// GLOBAL to the deployment rather than per-space (convergence fix-pass, Slice 4b;
+// decision D-C5). v1 holds exactly one row: the instance GitHub mirror PAT
+// (a fine-grained Contents:Read/Write token), AES-256-GCM-encrypted with
+// DESK_TOKEN_KEY. WRITE-ONLY by policy — set/replace/clear are the only API-facing
+// ops; the plaintext is decrypted ONLY inside the mirror push, never returned.
+export const instanceSettings = pgTable("instance_settings", {
+  key: text("key").primaryKey(),           // stable key, e.g. "github_mirror_pat"
+  valueEnc: text("value_enc").notNull(),   // AES-256-GCM ciphertext (iv.ct.tag)
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Space membership — the coarse WRITE/clone ACL (§3). One row per (space, user)
@@ -218,15 +248,9 @@ export const docs = pgTable("docs", {
   slug: text("slug").notNull(),
   title: text("title").notNull(),
   sourcePath: text("source_path").notNull(),   // e.g. os/CONTEXT.md — provenance stamp
-  // VESTIGIAL (Gen-2 consolidation, migration 0016): read access is now
-  // space-scoped (member of the doc's space, OR space.visibility public/unlisted,
-  // OR a capability share) — `audience` no longer gates any read path. Made
-  // NULLABLE so publish/projection need not supply it; the `audiences` /
-  // `audience_members` tables are left dormant (dropped in a later cleanup slice).
-  audience: text("audience"),
   // Implicit folder path: slash-joined segments, each ^[a-z0-9][a-z0-9-]*$, max
-  // depth 6; '' = root. Organizational only — identity stays the slug, and
-  // member visibility is audience-based (path is orthogonal). No folder entities.
+  // depth 6; '' = root. Organizational only — identity stays the slug, and read
+  // access is space-scoped (path is orthogonal). No folder entities.
   path: text("path").notNull().default(""),
   format: formatEnum("format").notNull().default("md"),
   currentVersionId: integer("current_version_id"), // FK intentionally omitted — avoids docs↔doc_versions circular reference
@@ -307,9 +331,27 @@ export const shares = pgTable("shares", {
   // Null on a doc share. Root ('') is disallowed at create — a root share would
   // expose everything.
   pathPrefix: text("path_prefix"),
+  // The owning SPACE — the read-boundary scope (convergence fix-pass, Slice 1;
+  // finding 3). A DIRECTORY share filters its docs by (path prefix AND this
+  // space); without it, same-named folders in two spaces leak through one link.
+  // REQUIRED for directory shares going forward (createDirectoryShare demands a
+  // space). A DOC share derives its space from the doc, but carries it here too
+  // for uniformity. Nullable at the column level only to admit the one-shot
+  // backfill (backfillShareSpaceIds) of pre-migration rows; every live share
+  // resolves fail-closed when it is null (an unscoped directory share is exactly
+  // the leak, so it must NOT resolve).
+  spaceId: integer("space_id").references(() => spaces.id),
   label: text("label").notNull(),              // "Pedro", "PartnerCo intro"
   createdBy: text("created_by").notNull(),
   allowComments: integer("allow_comments").notNull().default(1), // 1|0 — link visitors may comment
+  // Per-share "suggest an edit" toggle (convergence fix-pass, Slice 3). When
+  // true, a link visitor (no account, capability-token-scoped) may propose a
+  // full new doc body that queues as a `revision` the owner reviews + accepts
+  // (→ git commit) or rejects — the write sibling of allowComments. FAIL-CLOSED
+  // default OFF: a share never accepts suggestions until the owner opts in, and
+  // the suggest endpoints return a uniform 404 while it is off (no existence
+  // hint). A real Postgres boolean (allowComments predates this as an int flag).
+  allowEdits: boolean("allow_edits").notNull().default(false),
   // null = live (always resolves the doc's current version). Set = pinned: the
   // reader resolves this exact version regardless of later publishes. The
   // version must belong to this share's doc (validated on create).
@@ -373,9 +415,20 @@ export const revisions = pgTable("revisions", {
   baseVersionId: integer("base_version_id").notNull().references(() => docVersions.id),
   content: text("content").notNull(),
   authorName: text("author_name").notNull(),
-  authorKind: text("author_kind").notNull(), // 'admin' | 'member'
+  authorKind: text("author_kind").notNull(), // 'admin' | 'member' | 'link:<label>' (share suggestion)
   note: text("note"), // optional author note, capped at MAX_REVISION_NOTE_CHARS
   status: text("status").notNull().default("open"), // 'open' | 'accepted' | 'rejected'
+  // ── Share-suggestion provenance (convergence fix-pass, Slice 3) ────────────
+  // Set when this revision was proposed ANONYMOUSLY through a share link (the
+  // Tier-1 "suggest an edit" surface), NULL for a staff-proposed revision. The
+  // share is the AUTHORIZATION for the write (the route resolved the doc under
+  // that live, edits-enabled share), exactly as a share comment carries shareId.
+  shareId: integer("share_id").references(() => shares.id),
+  // The FORCED display label for a share suggestion ("link:<share label>"),
+  // never client-supplied — mirrors how a share comment forces authorKind. NULL
+  // for staff proposals. Surfaced in the review queue as a "via share <label>"
+  // badge so the owner knows a suggestion arrived through a capability link.
+  proposerLabel: text("proposer_label"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   decidedAt: timestamp("decided_at"),
 });
@@ -418,81 +471,6 @@ export const cards = pgTable("cards", {
   archivedAt: timestamp("archived_at"),
 }, (t) => [
   index("cards_bucket_idx").on(t.bucketId),
-]);
-
-// Catalog schemas — the "schema-as-data" registries (P3). Each row is a *kind*
-// (e.g. finding, decision, rfc): a stable `kind` slug, a human `label`, an
-// `idPattern` (a regex source string — e.g. `F-\d+` — used both to VALIDATE an
-// item's human id and to AUTO-LINK occurrences of that id in doc/card bodies),
-// and a JSON Schema (`schema`, jsonb) the item's structured `data` payload is
-// validated against at write time. Schemas are editable via the API/UI — there
-// is no redeploy; additive changes apply immediately, breaking changes are
-// flagged (not blocked). Admin-CRUD; members read only. Mutations emit
-// catalog.schema.* events in-transaction.
-export const catalogSchemas = pgTable("catalog_schemas", {
-  id: serial("id").primaryKey(),
-  kind: text("kind").notNull().unique(), // ^[a-z0-9][a-z0-9-]*$
-  label: text("label").notNull(),
-  idPattern: text("id_pattern").notNull(), // regex SOURCE (anchored ^(…)$ when matching ids)
-  schema: jsonb("schema").notNull().default({}), // JSON Schema for the item `data` payload
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
-
-// Catalog items — the rows of a registry. `itemId` is the human id (e.g.
-// "F-012"), unique per kind and validated against its kind's idPattern at write
-// (the id is CLIENT-PROPOSED, server-validated — never minted server-side).
-// `body` is markdown (capped at MAX_CARD_BODY_CHARS, same as a card — registries
-// hold notes, not documents) rendered only through the escaped Markdown
-// component. `data` is the jsonb payload validated against the kind's JSON
-// Schema. `status` is free-text (the schema may constrain it via an enum, but
-// the column is generic). `sourceHash` supports repo-mirror ingest (idempotent
-// upsert when an external markdown file is re-synced). Mutations emit
-// catalog.item.* events in-transaction (payload: kind/itemId/title/status only).
-export const catalogItems = pgTable("catalog_items", {
-  id: serial("id").primaryKey(),
-  kind: text("kind")
-    .notNull()
-    .references(() => catalogSchemas.kind),
-  itemId: text("item_id").notNull(), // human id, unique per kind
-  title: text("title").notNull(),
-  body: text("body").notNull().default(""),
-  status: text("status").notNull().default(""),
-  data: jsonb("data").notNull().default({}),
-  sourceHash: text("source_hash"), // repo-mirror ingest cursor (nullable)
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-}, (t) => [
-  uniqueIndex("catalog_items_kind_item_idx").on(t.kind, t.itemId),
-  index("catalog_items_kind_idx").on(t.kind),
-]);
-
-// Catalog links — typed edges between catalog items (the cross-link graph).
-// Derived at item-write time by scanning the item's body + data strings for
-// OTHER kinds' idPatterns (and own-kind references, excluding the item itself),
-// stored as `references` by default; explicit edges with other types
-// (supersedes, implements, …) may also be set. A link is item↔item: from
-// (fromKind, fromItemId) to (toKind, toItemId). Uniqueness on the full
-// (from, to, type) tuple keeps re-derivation idempotent. Cascades when the
-// owning item is deleted (handled in-service, not via DB cascade, so the event
-// log and link cleanup stay transactional).
-export const catalogLinks = pgTable("catalog_links", {
-  id: serial("id").primaryKey(),
-  fromKind: text("from_kind").notNull(),
-  fromItemId: text("from_item_id").notNull(),
-  toKind: text("to_kind").notNull(),
-  toItemId: text("to_item_id").notNull(),
-  linkType: text("link_type").notNull().default("references"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-}, (t) => [
-  uniqueIndex("catalog_links_edge_idx").on(
-    t.fromKind,
-    t.fromItemId,
-    t.toKind,
-    t.toItemId,
-    t.linkType,
-  ),
-  index("catalog_links_from_idx").on(t.fromKind, t.fromItemId),
-  index("catalog_links_to_idx").on(t.toKind, t.toItemId),
 ]);
 
 // The append-only event log — the sync change-cursor and observability spine.

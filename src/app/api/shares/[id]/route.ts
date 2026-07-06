@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPrincipal } from "@/lib/auth";
-import { setShareComments, deleteShare } from "@/lib/shares";
+import { setShareComments, setShareEdits, deleteShare } from "@/lib/shares";
 
 function err(status: number, message: string) {
   return NextResponse.json({ error: message }, { status });
@@ -9,8 +9,12 @@ function err(status: number, message: string) {
 type RouteContext = { params: Promise<{ id: string }> };
 
 /**
- * Admin share management. Currently exposes the `allowComments` toggle for the
- * share-link comment flow. PATCH /api/shares/[id] { allowComments: boolean }.
+ * Admin share management. Exposes the per-share `allowComments` (comment flow)
+ * and `allowEdits` ("suggest an edit" flow, convergence fix-pass Slice 3)
+ * toggles. PATCH /api/shares/[id] { allowComments?: boolean, allowEdits?: boolean }.
+ * The two flags are INDEPENDENT — a request may set either, or both; at least
+ * one boolean is required. REST-only, admin-only (no MCP tool), mirroring how
+ * allowComments has always been toggled.
  */
 export async function PATCH(req: Request, { params }: RouteContext) {
   const principal = await getPrincipal(req.headers);
@@ -28,14 +32,31 @@ export async function PATCH(req: Request, { params }: RouteContext) {
   }
 
   const b = body as Record<string, unknown>;
-  if (typeof b.allowComments !== "boolean") {
-    return err(400, "Missing or invalid allowComments — must be a boolean");
+  const hasComments = "allowComments" in b;
+  const hasEdits = "allowEdits" in b;
+  if (!hasComments && !hasEdits) {
+    return err(400, "Missing allowComments or allowEdits — at least one boolean required");
+  }
+  if (hasComments && typeof b.allowComments !== "boolean") {
+    return err(400, "Invalid allowComments — must be a boolean");
+  }
+  if (hasEdits && typeof b.allowEdits !== "boolean") {
+    return err(400, "Invalid allowEdits — must be a boolean");
   }
 
-  const ok = await setShareComments(id, b.allowComments);
-  if (!ok) return err(404, `Share ${id} not found`);
+  const out: { ok: true; allowComments?: boolean; allowEdits?: boolean } = { ok: true };
+  if (hasComments) {
+    const ok = await setShareComments(id, b.allowComments as boolean);
+    if (!ok) return err(404, `Share ${id} not found`);
+    out.allowComments = b.allowComments as boolean;
+  }
+  if (hasEdits) {
+    const ok = await setShareEdits(id, b.allowEdits as boolean);
+    if (!ok) return err(404, `Share ${id} not found`);
+    out.allowEdits = b.allowEdits as boolean;
+  }
 
-  return NextResponse.json({ ok: true, allowComments: b.allowComments });
+  return NextResponse.json(out);
 }
 
 /**

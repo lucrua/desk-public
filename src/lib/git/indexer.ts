@@ -165,7 +165,6 @@ async function indexFile(
           slug,
           title,
           sourcePath: repoPath,
-          audience: "private", // imported docs default to private (owner-only)
           format,
           path: folder,
           spaceId,
@@ -238,7 +237,7 @@ async function indexFile(
       await emitEvent(tx, {
         kind: "doc.published",
         docId,
-        payload: { slug, versionId, contentHash, audience: "private", format, source: "git" },
+        payload: { slug, versionId, contentHash, format, source: "git" },
         actorName,
       });
     }
@@ -261,7 +260,7 @@ async function tombstonePath(spaceId: number, repoPath: string, actorName: strin
     await emitEvent(tx, {
       kind: "doc.unpublished",
       docId: doc.id,
-      payload: { slug: doc.slug, audience: doc.audience, source: "git" },
+      payload: { slug: doc.slug, source: "git" },
       actorName,
     });
     return true;

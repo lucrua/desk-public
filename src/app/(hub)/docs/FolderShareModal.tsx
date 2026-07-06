@@ -26,9 +26,13 @@ type Phase =
  * the modal closes (raw-token-once rule).
  */
 export default function FolderShareModal({
+  space,
   pathPrefix,
   onClose,
 }: {
+  /** The space slug the folder lives in — a directory share is space-scoped
+   *  (Slice 1, finding 3), so the create call must carry it. */
+  space: string;
   pathPrefix: string;
   onClose: () => void;
 }) {
@@ -51,6 +55,7 @@ export default function FolderShareModal({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          space,
           pathPrefix,
           label: trimmed,
           expiresInDays: EXPIRY_OPTIONS[expiryIdx].value,

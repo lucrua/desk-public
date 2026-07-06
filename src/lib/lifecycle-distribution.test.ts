@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { eq, and, isNull, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import { docs, docVersions, shares, shareViews, spaces, spaceMembers } from "@/db/schema";
-import { resetDb, publishDocOk, seedAudiences, seedUser, createShareOk } from "@/test/db";
+import { resetDb, publishDocOk, seedUser, createShareOk } from "@/test/db";
 import {
   publishDoc,
   unpublishDoc,
@@ -55,7 +55,6 @@ function docBase(over: Partial<Parameters<typeof publishDocOk>[0]> = {}) {
     slug: "test-doc",
     title: "Test Doc",
     sourcePath: "os/test.md",
-    audience: "team",
     format: "md" as const,
     content: "# Hello world content for search",
     by: "lucas",
@@ -135,7 +134,6 @@ describe("revealShareUrl", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     process.env.DESK_TOKEN_KEY = VALID_KEY;
   });
 
@@ -152,7 +150,7 @@ describe("revealShareUrl", () => {
 
   it("reveal on a directory share returns the same URL", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const result = await createDirectoryShare("finance", "Folder", "lucas");
+    const result = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
     expect(result.ok).toBe(true);
     const created = result as { ok: true; id: number; shareUrl: string };
     const revealed = await revealShareUrl(created.id);
@@ -216,7 +214,6 @@ describe("deleteShare (stage-2)", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     process.env.DESK_TOKEN_KEY = VALID_KEY;
   });
 
@@ -333,7 +330,6 @@ describe("deleteShare (stage-2)", () => {
 describe("deleteDoc (stage-2)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("unpublish (stage 1) keeps content + row (reversible)", async () => {
@@ -469,7 +465,7 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleted doc 404s on listDocsUnderShare (directory-share index)", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const dirShare = await createDirectoryShare("finance", "Folder", "lucas");
+    const dirShare = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
     expect(dirShare.ok).toBe(true);
     const dirShareOk = dirShare as { ok: true; id: number; token: string };
 
@@ -480,7 +476,7 @@ describe("deleteDoc (stage-2)", () => {
 
   it("deleted doc 404s on resolveShareDoc (directory-share per-doc path)", async () => {
     await publishDocOk(docBase({ path: "finance" }));
-    const dirShare = await createDirectoryShare("finance", "Folder", "lucas");
+    const dirShare = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
     expect(dirShare.ok).toBe(true);
     const dirShareOk = dirShare as { ok: true; id: number; token: string };
 
@@ -503,8 +499,8 @@ describe("deleteDoc (stage-2)", () => {
     expect(content).toBeNull();
   });
 
-  it("deleted doc excluded from audience scoping for admin", async () => {
-    await publishDocOk(docBase({ audience: "team" }));
+  it("deleted doc excluded from space scoping for admin", async () => {
+    await publishDocOk(docBase());
     await deleteDoc("test-doc", "lucas");
 
     const list = await listDocs({
@@ -514,8 +510,8 @@ describe("deleteDoc (stage-2)", () => {
     expect(list.find((d) => d.slug === "test-doc")).toBeUndefined();
   });
 
-  it("deleted doc excluded from audience scoping for member", async () => {
-    await publishDocOk(docBase({ audience: "team" }));
+  it("deleted doc excluded from space scoping for member", async () => {
+    await publishDocOk(docBase());
     const userId = await seedUser({ displayName: "Alice", email: "alice@test.com" });
     await deleteDoc("test-doc", "lucas");
 
@@ -602,7 +598,6 @@ describe("distribution", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     process.env.DESK_TOKEN_KEY = KEY;
   });
 
@@ -760,7 +755,7 @@ describe("distribution", () => {
   it("links: includes doc shares and directory shares", async () => {
     await publishDocOk(docBase({ path: "finance" }));
     const docShare = await createShareOk("test-doc", "Pedro", "lucas");
-    const dirResult = await createDirectoryShare("finance", "Finance folder", "lucas");
+    const dirResult = await createDirectoryShare("workspace", "finance", "Finance folder", "lucas");
     expect(dirResult.ok).toBe(true);
 
     const links = await distributionLinks();

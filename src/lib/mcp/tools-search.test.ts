@@ -5,7 +5,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   resetDb,
-  seedAudiences,
   publishDocOk,
   seedDevMemberInDefaultSpace,
   seedSpace,
@@ -38,7 +37,6 @@ describe("MCP — search_docs registered (registry 32)", () => {
 describe("MCP search_docs", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
   });
@@ -58,7 +56,6 @@ describe("MCP search_docs", () => {
       slug: "title-hit",
       title: "Comet Survey",
       sourcePath: "a.md",
-      audience: "team",
       format: "md",
       content: "unrelated body",
       by: "lucas",
@@ -67,7 +64,6 @@ describe("MCP search_docs", () => {
       slug: "body-hit",
       title: "Other Heading",
       sourcePath: "b.md",
-      audience: "team",
       format: "md",
       content: "a passage mentioning comet only in the body",
       by: "lucas",
@@ -116,7 +112,6 @@ describe("MCP search_docs", () => {
         slug: `quark-${i}`,
         title: `Quark ${i}`,
         sourcePath: `q${i}.md`,
-        audience: "team",
         format: "md",
         content: "quark body",
         by: "lucas",
@@ -131,7 +126,6 @@ describe("MCP search_docs", () => {
       slug: "xss",
       title: "Xss",
       sourcePath: "x.md",
-      audience: "team",
       format: "md",
       content: "lead in <img src=x onerror=alert(1)> photonword trailing text",
       by: "lucas",
@@ -151,7 +145,6 @@ describe("MCP search_docs", () => {
 describe("MCP list_docs q → FTS", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("q runs full-text search over content (not just title/slug), with snippet", async () => {
@@ -159,7 +152,6 @@ describe("MCP list_docs q → FTS", () => {
       slug: "deep",
       title: "Nothing Relevant",
       sourcePath: "d.md",
-      audience: "team",
       format: "md",
       content: "this body mentions helium prominently",
       by: "lucas",
@@ -175,7 +167,6 @@ describe("MCP list_docs q → FTS", () => {
       slug: "plain",
       title: "Plain",
       sourcePath: "p.md",
-      audience: "team",
       format: "md",
       content: "body",
       by: "lucas",

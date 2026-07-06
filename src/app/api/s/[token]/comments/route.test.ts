@@ -8,7 +8,6 @@ const DOC = {
   slug: "shared-doc",
   title: "Shared Doc",
   sourcePath: "os/s.md",
-  audience: "external:pedro",
   format: "md" as const,
   content: "# Hello",
   by: "lucas",

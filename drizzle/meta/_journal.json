@@ -134,6 +134,34 @@
       "when": 1781210000000,
       "tag": "0018_doc_source_path_uniq",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1781210100000,
+      "tag": "0019_share_space_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1781210200000,
+      "tag": "0020_share_edits_suggest",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1781210300000,
+      "tag": "0021_source_modes_mirror",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1781210400000,
+      "tag": "0022_drop_audience_catalog_cruft",
+      "breakpoints": true
     }
   ]
 }

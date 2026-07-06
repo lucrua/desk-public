@@ -8,7 +8,6 @@ const BASE_DOC = {
   slug: "market-context",
   title: "Market context",
   sourcePath: "os/market.md",
-  audience: "external:pedro",
   format: "md" as const,
   content: "# Market context\n\nThe short version: consolidation worked.",
   by: "lucas",

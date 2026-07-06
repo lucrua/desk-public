@@ -9,8 +9,8 @@
  *
  * Read access is SPACE-SCOPED (Gen-2 consolidation): a viewer sees a doc iff
  * they are a member of its space, OR the space.visibility ∈ {public, unlisted},
- * OR a capability share grants it. Audiences are RETIRED — the audiences /
- * audience_members tables are dormant and never read here. Mirrors the
+ * OR a capability share grants it. The Gen-1 audience model is fully REMOVED
+ * (its tables + docs.audience were dropped in Slice 6). Mirrors the
  * space-scoping logic in docs.ts (memberVisibleSpaceIds).
  *
  * Deleted docs (docs.deleted_at IS NOT NULL) are excluded from all three lenses.

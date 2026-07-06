@@ -14,7 +14,6 @@ function doc(over: Record<string, unknown> = {}) {
     slug: "x",
     title: "X",
     sourcePath: "x.md",
-    audience: "private",
     format: "md" as const,
     content: "# body",
     by: "lucas",
@@ -23,7 +22,7 @@ function doc(over: Record<string, unknown> = {}) {
 }
 
 async function dirShare(prefix: string) {
-  const out = await createDirectoryShare(prefix, "Folder", "lucas");
+  const out = await createDirectoryShare("workspace", prefix, "Folder", "lucas");
   if (!out.ok) throw new Error("create failed");
   return { id: out.id, token: out.shareUrl.split("/").pop()! };
 }

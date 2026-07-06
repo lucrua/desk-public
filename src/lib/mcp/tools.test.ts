@@ -4,19 +4,33 @@
  * src/app/api/mcp/mcp.test.ts — here we hit each handler directly with a
  * principal + args to pin down the authz matrix and the masking helper.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
-  seedAudiences,
   publishDocOk,
   seedDevMemberInDefaultSpace,
   seedSpace,
   seedUser,
 } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { getDocBySlug, getVersionContent } from "@/lib/docs";
 import { listComments } from "@/lib/comments";
 import type { Principal } from "@/lib/auth";
 import { TOOLS, maskContact, type ToolDef } from "./tools";
+
+// decide_revision accept commits to a real bare repo (truth = git). Isolate the
+// whole file to a throwaway DESK_DATA_DIR + wipe repos per-test so the shared
+// default `.desk-data` can't leak state across suites.
+let __restoreDataDir: (() => Promise<void>) | undefined;
+beforeAll(async () => {
+  ({ restore: __restoreDataDir } = await useTempDataDir());
+});
+afterAll(async () => {
+  if (__restoreDataDir) await __restoreDataDir();
+});
+beforeEach(async () => {
+  await clearSpaceRepos();
+});
 
 const admin: Principal = { kind: "admin", name: "Admin", email: "admin@desk.test", tokenName: "ci" };
 const member: Principal = { kind: "member", name: "Member" };
@@ -49,7 +63,6 @@ describe("MCP tools — registry shape", () => {
 describe("MCP tools — authz matrix", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   const staffTools = ["list_docs", "whoami"];
@@ -83,7 +96,6 @@ describe("MCP tools — authz matrix", () => {
         slug: "x",
         title: "X",
         source_path: "p",
-        audience: "team",
         format: "md",
         content: "# x",
         doc_slug: "x",
@@ -110,7 +122,6 @@ describe("MCP tools — authz matrix", () => {
 describe("MCP tools — behaviour", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
   });
@@ -120,7 +131,6 @@ describe("MCP tools — behaviour", () => {
       slug: "d1",
       title: "D1",
       sourcePath: "os/d1.md",
-      audience: "team",
       format: "md",
       content: "# d1",
       by: "lucas",
@@ -133,26 +143,21 @@ describe("MCP tools — behaviour", () => {
     expect(sc.versions).toHaveLength(1);
   });
 
-  it("publish_doc with no audience defaults to `private`", async () => {
+  it("publish_doc rejects an unknown space (no existence leak)", async () => {
     const r = await run("publish_doc", admin, {
-      slug: "no-aud",
-      title: "No Aud",
-      source_path: "os/n.md",
-      format: "md",
+      space: "ghost-space",
+      path: "os/n.md",
       content: "# n",
     });
-    expect(r.isError).toBeFalsy();
-    const doc = await getDocBySlug("no-aud");
-    expect(doc!.doc.audience).toBe("private");
+    expect(r.isError).toBe(true);
   });
 
-  it("publish_doc rejects oversized content", async () => {
+  it("publish_doc rejects oversized content (before any commit)", async () => {
+    // `workspace` exists (seedDevMemberInDefaultSpace); the size cap is checked
+    // after the space gate but before the git commit, so no repo is needed.
     const r = await run("publish_doc", admin, {
-      slug: "big",
-      title: "Big",
-      source_path: "os/big.md",
-      audience: "team",
-      format: "md",
+      space: "workspace",
+      path: "os/big.md",
       content: "x".repeat(2_000_001),
     });
     expect(r.isError).toBe(true);
@@ -164,7 +169,6 @@ describe("MCP tools — behaviour", () => {
       slug: "cdoc",
       title: "C",
       sourcePath: "os/c.md",
-      audience: "team",
       format: "md",
       content: "# c",
       by: "lucas",
@@ -183,7 +187,7 @@ describe("MCP tools — behaviour", () => {
 
   it("add_comment rejects an oversize body", async () => {
     await publishDocOk({
-      slug: "cdoc2", title: "C2", sourcePath: "os/c2.md", audience: "team", format: "md", content: "# c", by: "lucas",
+      slug: "cdoc2", title: "C2", sourcePath: "os/c2.md", format: "md", content: "# c", by: "lucas",
     });
     const r = await run("add_comment", admin, { slug: "cdoc2", body: "x".repeat(10_001) });
     expect(r.isError).toBe(true);
@@ -224,12 +228,11 @@ describe("MCP tools — behaviour", () => {
 describe("MCP tools — doc shares", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   async function publishAndShare(): Promise<number> {
     await publishDocOk({
-      slug: "sdoc", title: "S", sourcePath: "os/s.md", audience: "team", format: "md", content: "# s", by: "lucas",
+      slug: "sdoc", title: "S", sourcePath: "os/s.md", format: "md", content: "# s", by: "lucas",
     });
     const created = await run("create_share", admin, { doc_slug: "sdoc", label: "Recipient" });
     return (created.structuredContent as { id: number }).id;
@@ -250,7 +253,6 @@ describe("MCP tools — doc shares", () => {
 describe("MCP tools — update_doc (merged set_doc_path + set_doc_owner)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await seedDevMemberInDefaultSpace();
   });
 
@@ -316,7 +318,6 @@ describe("MCP tools — update_doc (merged set_doc_path + set_doc_owner)", () =>
 describe("MCP tools — get_version", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
   });
@@ -343,10 +344,10 @@ describe("MCP tools — get_version", () => {
 
   it("404s a cross-doc version id (guarded by the service)", async () => {
     await publishDocOk({
-      slug: "va", title: "VA", sourcePath: "os/va.md", audience: "team", format: "md", content: "# a", by: "lucas",
+      slug: "va", title: "VA", sourcePath: "os/va.md", format: "md", content: "# a", by: "lucas",
     });
     const pubB = await publishDocOk({
-      slug: "vb", title: "VB", sourcePath: "os/vb.md", audience: "team", format: "md", content: "# b", by: "lucas",
+      slug: "vb", title: "VB", sourcePath: "os/vb.md", format: "md", content: "# b", by: "lucas",
     });
     // Ask doc va for vb's version id → not-found (no cross-doc leak).
     const r = await run("get_version", admin, { slug: "va", version_id: pubB.versionId });
@@ -358,12 +359,11 @@ describe("MCP tools — get_version", () => {
 describe("MCP tools — comment moderation", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   async function publishWithComment(): Promise<number> {
     await publishDocOk({
-      slug: "mdoc", title: "M", sourcePath: "os/m.md", audience: "team", format: "md", content: "# m", by: "lucas",
+      slug: "mdoc", title: "M", sourcePath: "os/m.md", format: "md", content: "# m", by: "lucas",
     });
     const added = await run("add_comment", admin, { slug: "mdoc", body: "a comment" });
     return (added.structuredContent as { comment: { id: number } }).comment.id;
@@ -396,7 +396,6 @@ describe("MCP tools — comment moderation", () => {
 describe("MCP tools — revisions behaviour", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
     await publishDocOk({
@@ -435,7 +434,7 @@ describe("MCP tools — revisions behaviour", () => {
     expect(r.structuredContent?.error).toMatch(/not found/i);
   });
 
-  it("decide_revision accept publishes a new version (admin)", async () => {
+  it.skipIf(!HAVE_GIT)("decide_revision accept publishes a new version (admin, git commit)", async () => {
     const created = await run("propose_revision", member, { slug: "rdoc", content: "# r\n\nACCEPTED\n" });
     const id = (created.structuredContent as { revision: { id: number } }).revision.id;
     const r = await run("decide_revision", admin, { id, accept: true });
@@ -463,6 +462,69 @@ describe("MCP tools — revisions behaviour", () => {
 
   it("decide_revision on an unknown id → not-found error", async () => {
     expect((await run("decide_revision", admin, { id: 4242, accept: true })).isError).toBe(true);
+  });
+});
+
+// ── list_events wait_seconds long-poll (Slice 5) ─────────────────────────────
+describe("MCP list_events — wait_seconds long-poll", () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+
+  const seedDoc = (slug: string) =>
+    publishDocOk({
+      slug,
+      title: slug,
+      sourcePath: `os/${slug}.md`,
+      format: "md",
+      content: "# e",
+      by: "lucas",
+    });
+
+  it("returns IMMEDIATELY with pending events even when wait_seconds is set", async () => {
+    await seedDoc("evt-a");
+    const t0 = Date.now();
+    const res = await run("list_events", admin, { wait_seconds: 5 });
+    const elapsed = Date.now() - t0;
+    expect(res.isError).toBeFalsy();
+    const body = res.structuredContent as { events: unknown[]; nextCursor: number };
+    expect(body.events.length).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(1000); // did not park
+  });
+
+  it("parks then returns empty after ~the timeout when nothing new (short wait)", async () => {
+    await seedDoc("evt-b");
+    const first = (await run("list_events", admin, {})).structuredContent as {
+      nextCursor: number;
+    };
+    const t0 = Date.now();
+    const res = await run("list_events", admin, { since: first.nextCursor, wait_seconds: 1 });
+    const elapsed = Date.now() - t0;
+    const body = res.structuredContent as { events: unknown[]; nextCursor: number };
+    expect(body.events).toHaveLength(0);
+    expect(body.nextCursor).toBe(first.nextCursor); // unchanged shape after the wait
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeLessThan(2500);
+  });
+
+  it("clamps an over-cap wait_seconds (returns, not an error)", async () => {
+    await seedDoc("evt-c");
+    const res = await run("list_events", admin, { wait_seconds: 100 });
+    expect(res.isError).toBeFalsy();
+    // pending events → immediate despite the clamp to 55.
+    expect((res.structuredContent as { events: unknown[] }).events.length).toBeGreaterThan(0);
+  });
+
+  it("wait_seconds omitted is the immediate default (unchanged behaviour)", async () => {
+    await seedDoc("evt-d");
+    const t0 = Date.now();
+    const res = await run("list_events", admin, {});
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect((res.structuredContent as { events: unknown[] }).events.length).toBeGreaterThan(0);
+  });
+
+  it("non-staff is still refused regardless of wait_seconds", async () => {
+    expect((await run("list_events", anon, { wait_seconds: 5 })).isError).toBe(true);
   });
 });
 

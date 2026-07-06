@@ -36,16 +36,22 @@ import {
   listDocs,
   searchDocs,
   getDocBySlug,
+  getLiveDocBySpacePath,
   listVersions,
-  publishDoc,
   unpublishDoc,
   getVersionContent,
   setDocPath,
   setDocOwner,
   scopeForPrincipal,
 } from "@/lib/docs";
+import {
+  webAuthorCommit,
+  liveMainTip,
+  resolveWebAuthorAccess,
+} from "@/lib/web-author";
+import { isSafeRepoPath } from "@/lib/git/web-commit";
 import { snippetToMarkdown } from "@/app/(hub)/docs/view-model";
-import { listEvents, EVENT_KINDS } from "@/lib/events";
+import { listEventsWaiting, EVENT_KINDS } from "@/lib/events";
 import { normalizePath } from "@/lib/path";
 import {
   createShare,
@@ -79,7 +85,7 @@ import {
 import { db } from "@/db";
 import { docs } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { canPublishVersion, canDecideRevision } from "@/lib/permissions";
+import { canDecideRevision } from "@/lib/permissions";
 // User CRUD, access-request triage, and board-bucket lifecycle are web-UI-only
 // (REST), so their service helpers are no longer imported here — see the MCP
 // surface policy note at the bottom of this file.
@@ -149,7 +155,6 @@ function fail(message: string): ToolResult {
 
 // Same caps / patterns the REST layer enforces (src/app/api/docs/route.ts).
 import {
-  SLUG_RE,
   MAX_CONTENT_CHARS,
   MAX_COMMENT_CHARS,
   MAX_REVISION_NOTE_CHARS,
@@ -162,11 +167,23 @@ import {
  * accepts a raw shape and builds the JSON schema). `handler` receives the
  * resolved principal (closure-injected by the server) plus the validated args.
  */
+/**
+ * Per-call context threaded from the transport into a handler. Currently only
+ * carries the request's `AbortSignal` (client disconnect / cancellation) so a
+ * long-running tool — `list_events`' optional `wait_seconds` park — can end
+ * promptly when the caller goes away. Optional: nearly every handler ignores it.
+ */
+export type ToolCtx = { signal?: AbortSignal };
+
 export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
   name: string;
   description: string;
   inputSchema: Shape;
-  handler: (principal: Principal, args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>;
+  handler: (
+    principal: Principal,
+    args: z.infer<z.ZodObject<Shape>>,
+    ctx?: ToolCtx,
+  ) => Promise<ToolResult>;
 };
 
 // Helper to declare a tool while preserving the precise arg type.
@@ -281,107 +298,86 @@ const getDocTool = defineTool({
 const publishDocTool = defineTool({
   name: "publish_doc",
   description:
-    "Publish (create or update) a doc. CREATING a new slug is admin-only. UPDATING an existing slug: admin OR the doc's owner (direct publish, no approval). Same validations as POST /api/docs: slug must match ^[a-z0-9][a-z0-9-]*$, format is 'md' or 'html', and content is capped at 2,000,000 chars. `audience` is OPTIONAL and VESTIGIAL — read access is space-scoped now, so the value is stored unread; omit it to default to `private`. Identical content to the current version is a no-op (mutable fields still update). Returns the slug, versionId, whether a new version was created, and the hub URL.",
+    "Publish a file into a SPACE by committing it to `main` (truth = git; Desk re-projects within seconds). `space` (slug) and `path` (repo-relative file path, e.g. 'reports/2026-q1.md') are BOTH REQUIRED. A doc-format path (.md/.markdown/.html/.htm) renders as a doc; any other path lands as a raw file. The doc's stable opaque slug is minted by the projection — you address by (space, path), never by slug. Content capped at 2,000,000 chars. Push policy is honored: owner/admin (and writers in `direct` mode) land on `main`; a non-owner writer in `proposal` mode gets a `proposals/<handle>` ref surfaced in the proposals queue (no slug/url until accepted). Requires the caller to be an admin or a member of the space (a reader is refused). Returns `{ slug, url, ref }` (slug/url null for a proposal write).",
   inputSchema: {
-    slug: z.string().describe("Doc slug (^[a-z0-9][a-z0-9-]*$)."),
-    title: z.string().describe("Human-readable title."),
-    source_path: z.string().describe("Source path the doc was published from."),
-    audience: z
-      .string()
-      .optional()
-      .describe("Audience key — vestigial (stored unread). Omit to default to `private`."),
-    format: z.enum(["md", "html"]).describe("Content format."),
-    content: z.string().describe("Doc body (md or html)."),
+    space: z.string().describe("REQUIRED space slug to publish into."),
     path: z
       .string()
+      .describe(
+        "REQUIRED repo-relative file path (e.g. 'reports/2026-q1.md'). No leading slash, no '..' segments. A .md/.html path projects as a doc; other paths land as raw files.",
+      ),
+    content: z.string().describe("File content (utf-8)."),
+    title: z
+      .string()
       .optional()
       .describe(
-        "Optional folder path (slash-joined segments ^[a-z0-9][a-z0-9-]*$, max depth 6; '' = root). On a new doc it sets the folder; on an existing doc it updates it. Omit to leave unchanged.",
+        "Optional title — for a markdown file whose content lacks an H1, a '# <title>' heading is prepended so the projection has a title.",
       ),
-    base_version_id: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe(
-        "Optimistic-concurrency base. If given and it isn't the doc's current version, the publish is rejected as a conflict (no version appended). Omit for the default append-anyway behaviour.",
-      ),
+    message: z.string().optional().describe("Optional commit message."),
   },
   handler: async (principal, args) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
 
-    if (!SLUG_RE.test(args.slug)) {
-      return fail("Missing or invalid slug (must match ^[a-z0-9][a-z0-9-]*$)");
+    // READ/existence boundary + space role (owner|writer|reader), FAIL-CLOSED.
+    const access = await resolveWebAuthorAccess(principal, args.space.trim());
+    if (!access.ok) {
+      if (access.reason === "unknown-space") return fail(`Space '${args.space}' not found`);
+      return fail("Forbidden — you may not write to this space");
     }
-    if (args.title.length === 0) return fail("Missing title");
-    if (args.source_path.length === 0) return fail("Missing sourcePath");
-    // Audience optional (Audiences v2): absent/empty → `private`.
-    const audienceKey =
-      args.audience !== undefined && args.audience.trim().length > 0
-        ? args.audience.trim()
-        : "private";
+
+    const repoPath = args.path.trim();
+    if (!isSafeRepoPath(repoPath)) {
+      return fail("Invalid path — must be a safe repo-relative file path (no leading slash, no '..').");
+    }
     if (args.content.length === 0) return fail("Missing content");
     if (args.content.length > MAX_CONTENT_CHARS) {
-      return fail(
-        `Content too large (${args.content.length} chars; max ${MAX_CONTENT_CHARS})`,
-      );
-    }
-    let normalizedPath: string | undefined;
-    if (args.path !== undefined) {
-      const np = normalizePath(args.path);
-      if (np === null) {
-        return fail("Invalid path — segments must match ^[a-z0-9][a-z0-9-]*$, max depth 6");
-      }
-      normalizedPath = np;
-    }
-    // Audience is VESTIGIAL under Gen-2 (read access is space-scoped); the value
-    // is passed through unread and no longer validated against the dormant
-    // `audiences` table.
-
-    // Permission check: is the slug an existing doc or a new one?
-    const existingDoc = await getDocBySlug(args.slug, {
-      includeUnpublished: true,
-      scope: { viewer: "admin" }, // load unconditionally for ownership check
-    });
-
-    if (existingDoc === null) {
-      // Creating a new doc — admin only.
-      if (principal.kind !== "admin") return fail("Forbidden — creating a new doc is admin only");
-    } else {
-      // Updating an existing doc — admin OR owner.
-      if (!canPublishVersion(principal, existingDoc.doc)) {
-        return fail("Forbidden — only the doc owner or an admin may publish new versions");
-      }
+      return fail(`Content too large (${args.content.length} chars; max ${MAX_CONTENT_CHARS})`);
     }
 
-    const result = await publishDoc({
-      slug: args.slug,
-      title: args.title,
-      sourcePath: args.source_path,
-      audience: audienceKey,
-      format: args.format,
-      content: args.content,
-      by: principal.name,
-      ...(normalizedPath !== undefined ? { path: normalizedPath } : {}),
-      ...(args.base_version_id !== undefined ? { baseVersionId: args.base_version_id } : {}),
-      // On create, set the owner to the calling user (if userId is available).
-      ...(existingDoc === null && principal.userId !== undefined ? { ownerUserId: principal.userId } : {}),
+    // Prepend an H1 for a markdown file when a title is given and the body has
+    // none, mirroring the web-author create path (so the projection has a title).
+    const lower = repoPath.toLowerCase();
+    const isMd = lower.endsWith(".md") || lower.endsWith(".markdown");
+    const title = args.title?.trim();
+    const content =
+      title && isMd && !/^#[ \t]+/m.test(args.content)
+        ? `# ${title}\n\n${args.content}`
+        : args.content;
+
+    const baseMainTip = await liveMainTip(access.spaceSlug);
+    const result = await webAuthorCommit(access.spaceSlug, {
+      role: access.role,
+      identity: access.identity,
+      writes: [{ path: repoPath, bytes: Buffer.from(content, "utf8") }],
+      baseMainTip,
+      message: args.message?.trim() || `publish ${repoPath}`,
     });
 
     if (!result.ok) {
-      return fail(
-        `Version conflict — current version is ${result.currentVersionId} (hash ${result.currentContentHash}); re-base and retry`,
-      );
+      if (result.reason === "forbidden") return fail("Forbidden — you may not write to this space");
+      if (result.reason === "mirrored") return fail(result.detail ?? "This space mirrors from GitHub — writes are refused");
+      if (result.reason === "stale") {
+        return fail("The space changed while publishing — reload the tip and retry");
+      }
+      return fail(result.detail ?? "Could not publish");
     }
 
-    const hubUrl = `${process.env.HUB_BASE_URL ?? "http://localhost:3000"}/docs/${args.slug}`;
+    // On a `main` commit the reindex has minted/refreshed the projection; resolve
+    // the opaque slug by (space, path). A proposal write hasn't projected yet.
+    const projected =
+      result.target === "main" ? await getLiveDocBySpacePath(access.spaceId, repoPath) : null;
+    const slug = projected?.slug ?? null;
+    const url = slug
+      ? `${process.env.HUB_BASE_URL ?? "http://localhost:3000"}/docs/${slug}`
+      : null;
 
     return ok({
-      slug: result.slug,
-      versionId: result.versionId,
-      isNewVersion: result.isNewVersion,
-      ownerUserId: result.ownerUserId,
-      hubUrl,
+      slug,
+      url,
+      ref: result.ref,
+      target: result.target,
+      path: repoPath,
+      proposalName: result.proposalName ?? null,
     });
   },
 });
@@ -505,8 +501,11 @@ const createShareTool = defineTool({
 const createDirectoryShareTool = defineTool({
   name: "create_directory_share",
   description:
-    "Mint a capability-link DIRECTORY share for a whole folder (admin only). One URL exposes every PUBLISHED doc under `path_prefix` (the prefix or any descendant — boundary-safe, so 'finance' does not cover 'financial/'); newly-published docs under it appear automatically and one revoke kills the lot. Audience is bypassed by design. The ROOT prefix is NOT allowed — a non-empty folder path is required. Returns the one-time share URL (the raw token appears exactly once). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `label` optional — auto-named from folder path when omitted.",
+    "Mint a capability-link DIRECTORY share for a whole folder WITHIN a space (admin only). A directory share is SPACE-SCOPED: `space` (the space slug) is REQUIRED, and the link exposes every PUBLISHED doc under `path_prefix` IN THAT SPACE ONLY (the prefix or any descendant — boundary-safe, so 'finance' does not cover 'financial/', and a same-named folder in another space never leaks). Newly-published docs under it appear automatically and one revoke kills the lot. Audience is bypassed by design. The ROOT prefix is NOT allowed — a non-empty folder path is required. Returns the one-time share URL (the raw token appears exactly once). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `label` optional — auto-named from folder path when omitted.",
   inputSchema: {
+    space: z
+      .string()
+      .describe("REQUIRED space slug the folder lives in (e.g. 'workspace'). The share is scoped to this space; a same-named folder in another space is never exposed."),
     path_prefix: z
       .string()
       .describe("Non-empty folder path to share (e.g. 'finance' or 'os/canon'). Root ('') is disallowed."),
@@ -528,6 +527,7 @@ const createDirectoryShareTool = defineTool({
     const expiresInDays = args.expires_in_days === 0 ? null : args.expires_in_days;
 
     const result = await createDirectoryShare(
+      args.space,
       args.path_prefix,
       args.label,
       principal.name,
@@ -535,6 +535,7 @@ const createDirectoryShareTool = defineTool({
       args.allow_comments ?? true,
     );
     if (!result.ok) {
+      if (result.error === "unknown-space") return fail(`Space '${args.space}' not found`);
       return fail("Invalid folder — a non-empty, valid folder path is required (root is not allowed).");
     }
 
@@ -858,6 +859,7 @@ const decideProposalTool = defineTool({
     });
     if (!r.ok) {
       if (r.reason === "conflict") return fail("merge conflict — resolve and re-push the proposal");
+      if (r.reason === "mirrored") return fail(r.detail ?? "This space mirrors from GitHub — accepting is refused; apply the change upstream");
       return fail("Not found");
     }
     return ok({
@@ -1208,6 +1210,13 @@ const decideRevisionTool = defineTool({
       const res = await acceptRevision(args.id, { by: principal.name });
       if (!res.ok) {
         if (res.reason === "not-found") return fail(`Revision ${args.id} not found`);
+        if (res.reason === "stale") {
+          return fail("The doc changed while reviewing — reload the diff and re-accept");
+        }
+        if (res.reason === "mirrored") {
+          return fail("This space mirrors from GitHub — accepting is refused; apply the change upstream");
+        }
+        if (res.reason === "error") return fail("Could not apply the revision (commit failed)");
         return fail("Revision already decided");
       }
       return ok({
@@ -1233,7 +1242,7 @@ const decideRevisionTool = defineTool({
 const listEventsTool = defineTool({
   name: "list_events",
   description:
-    "Read the append-only event log (staff only). Returns events after `since` (exclusive cursor on the monotonic event id), oldest-first. Optional `kinds` filters to a subset (doc.published, doc.unpublished, doc.moved, revision.proposed, revision.decided, comment.added, user.approved). Members are space-scoped — they only receive events for docs in a space they can see, and never user.approved. Payloads carry ids/slugs/version ids only — never document content (fetch bodies via get_doc / get_version). Advance `since` to the largest id returned to page forward.",
+    "Read the append-only event log (staff only). Returns events after `since` (exclusive cursor on the monotonic event id), oldest-first. Optional `kinds` filters to a subset (e.g. card.assigned for agent dispatch, doc.published, revision.proposed, revision.decided, comment.added). Members are space-scoped — they only receive events for docs in a space they can see, and never user.approved. Payloads carry ids/slugs/version ids only — never document content (fetch bodies via get_doc / get_version). Advance `since` to the largest id returned to page forward. Optional `wait_seconds` (0-55, default 0) long-polls: when >0 and no events match `since`, the call PARKS server-side until an event arrives or the timeout elapses, then returns (possibly empty) — near-real-time dispatch without tight polling. It's a normal outbound request that may just take longer; return shape is unchanged.",
   inputSchema: {
     since: z
       .number()
@@ -1251,20 +1260,34 @@ const listEventsTool = defineTool({
       .positive()
       .optional()
       .describe("Max events to return (default 200, max 1000)."),
+    wait_seconds: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        "Long-poll: if >0 and no events match `since`, park server-side up to this many seconds (clamped to 0-55) waiting for one, then return (possibly empty). 0/omitted = return immediately (the default).",
+      ),
   },
-  handler: async (principal, args) => {
+  handler: async (principal, args, ctx) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
     // Same resolver as the doc read path (scopeForPrincipal) so the events feed
     // and the docs list agree on which spaces a member can see.
     const userId =
       principal.kind === "member" ? await resolvePrincipalUserId(principal) : null;
-    const events = await listEvents({
-      since: args.since,
-      kinds: args.kinds,
-      limit: args.limit,
-      viewer: principal.kind,
-      userId,
-    });
+    // listEventsWaiting with wait_seconds=0 (the default) is exactly the old
+    // immediate query; >0 parks (clamped to [0,55]) releasing the DB connection
+    // between polls, and ends promptly on client disconnect via ctx.signal.
+    const events = await listEventsWaiting(
+      {
+        since: args.since,
+        kinds: args.kinds,
+        limit: args.limit,
+        viewer: principal.kind,
+        userId,
+      },
+      args.wait_seconds ?? 0,
+      ctx?.signal,
+    );
     // The cursor to resume from = the last id in this page (or the requested
     // `since`/0 if the page was empty).
     const nextCursor = events.length > 0 ? events[events.length - 1].id : args.since ?? 0;

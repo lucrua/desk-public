@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
   seedDevMemberInDefaultSpace,
   seedSpace,
   seedUser,
 } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { publishDoc, getDocBySlug, listVersions, getVersionContent } from "@/lib/docs";
 import { docIdForSlug } from "@/lib/comments";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
@@ -31,8 +32,12 @@ const BASE_DOC = {
   content: "# Hello\n\noriginal body\n",
   by: "lucas",
 };
+// pedro-doc lives in a SEPARATE space, so its os/test.md path does not collide.
 const HIDDEN_DOC = { ...BASE_DOC, slug: "pedro-doc" };
-const HTML_DOC = { ...BASE_DOC, slug: "html-doc", format: "html" as const, content: "<p>hi</p>" };
+// html-doc is in the SAME (workspace) space, so it MUST have a distinct source
+// path — the projection key is (space, sourcePath), and git-truth won't let two
+// live docs share a path in one space.
+const HTML_DOC = { ...BASE_DOC, slug: "html-doc", sourcePath: "os/test.html", format: "html" as const, content: "<p>hi</p>" };
 
 const adminScope = { viewer: "admin" as const };
 // memberScope.userId is the dev member's resolved users-row id (filled in setup),
@@ -45,8 +50,19 @@ async function currentVersionId(slug: string): Promise<number> {
 }
 
 describe("revisions service", () => {
+  // acceptRevision now commits to a real bare repo (truth = git). Isolate those
+  // writes to a throwaway DESK_DATA_DIR and wipe repos per-test.
+  let restore: (() => Promise<void>) | undefined;
+  beforeAll(async () => {
+    ({ restore } = await useTempDataDir());
+  });
+  afterAll(async () => {
+    if (restore) await restore();
+  });
+
   beforeEach(async () => {
     await resetDb();
+    await clearSpaceRepos();
     // Dev member becomes a reader of the default `workspace` space, so member-
     // scoped reads of workspace docs (test-doc, html-doc) succeed.
     await seedDevMemberInDefaultSpace();
@@ -239,7 +255,7 @@ describe("revisions service", () => {
     });
   });
 
-  describe("acceptRevision", () => {
+  describe.skipIf(!HAVE_GIT)("acceptRevision", () => {
     it("publishes the content as a new version and marks accepted", async () => {
       const before = await listVersions("test-doc");
       const rev = await createRevision({
@@ -267,15 +283,19 @@ describe("revisions service", () => {
       expect(persisted!.authorName).toBe("Alex");
     });
 
-    it("does not change title / sourcePath / format (content only)", async () => {
+    it("keeps the doc's identity + location stable (slug / sourcePath / format); title tracks content", async () => {
       const rev = await createRevision({
-        slug: "test-doc", authorName: "A", authorKind: "admin", scope: adminScope, content: "# new",
+        slug: "test-doc", authorName: "A", authorKind: "admin", scope: adminScope, content: "# Renamed Heading\n\nbody",
       });
       await acceptRevision(rev!.id, { by: "Admin" });
       const doc = (await getDocBySlug("test-doc", { includeUnpublished: true }))!.doc;
-      expect(doc.title).toBe("Test Doc");
+      // Identity + location are stable across an accept (the projection key).
+      expect(doc.slug).toBe("test-doc");
       expect(doc.sourcePath).toBe("os/test.md");
       expect(doc.format).toBe("md");
+      // Title is now PROJECTED from the committed content (truth = git), not a
+      // frozen DB field — the accepted revision's H1 becomes the title.
+      expect(doc.title).toBe("Renamed Heading");
     });
 
     it("flags staleBase when the doc moved past the base version", async () => {

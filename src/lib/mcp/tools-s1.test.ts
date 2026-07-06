@@ -4,9 +4,11 @@
  * path_prefix, pinned_version_id). Handlers are exercised directly, like
  * tools.test.ts.
  */
-import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk, seedSpace, seedUser } from "@/test/db";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
+import { resetDb, publishDocOk, seedSpace, seedUser } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { getDocBySlug } from "@/lib/docs";
+import { createSpace } from "@/lib/spaces";
 import { resolveShare } from "@/lib/shares";
 import type { Principal } from "@/lib/auth";
 import { TOOLS, type ToolDef } from "./tools";
@@ -30,12 +32,11 @@ const DOC = {
   slug: "m-doc",
   title: "M",
   sourcePath: "os/m.md",
-  audience: "team",
   format: "md" as const,
   content: "# v1",
   by: "lucas",
 };
-const HIDDEN = { ...DOC, slug: "m-hidden", audience: "pedro" };
+const HIDDEN = { ...DOC, slug: "m-hidden" };
 
 describe("MCP — registry includes the S1 tools", () => {
   it("update_doc (merged set_doc_path + set_doc_owner) and list_events are registered", () => {
@@ -50,7 +51,6 @@ describe("MCP — registry includes the S1 tools", () => {
 describe("MCP update_doc — path", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await publishDocOk(DOC);
   });
 
@@ -81,7 +81,6 @@ describe("MCP update_doc — path", () => {
 describe("MCP list_events", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Read access is space-scoped. The MCP `member` principal carries no
     // email/tokenName → resolves to no users-row → sees only PUBLIC/UNLISTED
     // spaces. m-doc lands in an unlisted space (visible); m-hidden in a private
@@ -118,61 +117,59 @@ describe("MCP list_events", () => {
   });
 });
 
-describe("MCP publish_doc — path + base_version_id", () => {
+describe.skipIf(!HAVE_GIT)("MCP publish_doc — git-truth (space + path)", () => {
+  let restore: () => Promise<void>;
+  beforeAll(async () => {
+    ({ restore } = await useTempDataDir());
+  });
+  afterAll(async () => {
+    await restore();
+  });
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
+    await clearSpaceRepos();
+    const ownerId = await seedUser({ tokenName: "s1-owner", displayName: "Owner", role: "admin" });
+    const s = await createSpace("s1space", ownerId, "private", "t");
+    if (!s.ok) throw new Error(s.error);
   });
 
-  it("path on publish is stored", async () => {
+  it("commits a doc to main and projects it at (space, path); slug minted by the indexer", async () => {
     const res = await run("publish_doc", admin, {
-      slug: "mp",
-      title: "MP",
-      source_path: "os/mp.md",
-      audience: "team",
-      format: "md",
+      space: "s1space",
+      path: "os/mp.md",
       content: "# x",
-      path: "os/canon",
     });
     expect(res.isError).toBeFalsy();
-    const doc = await getDocBySlug("mp");
-    expect(doc!.doc.path).toBe("os/canon");
+    const out = structured(res);
+    expect(out.target).toBe("main");
+    expect(out.ref).toBe("refs/heads/main");
+    expect(typeof out.slug).toBe("string");
+    const doc = await getDocBySlug(out.slug as string, { includeUnpublished: true });
+    expect(doc!.doc.sourcePath).toBe("os/mp.md");
   });
 
-  it("invalid path → error", async () => {
+  it("rejects an unsafe path (traversal)", async () => {
     const res = await run("publish_doc", admin, {
-      slug: "mp2",
-      title: "MP",
-      source_path: "os/mp.md",
-      audience: "team",
-      format: "md",
+      space: "s1space",
+      path: "../escape.md",
       content: "# x",
-      path: "BAD",
     });
     expect(res.isError).toBe(true);
   });
 
-  it("stale base_version_id → conflict error result", async () => {
-    const v1 = await publishDocOk({ ...DOC, slug: "mp3", by: "lucas" });
-    await publishDocOk({ ...DOC, slug: "mp3", content: "# v2", by: "lucas" });
+  it("rejects an unknown space", async () => {
     const res = await run("publish_doc", admin, {
-      slug: "mp3",
-      title: "M",
-      source_path: "os/m.md",
-      audience: "team",
-      format: "md",
-      content: "# v3",
-      base_version_id: v1.versionId,
+      space: "no-such-space",
+      path: "os/mp.md",
+      content: "# x",
     });
     expect(res.isError).toBe(true);
-    expect(JSON.stringify(res)).toContain("conflict");
   });
 });
 
 describe("MCP list_docs — path_prefix", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await publishDocOk({ ...DOC, slug: "ld-os", path: "os" });
     await publishDocOk({ ...DOC, slug: "ld-canon", path: "os/canon" });
     await publishDocOk({ ...DOC, slug: "ld-team", path: "team" });
@@ -193,7 +190,6 @@ describe("MCP list_docs — path_prefix", () => {
 describe("MCP create_share — pinned_version_id", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("pins the link to a version", async () => {
@@ -227,12 +223,11 @@ describe("MCP create_share — pinned_version_id", () => {
 describe("MCP create_directory_share", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await publishDocOk({ ...DOC, slug: "fin-q3", path: "finance/q3", content: "# q3", by: "lucas" });
   });
 
   it("admin creates a directory share → directory mode + 43-char token", async () => {
-    const res = await run("create_directory_share", admin, { path_prefix: "finance", label: "Folder" });
+    const res = await run("create_directory_share", admin, { space: "workspace", path_prefix: "finance", label: "Folder" });
     expect(res.isError).toBeFalsy();
     const out = structured(res);
     expect(out.mode).toBe("directory");
@@ -244,13 +239,23 @@ describe("MCP create_directory_share", () => {
     expect(await resolveShareDoc(token, "fin-q3")).not.toBeNull();
   });
 
+  it("missing space → error (space is required — Slice 1)", async () => {
+    const res = await run("create_directory_share", admin, { path_prefix: "finance", label: "Folder" });
+    expect(res.isError).toBe(true);
+  });
+
+  it("unknown space → error", async () => {
+    const res = await run("create_directory_share", admin, { space: "no-such-space", path_prefix: "finance", label: "x" });
+    expect(res.isError).toBe(true);
+  });
+
   it("root prefix ('') → error", async () => {
-    const res = await run("create_directory_share", admin, { path_prefix: "", label: "Root" });
+    const res = await run("create_directory_share", admin, { space: "workspace", path_prefix: "", label: "Root" });
     expect(res.isError).toBe(true);
   });
 
   it("member → admin-only error", async () => {
-    const res = await run("create_directory_share", member, { path_prefix: "finance", label: "x" });
+    const res = await run("create_directory_share", member, { space: "workspace", path_prefix: "finance", label: "x" });
     expect(res.isError).toBe(true);
   });
 });

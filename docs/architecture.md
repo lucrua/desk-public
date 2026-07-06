@@ -27,7 +27,7 @@ Every painful branch (two-way sync, auto-merge, native-vs-mirror copies) came fr
 ## 2. Truth vs projection
 
 - **Truth = files, in git repos that Desk hosts** (§3, §4).
-- **Desk's Postgres = a derived *projection*** of those files: the render cache, the catalog/board/table indexes, resolved cross-links — **plus** Desk's own *native* data that has no file (comments, approvals, shares, audiences, view-tracking, access requests).
+- **Desk's Postgres = a derived *projection*** of those files: the render cache, the catalog/board/table indexes, resolved cross-links — **plus** Desk's own *native* data that has no file (comments, approvals, shares, view-tracking, access requests).
 - **The projection is rebuildable from the repos.** Lose it and you lose feedback + access config + cache — never a document. Truth is reproducible; the cloud layer is derived.
 
 Mental model: **the filing cabinet is the git repos; Desk is the room** with everyone's cabinets in it. Editing a document = editing the file (any actor, through the hosted git). Desk renders, scopes who sees which, and holds the sticky notes. There is exactly **one** of every document.
@@ -41,7 +41,7 @@ Write and read have **different natural granularities**:
 | | Unit | Lives where | Granularity |
 |---|---|---|---|
 | **WRITE** (change the truth) | a **space** (a git repo, with owner + members) | the files / git | **coarse** — by space membership |
-| **READ / SHARE** (view a rendered doc/folder) | a **share / tier / audience / pack** over a subset | Desk's projection | **fine** — per doc, per directory, per pack |
+| **READ / SHARE** (view a rendered doc/folder) | a **share / tier / directory / pack** over a subset | Desk's projection | **fine** — per doc, per directory, per pack |
 
 **Why the split is forced, not arbitrary:** a git repo is the *finest access boundary git can enforce*. Sparse-checkout and partial-clone only change what a client downloads — not what it *may* fetch. Stock git has no server-enforced per-folder ACL. So **the repo is the security boundary for anyone with clone access.**
 
@@ -50,7 +50,7 @@ Write and read have **different natural granularities**:
 - **A reader (a coworker)** is scoped in the **projection** — Desk renders per-doc/dir/tier, default-deny. They can be shown one document and none of the owner's private work *even from the same repo*, because their access is a rendered view, not a clone. **Readers never force a repo split.**
 - **A file-running agent** needs *real files on disk* to run. It cannot consume a rendered view; it needs a working tree → clone-or-export. **So the agent is the actor bound by the repo boundary**, and the only one forcing a decision about how to hand it a subset (→ §5 packs).
 
-So: *write is repo-grained, read is doc-grained.* "I don't want to share everything with the agent" lands entirely on the write/agent side; readers are already handled by the projection's tiers (built today as the `audience` field + capability/directory shares).
+So: *write is repo-grained, read is doc-grained.* "I don't want to share everything with the agent" lands entirely on the write/agent side; readers are already handled by the projection's tiers (built today as space-scoped visibility + capability/directory shares).
 
 ## 4. The two locked decisions (2026-06-19)
 
@@ -126,23 +126,26 @@ Killing the manual upload-to-share does **not** mean "Desk renders the whole rep
 
 ## 9. Built today vs net-new
 
+> **Status update (2026-07-03):** the Phase-1 and most of the Phase-2 net-new work below has **landed on `main`**. README's "What's built vs. not" table is the canonical current inventory; this table now reflects reality. Audiences (the old per-doc read tag) were **removed** (consolidation D2; the `audiences` / `audience_members` tables + the `docs.audience` column were dropped in the convergence fix-pass, Slice 6) — read scoping is space-scoped only. The remaining not-built items are packs and the headless-agent runner.
+
 | Capability | State |
 |---|---|
-| Audiences, audience members, capability + directory shares, view-tracking, roles/principals, per-doc owner | 🟢 built — the **read-scoping** layer |
-| Proposed-revision (propose → review → accept) | 🟢 built — the **PR / reverse-merge review gate** reuses this |
-| Catalog schemas/items/links (schema-as-data + edges) | 🟡 built but Desk-authored — reframe to **projection of repo frontmatter** |
-| Events table (`card.assigned`, etc.) | 🟢 built — the **agent trigger** consumes it |
-| **`space`** (owned, access-controlled hosted git repo) | 🔴 net-new — the structural keystone |
-| **Desk hosts git** (smart-HTTP + token→ACL auth + post-receive re-project) | 🔴 net-new — the main new subsystem |
-| **Web-commit** (web edit → commit, CAS-on-ref) | 🔴 net-new — needed because owners may be web-only |
-| **Packs** (manifest view-repos; forward build; reviewed reverse-merge) | 🔴 net-new |
-| Content store moves **DB → git** (doc rows become an *index* of repo files) | 🔴 net-new — the core data-model refactor |
+| Capability + directory shares, view-tracking, roles/principals, per-doc owner | 🟢 built — the **read-scoping** layer (space-scoped; audiences removed) |
+| Proposed-revision (propose → review → accept) | 🟢 built — the DB review gate; git-native **proposals/PRs** now sit alongside it |
+| Catalog (projection of a space directory's frontmatter + optional `.desk.collection.yml` schema) | 🟢 built — reframed from Desk-authored to **projection of repo frontmatter** (D6) |
+| Events table (`card.assigned`, etc.) | 🟢 built — the **agent trigger** consumes it (poll-based; no webhook) |
+| **`space`** (owned, access-controlled hosted git repo) | 🟢 built — the structural keystone |
+| **Desk hosts git** (smart-HTTP + token→ACL auth + post-receive re-project) | 🟢 built — the main subsystem |
+| **Web authoring** (web new-doc / edit / upload → commit, CAS-on-ref) | 🟢 built — owner/writer direct or a proposal under `push_policy`; guest authoring (W2) deferred |
+| External collaboration (invites → self-serve onboarding; per-space `push_policy`; proposals-as-PRs) | 🟢 built |
+| Content store is **git, not DB** (doc rows are an *index* of repo files, via the indexer) | 🟢 built — a few legacy DB-direct write paths (`publish_doc`, `acceptRevision`) are being converged onto git commits (see `specs/convergence-fix-pass.md`) |
+| **Packs** (manifest view-repos; forward build; reviewed reverse-merge) | 🔴 not built |
 
 ## 10. Value-first build order
 
-- **Phase 1 — retire manual upload** (§14). Host one space as git; `git push` replaces manual upload; render + tier-share to a coworker-reader. The load-bearing primitive.
-- **Phase 2 — make it a host** (§16). Multi-space + membership; the headless agent as a write-member; catalogs/boards as projections; web-commit; read packs.
-- **Phase 3 / deferred** (§17). Remapped-writable pack reverse-merge; feedback round-trip into the repo; scheduled re-publish; read receipts (last-viewed already exists).
+- **Phase 1 — retire manual upload** (§14). Host one space as git; `git push` replaces manual upload; render + tier-share to a coworker-reader. The load-bearing primitive. ✅ **shipped.**
+- **Phase 2 — make it a host** (§16). Multi-space + membership; the headless agent as a write-member; catalogs/boards as projections; web authoring; external collaboration. ✅ **shipped** (except **read packs** — still deferred, and the **headless-agent runner** — the event/proposal primitives exist but the runner does not).
+- **Phase 3 / deferred** (§17). Remapped-writable pack reverse-merge; feedback round-trip into the repo; scheduled re-publish; read receipts (last-viewed already exists). ⏳ **deferred.**
 
 Each phase ships standalone value; none re-decides anything — the model is identical at every step.
 

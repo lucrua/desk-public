@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
   seedDevMemberInDefaultSpace,
@@ -6,7 +6,9 @@ import {
   seedUser,
   publishDocOk,
 } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { publishDoc, unpublishDoc } from "@/lib/docs";
+import { createSpace } from "@/lib/spaces";
 import { GET, POST } from "./route";
 import { GET as slugGET, DELETE as slugDELETE } from "./[slug]/route";
 
@@ -47,30 +49,43 @@ function slugDeleteReq(slug: string, role: "admin" | "member" | "anonymous" | nu
   });
 }
 
+// POST now commits a file into a SPACE (truth = git); it requires `space` +
+// `path` and is gated by space membership, not the old admin-only create rule.
 const validBody = {
-  slug: "my-doc",
-  title: "My Doc",
-  sourcePath: "os/my-doc.md",
-  format: "md",
+  space: "wsx",
+  path: "os/my-doc.md",
   content: "# Hello",
 };
 
-describe("POST /api/docs", () => {
-  beforeEach(async () => {
-    await resetDb();
+describe("POST /api/docs — space + path (git-truth)", () => {
+  // Committing tests need a real bare repo — isolate to a throwaway data dir.
+  let restore: (() => Promise<void>) | undefined;
+  beforeAll(async () => {
+    ({ restore } = await useTempDataDir());
+  });
+  afterAll(async () => {
+    if (restore) await restore();
   });
 
-  it("admin publish returns 200 with slug, versionId, isNewVersion, hubUrl", async () => {
+  beforeEach(async () => {
+    await resetDb();
+    await clearSpaceRepos();
+    // A space owned by an admin; the dev `admin` principal acts as owner on it.
+    const ownerId = await seedUser({ tokenName: "wsx-owner", displayName: "Owner", role: "admin" });
+    await createSpace("wsx", ownerId, "private", "t");
+  });
+
+  it.skipIf(!HAVE_GIT)("admin commit → 200 with slug, url, ref (git)", async () => {
     const res = await POST(postReq(validBody, "admin"));
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.slug).toBe("my-doc");
-    expect(typeof json.versionId).toBe("number");
-    expect(json.isNewVersion).toBe(true);
-    expect(json.hubUrl).toContain("/docs/my-doc");
+    expect(typeof json.slug).toBe("string");
+    expect(json.ref).toBe("refs/heads/main");
+    expect(json.target).toBe("main");
+    expect(json.url).toContain(`/docs/${json.slug}`);
   });
 
-  it("member → 403", async () => {
+  it("member who is not a space member → 403", async () => {
     const res = await POST(postReq(validBody, "member"));
     expect(res.status).toBe(403);
     const json = await res.json();
@@ -82,17 +97,22 @@ describe("POST /api/docs", () => {
     expect(res.status).toBe(403);
   });
 
-  it("missing slug → 400", async () => {
-    const { slug: _slug, ...noSlug } = validBody;
-    const res = await POST(postReq(noSlug, "admin"));
+  it("missing space → 400", async () => {
+    const { space: _s, ...noSpace } = validBody;
+    const res = await POST(postReq(noSpace, "admin"));
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json).toHaveProperty("error");
   });
 
-  it("missing title → 400", async () => {
-    const { title: _t, ...body } = validBody;
-    const res = await POST(postReq(body, "admin"));
+  it("missing path → 400", async () => {
+    const { path: _p, ...noPath } = validBody;
+    const res = await POST(postReq(noPath, "admin"));
+    expect(res.status).toBe(400);
+  });
+
+  it("unsafe path (traversal) → 400", async () => {
+    const res = await POST(postReq({ ...validBody, path: "../escape.md" }, "admin"));
     expect(res.status).toBe(400);
   });
 
@@ -102,22 +122,7 @@ describe("POST /api/docs", () => {
     expect(res.status).toBe(400);
   });
 
-  it("invalid format → 400", async () => {
-    const res = await POST(postReq({ ...validBody, format: "pdf" }, "admin"));
-    expect(res.status).toBe(400);
-  });
-
-  it("invalid slug (uppercase) → 400", async () => {
-    const res = await POST(postReq({ ...validBody, slug: "My-Doc" }, "admin"));
-    expect(res.status).toBe(400);
-  });
-
-  it("invalid slug (starts with dash) → 400", async () => {
-    const res = await POST(postReq({ ...validBody, slug: "-my-doc" }, "admin"));
-    expect(res.status).toBe(400);
-  });
-
-  it("oversized content → 413", async () => {
+  it("oversized content → 413 (before any commit)", async () => {
     const huge = "x".repeat(2_000_001);
     const res = await POST(postReq({ ...validBody, content: huge }, "admin"));
     expect(res.status).toBe(413);
@@ -125,15 +130,9 @@ describe("POST /api/docs", () => {
     expect(json).toHaveProperty("error");
   });
 
-  it("content exactly at the cap → 200", async () => {
+  it.skipIf(!HAVE_GIT)("content exactly at the cap → 200 (git)", async () => {
     const atCap = "x".repeat(2_000_000);
     const res = await POST(postReq({ ...validBody, content: atCap }, "admin"));
-    expect(res.status).toBe(200);
-  });
-
-  it("an `audience` field in the body is ignored, not rejected (vestigial)", async () => {
-    // Audience is vestigial under space-scoped visibility — any value is accepted.
-    const res = await POST(postReq({ ...validBody, slug: "any-aud", audience: "no-such-audience" }, "admin"));
     expect(res.status).toBe(200);
   });
 });
@@ -303,12 +302,12 @@ describe("DELETE /api/docs/[slug]", () => {
     await slugDELETE(slugDeleteReq("my-doc", "admin"), {
       params: Promise.resolve({ slug: "my-doc" }),
     });
-    // Republish via POST
-    const res = await POST(postReq(
-      { slug: "my-doc", title: "My Doc", sourcePath: "x.md", format: "md", content: "# Hello" },
-      "admin"
-    ));
-    expect(res.status).toBe(200);
+    // Republish via the publishDoc service seam (a deleted slug is free — a fresh
+    // publish mints a brand-new live doc at that slug). The route now commits to
+    // git, so this smoke test drives the service directly.
+    await publishDoc({
+      slug: "my-doc", title: "My Doc", sourcePath: "x.md", format: "md", content: "# Hello", by: "lucas",
+    });
     // Make the dev member a reader of the default workspace so it sees the republished doc.
     await seedDevMemberInDefaultSpace();
     // Now GET should work for member

@@ -27,6 +27,11 @@ export async function POST(req: Request) {
     if (typeof b.pathPrefix !== "string" || b.pathPrefix.length === 0) {
       return err(400, "pathPrefix must be a non-empty string");
     }
+    // A directory share is scoped to ONE space (Slice 1, finding 3) — the space
+    // slug is REQUIRED so same-named folders in two spaces can't leak.
+    if (typeof b.space !== "string" || b.space.length === 0) {
+      return err(400, "space is required for a directory share — a non-empty space slug");
+    }
     // label is optional — service auto-names from folder prefix when omitted
     const dirLabel = (typeof label === "string" && label.trim()) ? label.trim() : undefined;
     // expiresInDays: null or 0 = never; omit = 7d default; positive = that many days
@@ -42,6 +47,7 @@ export async function POST(req: Request) {
     }
     const allowComments = b.allowComments === undefined ? true : b.allowComments === true;
     const result = await createDirectoryShare(
+      b.space,
       b.pathPrefix,
       dirLabel,
       principal.name,
@@ -49,6 +55,9 @@ export async function POST(req: Request) {
       allowComments,
     );
     if (!result.ok) {
+      if (result.error === "unknown-space") {
+        return err(404, `Space '${b.space}' not found`);
+      }
       // invalid-prefix covers both a bad path AND the disallowed root ('').
       return err(400, "Invalid folder — a non-empty, valid folder path is required (root is not allowed).");
     }

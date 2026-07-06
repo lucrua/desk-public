@@ -23,7 +23,6 @@ function baseDoc(over: Partial<Parameters<typeof publishDocOk>[0]> = {}) {
     slug: "x",
     title: "X",
     sourcePath: "x.md",
-    audience: "private",
     format: "md" as const,
     content: "# X body content",
     by: "lucas",
@@ -48,7 +47,7 @@ describe("directory shares — security matrix", () => {
   // ── createDirectoryShare ──────────────────────────────────────────────────
   describe("createDirectoryShare", () => {
     it("creates a directory share with a non-empty prefix (docId null)", async () => {
-      const out = await createDirectoryShare("finance", "Partner folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Partner folder", "lucas");
       expect(out.ok).toBe(true);
       if (!out.ok) return;
       expect(out.token).toHaveLength(43);
@@ -62,7 +61,7 @@ describe("directory shares — security matrix", () => {
     });
 
     it("normalizes the prefix (strips slashes)", async () => {
-      const out = await createDirectoryShare("/finance/q3/", "label", "lucas");
+      const out = await createDirectoryShare("workspace", "/finance/q3/", "label", "lucas");
       expect(out.ok).toBe(true);
       if (!out.ok) return;
       const res = await resolveDirectoryShare(out.token);
@@ -70,14 +69,14 @@ describe("directory shares — security matrix", () => {
     });
 
     it("DISALLOWS the root prefix ('' ) — required non-empty", async () => {
-      const out = await createDirectoryShare("", "root", "lucas");
+      const out = await createDirectoryShare("workspace", "", "root", "lucas");
       expect(out.ok).toBe(false);
       if (out.ok) return;
       expect(out.error).toBe("invalid-prefix");
     });
 
     it("rejects an invalid prefix (bad segment)", async () => {
-      const out = await createDirectoryShare("Bad Folder!", "x", "lucas");
+      const out = await createDirectoryShare("workspace", "Bad Folder!", "x", "lucas");
       expect(out.ok).toBe(false);
     });
   });
@@ -101,7 +100,7 @@ describe("directory shares — security matrix", () => {
   // ── index: listDocsUnderShare ─────────────────────────────────────────────
   describe("listDocsUnderShare", () => {
     it("lists only PUBLISHED docs under the prefix, excludes the financial/ decoy and marketing", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       const res = await resolveDirectoryShare(out.token);
       const docs = await listDocsUnderShare(res!.shareId);
@@ -112,7 +111,7 @@ describe("directory shares — security matrix", () => {
     });
 
     it("excludes an unpublished doc under the prefix", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       const res = await resolveDirectoryShare(out.token);
       await unpublishDoc("finance-q3");
@@ -121,7 +120,7 @@ describe("directory shares — security matrix", () => {
     });
 
     it("a NEW doc published under the prefix appears without re-sharing (live window)", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       const res = await resolveDirectoryShare(out.token);
       let docs = await listDocsUnderShare(res!.shareId);
@@ -133,7 +132,7 @@ describe("directory shares — security matrix", () => {
     });
 
     it("carries title, path, updatedAt, excerpt per entry", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       const res = await resolveDirectoryShare(out.token);
       const docs = await listDocsUnderShare(res!.shareId);
@@ -148,7 +147,7 @@ describe("directory shares — security matrix", () => {
   // ── resolveShareDoc (THE GUARD) ───────────────────────────────────────────
   describe("resolveShareDoc — the key guard", () => {
     it("resolves a valid published doc under the prefix → content", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       const r = await resolveShareDoc(out.token, "finance-q3");
       expect(r).not.toBeNull();
@@ -157,45 +156,45 @@ describe("directory shares — security matrix", () => {
     });
 
     it("slug NOT under the prefix → uniform null (marketing)", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       expect(await resolveShareDoc(out.token, "marketing")).toBeNull();
     });
 
     it("financial/ decoy slug → uniform null (boundary, not raw startsWith)", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       expect(await resolveShareDoc(out.token, "financial-decoy")).toBeNull();
     });
 
     it("UNPUBLISHED doc under the prefix → uniform null", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       await unpublishDoc("finance-q3");
       expect(await resolveShareDoc(out.token, "finance-q3")).toBeNull();
     });
 
     it("unknown slug → uniform null", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       expect(await resolveShareDoc(out.token, "no-such-doc")).toBeNull();
     });
 
-    it("audience bypass is INTENDED: a private-audience doc under the prefix IS exposed", async () => {
-      // finance docs are seeded with audience "private" (member_visible 0).
-      // A capability link bypasses audience — the admin chose to expose the folder.
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+    it("a doc under the prefix IS exposed via the capability link (read-boundary bypass by design)", async () => {
+      // A capability link is a separate read door — the admin chose to expose the
+      // folder, so every published doc under the prefix resolves through it.
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       const r = await resolveShareDoc(out.token, "finance-root");
       expect(r).not.toBeNull();
-      expect(r!.doc.audience).toBe("private");
+      expect(r!.doc.slug).toBe("finance-root");
     });
   });
 
   // ── revoked / expired token kills everything ──────────────────────────────
   describe("revoked / expired token → uniform null everywhere", () => {
     it("revoked dir token → resolveDirectoryShare + listDocs(via resolve) + resolveShareDoc all null", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       await revokeShare(out.id);
       expect(await resolveDirectoryShare(out.token)).toBeNull();
@@ -203,7 +202,7 @@ describe("directory shares — security matrix", () => {
     });
 
     it("expired dir token → all null", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas", undefined);
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas", undefined);
       if (!out.ok) throw new Error("create failed");
       // Backdate the expiry directly.
       const { db } = await import("@/db");
@@ -218,7 +217,7 @@ describe("directory shares — security matrix", () => {
   // ── cross-mode isolation ──────────────────────────────────────────────────
   describe("cross-mode isolation", () => {
     it("resolveShare (doc resolver) returns null for a directory token", async () => {
-      const out = await createDirectoryShare("finance", "Folder", "lucas");
+      const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       expect(await resolveShare(out.token)).toBeNull();
     });
@@ -241,7 +240,7 @@ describe("directory shares — security matrix", () => {
     it("includes directory shares with mode='directory' and pathPrefix; doc shares stay mode='doc'", async () => {
       const { createShareOk } = await import("@/test/db");
       await createShareOk("finance-q3", "doc link", "lucas");
-      await createDirectoryShare("finance", "folder link", "lucas");
+      await createDirectoryShare("workspace", "finance", "folder link", "lucas");
 
       const list = await listShares();
       const dir = list.find((s) => s.mode === "directory");

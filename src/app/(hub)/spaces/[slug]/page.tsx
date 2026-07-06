@@ -16,8 +16,10 @@ import { gitRepoUrl, gitRemoteBase } from "@/lib/git-url";
 import { renderSetupPrompt } from "@/lib/invites/setup-prompt";
 import { listProposalsForSpace } from "@/lib/proposals-service";
 import { listSpaceFiles } from "@/lib/web-author";
+import { hasSpaceDeployKey } from "@/lib/mirror";
 import SpaceVisibility from "./SpaceVisibility";
 import PushPolicy from "./PushPolicy";
+import MirrorSettings from "./MirrorSettings";
 import InvitePanel from "./InvitePanel";
 import SetupPromptView from "./SetupPromptView";
 import MembersPanel, { type MemberRow, type UserChoice } from "./MembersPanel";
@@ -114,6 +116,10 @@ export default async function SpaceDetailPage({
   // only — the only ones who can add members).
   const userChoices: UserChoice[] = canManage ? await activeUserChoices() : [];
 
+  // GitHub mirror settings (Slice 4c) — owner/admin only; the "configured ✓"
+  // flag is boolean-only (no reveal), same posture as the instance PAT.
+  const deployKeyConfigured = canManage ? await hasSpaceDeployKey(space.slug) : false;
+
   const memberRows: MemberRow[] = members.map(toMemberRow);
 
   return (
@@ -171,6 +177,33 @@ export default async function SpaceDetailPage({
             {pushPolicy === "proposal"
               ? "Non-owner writers push to proposals/* (opens a PR for the owner)."
               : "Writers push the hosted main branch directly."}
+          </p>
+        )}
+      </section>
+
+      {/* GitHub mirror (Slice 4c, D-C3/D-C4/D-C5): source mode, remote URL,
+          "Mirror now" + status, and the per-space deploy-key override. Owner/
+          admin only — a non-manager sees the current mode as a one-line note,
+          matching the visibility/push-policy read-only fallback above. */}
+      <section style={{ marginBottom: 28 }}>
+        <h2 style={sectionLabel}>github mirror</h2>
+        {canManage ? (
+          <MirrorSettings
+            slug={space.slug}
+            sourceMode={space.sourceMode as "hosted" | "mirrored"}
+            mirrorRemoteUrl={space.mirrorRemoteUrl}
+            mirrorState={space.mirrorState}
+            hasDeployKey={deployKeyConfigured}
+          />
+        ) : (
+          <p style={{ fontSize: 13, color: "var(--muted)", margin: 0 }}>
+            This space is <strong>{space.sourceMode}</strong>
+            {space.sourceMode === "mirrored"
+              ? " — GitHub is canon; content arrives here only via a git push."
+              : space.mirrorRemoteUrl
+                ? " — Desk mirrors main out to GitHub after every write."
+                : "."}{" "}
+            Only an admin or the owner can change it.
           </p>
         )}
       </section>

@@ -31,6 +31,8 @@ import {
 } from "@/lib/git/proposals";
 import { reindexSpaceFull } from "@/lib/git/indexer";
 import { emitEvent } from "@/lib/events";
+import { enqueueMirror } from "@/lib/mirror";
+import { MIRRORED_WRITE_REFUSED } from "@/lib/web-author";
 
 /** Resolve the on-disk bare-repo path for a space row. */
 async function repoPathForSpace(space: SpaceRow): Promise<string> {
@@ -92,7 +94,11 @@ export type AcceptResult =
       newMainSha: string;
       reindexed: number;
     }
-  | { ok: false; reason: "unknown-space" | "not-found" | "conflict" | "error"; detail?: string };
+  | {
+      ok: false;
+      reason: "unknown-space" | "not-found" | "conflict" | "error" | "mirrored";
+      detail?: string;
+    };
 
 /**
  * Accept a proposal: merge → main, reindex the space, delete the proposal ref,
@@ -106,6 +112,15 @@ export async function acceptProposalForSpace(
 ): Promise<AcceptResult> {
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return { ok: false, reason: "unknown-space" };
+
+  // MIRRORED-MODE WRITE REFUSAL (Slice 4b). Accepting a proposal merges into
+  // `main` — a Desk-originated write. A `mirrored` space's canon is GitHub, so
+  // the accept is refused (the reviewer applies the change upstream instead). The
+  // git transport that DELIVERS GitHub's canon stays open (it does not pass here).
+  if (space.sourceMode === "mirrored") {
+    return { ok: false, reason: "mirrored", detail: MIRRORED_WRITE_REFUSED };
+  }
+
   const repoPath = await repoPathForSpace(space);
 
   // Confirm the proposal exists up front (so a missing one is "not-found", not a
@@ -138,6 +153,11 @@ export async function acceptProposalForSpace(
     },
     actorName: acceptedBy.name,
   });
+
+  // Mirror hook (Slice 4b): the merge advanced `main` → fan out to the space's
+  // GitHub mirror. Fire-and-forget + fail-soft (no-op unless hosted + has a
+  // remote; never throws into the accept).
+  enqueueMirror(space.id);
 
   return { ok: true, merged: outcome.merged, newMainSha: outcome.newMainSha, reindexed };
 }

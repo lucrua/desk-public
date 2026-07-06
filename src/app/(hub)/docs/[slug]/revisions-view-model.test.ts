@@ -4,8 +4,10 @@ import {
   proposedChangesLabel,
   revisionStamp,
   revisionAuthorChip,
+  shareBadgeLabel,
   isStaleBase,
   statusLabel,
+  acceptUnavailableReason,
   type RevisionDTO,
 } from "./revisions-view-model";
 
@@ -19,6 +21,7 @@ function rev(over: Partial<RevisionDTO> = {}): RevisionDTO {
     status: "open",
     createdAt: "2026-06-10T12:00:00.000Z",
     decidedAt: null,
+    proposerLabel: null,
     ...over,
   };
 }
@@ -79,11 +82,39 @@ describe("revisions view-model", () => {
     });
   });
 
+  describe("shareBadgeLabel", () => {
+    it("strips the 'link:' prefix for a share suggestion", () => {
+      expect(shareBadgeLabel("link:Microsoft")).toBe("Microsoft");
+    });
+    it("returns the raw value when there is no 'link:' prefix", () => {
+      expect(shareBadgeLabel("Acme")).toBe("Acme");
+    });
+    it("returns null for a staff proposal (no proposer label)", () => {
+      expect(shareBadgeLabel(null)).toBeNull();
+      expect(shareBadgeLabel(undefined)).toBeNull();
+    });
+    it("returns null for an empty label after stripping", () => {
+      expect(shareBadgeLabel("link:")).toBeNull();
+      expect(shareBadgeLabel("")).toBeNull();
+    });
+  });
+
   describe("statusLabel", () => {
     it("labels each status", () => {
       expect(statusLabel("open")).toBe("open");
       expect(statusLabel("accepted")).toBe("accepted");
       expect(statusLabel("rejected")).toBe("rejected");
+    });
+  });
+
+  describe("acceptUnavailableReason", () => {
+    it("null (accept available) when the space is not mirrored", () => {
+      expect(acceptUnavailableReason(false)).toBeNull();
+    });
+    it("a note when the space is mirrored", () => {
+      const reason = acceptUnavailableReason(true);
+      expect(reason).not.toBeNull();
+      expect(reason).toMatch(/mirrors from GitHub/i);
     });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk } from "@/test/db";
+import { resetDb, publishDocOk } from "@/test/db";
 import { resolveShare } from "@/lib/shares";
 import { POST } from "./route";
 
@@ -20,7 +20,6 @@ const DOC = {
   slug: "sp-doc",
   title: "SP",
   sourcePath: "os/sp.md",
-  audience: "team",
   format: "md" as const,
   content: "# v1",
   by: "lucas",
@@ -30,7 +29,6 @@ const OTHER = { ...DOC, slug: "sp-other", content: "# o" };
 describe("POST /api/shares — pinnedVersionId", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("creates a pinned share and the reader resolves the pinned version", async () => {

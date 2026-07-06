@@ -30,6 +30,7 @@ import { runHttpBackend } from "@/lib/git/http-backend";
 import { bareRepoPath, initBareRepo, refTip } from "@/lib/git/repo";
 import { reindexSpaceByDisk } from "@/lib/git/indexer";
 import { getSpaceBySlug } from "@/lib/spaces";
+import { enqueueMirror } from "@/lib/mirror";
 
 // Resolve fresh every request — auth must never be cached, and a push must
 // re-render immediately.
@@ -131,6 +132,13 @@ async function handle(req: Request): Promise<Response> {
           toSha: afterSha,
           actorName: String(decision.userId),
         });
+        // Mirror hook (Slice 4b): a push that advanced `main` fans out to the
+        // space's GitHub mirror. Fire-and-forget + fail-soft — enqueueMirror
+        // no-ops unless the space is `hosted` with a mirror_remote_url, so a
+        // MIRRORED space (which RECEIVES its canon via exactly this transport
+        // push) is never mirrored back out (no loop), and it never throws into
+        // the push response.
+        if (spaceRow) enqueueMirror(spaceRow.id);
       }
     } catch (e) {
       // A failed re-index must NOT fail the push (the canon is already in git;

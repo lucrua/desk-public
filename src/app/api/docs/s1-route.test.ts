@@ -1,21 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { resetDb, publishDocOk } from "@/test/db";
 import { getDocBySlug } from "@/lib/docs";
-import { POST, GET } from "./route";
+import { GET } from "./route";
 import { PATCH as slugPATCH } from "./[slug]/route";
 
 function headers(role: string | null) {
   const h: Record<string, string> = { "content-type": "application/json" };
   if (role !== null) h["x-dev-role"] = role;
   return h;
-}
-
-function postReq(body: unknown, role: string | null = "admin") {
-  return new Request("http://test/api/docs", {
-    method: "POST",
-    headers: headers(role),
-    body: JSON.stringify(body),
-  });
 }
 
 function patchReq(slug: string, body: unknown, role: string | null = "admin") {
@@ -38,27 +30,13 @@ const base = {
   content: "# v1",
 };
 
-describe("POST /api/docs — audience is vestigial (Gen-2 consolidation)", () => {
-  beforeEach(async () => {
-    await resetDb();
-  });
-
-  it("omitting audience still publishes (200) — visibility follows the space", async () => {
-    const res = await POST(postReq({ ...base, slug: "no-aud" }));
-    expect(res.status).toBe(200);
-    const doc = await getDocBySlug("no-aud");
-    expect(doc).toBeTruthy();
-    // Audience is vestigial: no longer set on publish.
-    expect(doc!.doc.audience).toBeNull();
-  });
-
-  it("an `audience` field in the body is ignored, not rejected", async () => {
-    // Any value (including ones that used to be unknown / empty) is accepted now.
-    expect((await POST(postReq({ ...base, slug: "with-aud", audience: "team" }))).status).toBe(200);
-    expect((await POST(postReq({ ...base, slug: "any-aud", audience: "nope" }))).status).toBe(200);
-    expect((await POST(postReq({ ...base, slug: "empty-aud", audience: "" }))).status).toBe(200);
-  });
-});
+// NOTE: POST /api/docs no longer accepts slug / sourcePath / audience /
+// base_version_id / folder-path — it converged onto a git commit taking `space`
+// + `path` (Convergence fix-pass, Slice 2). The retired-contract POST describes
+// (audience-on-POST, base_version_id optimistic concurrency, folder-path-on-
+// create) were removed here; the git-truth POST contract is covered in
+// docs/route.test.ts + doc-ownership.test.ts. The PATCH (move) + GET (prefix)
+// route behaviour below is unchanged and still exercised.
 
 describe("PATCH /api/docs/[slug] — audience removed (visibility follows the space)", () => {
   beforeEach(async () => {
@@ -79,83 +57,6 @@ describe("PATCH /api/docs/[slug] — audience removed (visibility follows the sp
   it("member → 403 before any body validation", async () => {
     await publishDocOk({ ...base, slug: "b", by: "lucas" });
     expect((await slugPATCH(patchReq("b", { path: "team" }, "member"), ctx("b"))).status).toBe(403);
-  });
-});
-
-describe("POST /api/docs — optimistic concurrency (base_version_id)", () => {
-  beforeEach(async () => {
-    await resetDb();
-  });
-
-  it("matching base_version_id appends a new version (200)", async () => {
-    const v1 = await publishDocOk({ ...base, by: "lucas" });
-    const res = await POST(
-      postReq({ ...base, content: "# v2", baseVersionId: v1.versionId }),
-    );
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.isNewVersion).toBe(true);
-  });
-
-  it("stale base_version_id → 409 with current_version_id + current_content_hash", async () => {
-    const v1 = await publishDocOk({ ...base, by: "lucas" });
-    // advance the doc so v1 is no longer current
-    const v2 = await publishDocOk({ ...base, content: "# v2", by: "lucas" });
-
-    const res = await POST(
-      postReq({ ...base, content: "# v3 from stale", baseVersionId: v1.versionId }),
-    );
-    expect(res.status).toBe(409);
-    const json = await res.json();
-    expect(json.error).toBeTruthy();
-    expect(json.current_version_id).toBe(v2.versionId);
-    expect(typeof json.current_content_hash).toBe("string");
-    expect(json.current_content_hash.length).toBeGreaterThan(0);
-
-    // The conflicting publish must NOT have created a version.
-    const doc = await getDocBySlug("conc-doc");
-    expect(doc!.doc.currentVersionId).toBe(v2.versionId);
-  });
-
-  it("absent base_version_id keeps back-compat append behaviour", async () => {
-    await publishDocOk({ ...base, by: "lucas" });
-    const res = await POST(postReq({ ...base, content: "# v2" }));
-    expect(res.status).toBe(200);
-  });
-
-  it("base_version_id on a brand-new slug is ignored (nothing to conflict with)", async () => {
-    const res = await POST(postReq({ ...base, slug: "fresh", baseVersionId: 999 }));
-    expect(res.status).toBe(200);
-  });
-
-  it("non-integer base_version_id → 400", async () => {
-    const res = await POST(postReq({ ...base, baseVersionId: "nope" }));
-    expect(res.status).toBe(400);
-  });
-});
-
-describe("POST /api/docs — path on create", () => {
-  beforeEach(async () => {
-    await resetDb();
-  });
-
-  it("valid path is stored", async () => {
-    const res = await POST(postReq({ ...base, slug: "p1", path: "os/canon" }));
-    expect(res.status).toBe(200);
-    const doc = await getDocBySlug("p1");
-    expect(doc!.doc.path).toBe("os/canon");
-  });
-
-  it("invalid path → 400", async () => {
-    const res = await POST(postReq({ ...base, slug: "p2", path: "OS/Bad" }));
-    expect(res.status).toBe(400);
-  });
-
-  it("path is canonicalized (leading/trailing slashes stripped)", async () => {
-    const res = await POST(postReq({ ...base, slug: "p3", path: "/os/canon/" }));
-    expect(res.status).toBe(200);
-    const doc = await getDocBySlug("p3");
-    expect(doc!.doc.path).toBe("os/canon");
   });
 });
 

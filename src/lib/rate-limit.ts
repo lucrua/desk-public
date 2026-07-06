@@ -87,3 +87,16 @@ export const shareCommentLimiter = new TokenBucketRateLimiter({
   capacity: 10,
   windowMs: 60_000,
 });
+
+/**
+ * Shared limiter for the public share "suggest an edit" path
+ * (POST /api/s/[token]/suggest[/…]): 5 requests / hour per shareId. A
+ * suggestion is a full doc body queued for owner review, so it is rate-limited
+ * far more tightly than a comment — this is the only abuse control on the
+ * unauthenticated (token-holding) write ingress. Module-level singleton (see
+ * LIMITATION above).
+ */
+export const shareSuggestLimiter = new TokenBucketRateLimiter({
+  capacity: 5,
+  windowMs: 60 * 60_000,
+});

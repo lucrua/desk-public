@@ -18,9 +18,18 @@
  *   - MCP decide_revision: admin || owner
  *   - MCP set_doc_owner + list_open_revisions
  */
-import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk, seedUser, seedDevMemberInDefaultSpace } from "@/test/db";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
+import {
+  resetDb,
+  publishDocOk,
+  seedUser,
+  seedSpace,
+  seedSpaceMember,
+  seedDevMemberInDefaultSpace,
+} from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
+import { createSpace } from "@/lib/spaces";
 import { db } from "@/db";
 import { docs, revisions } from "@/db/schema";
 import { eq, isNull } from "drizzle-orm";
@@ -36,6 +45,20 @@ import { GET as revisionsQueueRoute } from "@/app/api/revisions/route";
 import { POST as acceptRoute } from "@/app/api/revisions/[id]/accept/route";
 import { POST as rejectRoute } from "@/app/api/revisions/[id]/reject/route";
 import { POST as createDocRoute } from "@/app/api/docs/route";
+
+// Doc-content writes now route through real git commits (truth = git). Isolate
+// those to a throwaway DESK_DATA_DIR and wipe repos per-test (file-level, so it
+// covers every describe; harmless for the pure-logic + non-committing tests).
+let __restoreDataDir: (() => Promise<void>) | undefined;
+beforeAll(async () => {
+  ({ restore: __restoreDataDir } = await useTempDataDir());
+});
+afterAll(async () => {
+  if (__restoreDataDir) await __restoreDataDir();
+});
+beforeEach(async () => {
+  await clearSpaceRepos();
+});
 
 // ─── Test principals ─────────────────────────────────────────────────────────
 
@@ -97,7 +120,6 @@ async function seedOwnerDoc(ownerUserId: number) {
     slug: "owned-doc",
     title: "Owned Doc",
     sourcePath: "test/owned.md",
-    audience: "team",
     format: "md",
     content: "# Owned\n\noriginal",
     by: "owner",
@@ -188,7 +210,6 @@ describe("canSeeApprovalQueueItem", () => {
 describe("publishDoc — ownership", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("creates a doc with ownerUserId set to creator", async () => {
@@ -197,7 +218,6 @@ describe("publishDoc — ownership", () => {
       slug: "new-doc",
       title: "New Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "hello",
       by: "Admin",
@@ -215,7 +235,6 @@ describe("publishDoc — ownership", () => {
       slug: "legacy-doc",
       title: "Legacy",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "original",
       by: "system",
@@ -233,7 +252,6 @@ describe("publishDoc — ownership", () => {
       slug: "stable-owner-doc",
       title: "Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "v1",
       by: "Admin2",
@@ -245,7 +263,6 @@ describe("publishDoc — ownership", () => {
       slug: "stable-owner-doc",
       title: "Doc v2",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "v2 updated",
       by: "Other",
@@ -264,7 +281,6 @@ describe("publishDoc — ownership", () => {
 describe("setDocOwner", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("admin reassigns owner, emits doc.owner_changed event", async () => {
@@ -275,7 +291,6 @@ describe("setDocOwner", () => {
       slug: "reassign-doc",
       title: "Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "hi",
       by: "Admin",
@@ -296,12 +311,10 @@ describe("setDocOwner", () => {
   });
 
   it("returns invalid-user for unknown user", async () => {
-    await seedAudiences();
     await publishDocOk({
       slug: "owner-check-doc",
       title: "Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "hi",
       by: "system",
@@ -321,7 +334,6 @@ describe("setDocOwner", () => {
       slug: "inactive-target-doc",
       title: "Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "hi",
       by: "system",
@@ -392,7 +404,6 @@ describe("REST POST /api/docs/[slug]/publish — permission matrix", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     ownerId = await seedUser({ email: "owner@test.com", displayName: "Owner", role: "member" });
     nonOwnerId = await seedUser({ email: "nonowner@test.com", displayName: "NonOwner", role: "member" });
   });
@@ -404,7 +415,6 @@ describe("REST POST /api/docs/[slug]/publish — permission matrix", () => {
       slug: "pub-test-doc",
       title: "Pub Test",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "# Original",
       by: "Admin",
@@ -429,7 +439,7 @@ describe("REST POST /api/docs/[slug]/publish — permission matrix", () => {
     expect(res.status).toBe(403);
   });
 
-  it("admin → 200 and creates new version", async () => {
+  it.skipIf(!HAVE_GIT)("admin → 200 and creates new version (git commit)", async () => {
     await setupDoc(ownerId);
     const req = fakeRequest("POST", "http://localhost/api/docs/pub-test-doc/publish", { content: "admin updated" }, "admin");
     const res = await publishRoute(req, { params: Promise.resolve({ slug: "pub-test-doc" }) });
@@ -452,7 +462,7 @@ describe("REST POST /api/docs/[slug]/publish — permission matrix", () => {
     expect(res.status).toBe(400);
   });
 
-  it("admin publishes → no revision row created (direct publish path)", async () => {
+  it.skipIf(!HAVE_GIT)("admin publishes → no revision row created (direct publish path)", async () => {
     await setupDoc(ownerId);
     const before = await listRevisions((await getDocRow("pub-test-doc"))!.id);
 
@@ -466,40 +476,54 @@ describe("REST POST /api/docs/[slug]/publish — permission matrix", () => {
   });
 });
 
-// ─── REST: POST /api/docs (create) — admin only ──────────────────────────────
+// ─── REST: POST /api/docs — space + path required, git-truth ─────────────────
+// The create path is now a git commit into a SPACE (truth = git). It requires
+// `space` + `path` and is gated by space membership (admin OR member), not the
+// old admin-only create rule.
 
-describe("REST POST /api/docs — create is admin only", () => {
+describe("REST POST /api/docs — space + path required, git-truth", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
-  it("member POSTing a new slug → 403", async () => {
-    const req = fakeRequest("POST", "http://localhost/api/docs", {
-      slug: "brand-new-doc",
-      title: "Brand New",
-      sourcePath: "t.md",
-      audience: "team",
-      format: "md",
-      content: "hi",
-    }, "member");
-    const res = await createDocRoute(req);
-    expect(res.status).toBe(403);
+  it("missing space → 400", async () => {
+    const req = fakeRequest("POST", "http://localhost/api/docs", { path: "a.md", content: "hi" }, "admin");
+    expect((await createDocRoute(req)).status).toBe(400);
   });
 
-  it("admin POSTing new slug → 200", async () => {
-    const req = fakeRequest("POST", "http://localhost/api/docs", {
-      slug: "admin-create-doc",
-      title: "Admin Create",
-      sourcePath: "t.md",
-      audience: "team",
-      format: "md",
-      content: "hi",
-    }, "admin");
+  it("missing path → 400", async () => {
+    const req = fakeRequest("POST", "http://localhost/api/docs", { space: "workspace", content: "hi" }, "admin");
+    expect((await createDocRoute(req)).status).toBe(400);
+  });
+
+  it("unsafe path (traversal) → 400", async () => {
+    const req = fakeRequest("POST", "http://localhost/api/docs", { space: "workspace", path: "../x.md", content: "hi" }, "admin");
+    expect((await createDocRoute(req)).status).toBe(400);
+  });
+
+  it("anonymous → 403", async () => {
+    const req = fakeRequest("POST", "http://localhost/api/docs", { space: "s1", path: "a.md", content: "hi" }, "anon");
+    expect((await createDocRoute(req)).status).toBe(403);
+  });
+
+  it("member who is NOT a member of the space → 403", async () => {
+    const owner = await seedUser({ email: "o1@x.com", displayName: "O", role: "admin" });
+    await createSpace("s1", owner, "private", "t");
+    const req = fakeRequest("POST", "http://localhost/api/docs", { space: "s1", path: "a.md", content: "hi" }, "member");
+    expect((await createDocRoute(req)).status).toBe(403);
+  });
+
+  it.skipIf(!HAVE_GIT)("admin commits a doc into a space → 200 with slug + ref (git)", async () => {
+    const owner = await seedUser({ email: "o2@x.com", displayName: "O", role: "admin" });
+    await createSpace("s2", owner, "private", "t");
+    const req = fakeRequest("POST", "http://localhost/api/docs", { space: "s2", path: "os/a.md", content: "# hi" }, "admin");
     const res = await createDocRoute(req);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.slug).toBe("admin-create-doc");
+    expect(body.ref).toBe("refs/heads/main");
+    expect(body.target).toBe("main");
+    expect(typeof body.slug).toBe("string");
+    expect(body.url).toContain(`/docs/${body.slug}`);
   });
 });
 
@@ -510,9 +534,8 @@ describe("REST PUT /api/docs/[slug]/owner", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     targetUserId = await seedUser({ email: "target@test.com", displayName: "Target", role: "member" });
-    await publishDocOk({ slug: "owner-route-doc", title: "Doc", sourcePath: "t.md", audience: "team", format: "md", content: "hi", by: "Admin" });
+    await publishDocOk({ slug: "owner-route-doc", title: "Doc", sourcePath: "t.md", format: "md", content: "hi", by: "Admin" });
   });
 
   it("admin → 200, updates owner", async () => {
@@ -594,7 +617,7 @@ describe("REST POST /api/revisions/[id]/accept — admin || owner", () => {
     adminDocRevId = rev!.id;
   });
 
-  it("admin → 200 (accept)", async () => {
+  it.skipIf(!HAVE_GIT)("admin → 200 (accept, git commit)", async () => {
     const req = fakeRequest("POST", `http://localhost/api/revisions/${adminDocRevId}/accept`, undefined, "admin");
     const res = await acceptRoute(req, { params: Promise.resolve({ id: String(adminDocRevId) }) });
     expect(res.status).toBe(200);
@@ -643,93 +666,78 @@ describe("REST POST /api/revisions/[id]/reject — admin || owner", () => {
   });
 });
 
-// ─── MCP: publish_doc — relaxed guard ───────────────────────────────────────
+// ─── MCP: publish_doc — space-membership matrix (git-truth) ──────────────────
+// publish_doc is now a git commit into a SPACE: it requires `space` + `path`
+// and is gated by SPACE MEMBERSHIP (admin OR member; a reader/non-member is
+// refused), honoring push_policy. The old create=admin / update=owner rule is
+// gone — content authority follows the space's git ACL.
 
-describe("MCP publish_doc — permission matrix", () => {
+describe("MCP publish_doc — space-membership matrix (git-truth)", () => {
   const publishDocTool = TOOLS.find((t) => t.name === "publish_doc")!;
   let realAdminId: number;
+  let spaceId: number;
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
-    realAdminId = await seedUser({ email: "adm@mcp.com", displayName: "Admin", role: "admin" });
+    realAdminId = await seedUser({ tokenName: "adm-mcp", displayName: "Admin", role: "admin" });
+    const s = await createSpace("mcpspace", realAdminId, "private", "t");
+    if (!s.ok) throw new Error(s.error);
+    spaceId = s.space.id;
   });
 
-  it("admin creates new slug → ok", async () => {
-    const p = adminPrincipal(realAdminId);
-    const result = await publishDocTool.handler(p, {
-      slug: "mcp-new",
-      title: "MCP New",
-      source_path: "t.md",
-      audience: "team",
-      format: "md",
+  it("anonymous → error", async () => {
+    const result = await publishDocTool.handler(anonymous(), {
+      space: "mcpspace",
+      path: "a.md",
+      content: "x",
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("member who is NOT a space member → Forbidden error", async () => {
+    const memberId = await seedUser({ email: "m@mcp.com", displayName: "Member", role: "member" });
+    const result = await publishDocTool.handler(memberPrincipal(memberId), {
+      space: "mcpspace",
+      path: "a.md",
+      content: "x",
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Forbidden");
+  });
+
+  it("unknown space → error", async () => {
+    const result = await publishDocTool.handler(adminPrincipal(realAdminId), {
+      space: "no-such-space",
+      path: "a.md",
+      content: "x",
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it.skipIf(!HAVE_GIT)("admin → ok, commits to main (git)", async () => {
+    const result = await publishDocTool.handler(adminPrincipal(realAdminId), {
+      space: "mcpspace",
+      path: "os/a.md",
       content: "hello mcp",
     });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0].text);
-    expect(data.slug).toBe("mcp-new");
+    expect(data.ref).toBe("refs/heads/main");
+    expect(data.target).toBe("main");
+    expect(typeof data.slug).toBe("string");
   });
 
-  it("member creates new slug → error (admin-only create)", async () => {
-    const memberId = await seedUser({ email: "m@mcp.com", displayName: "Member", role: "member" });
-    const p = memberPrincipal(memberId);
-    const result = await publishDocTool.handler(p, {
-      slug: "mcp-member-new",
-      title: "Member New",
-      source_path: "t.md",
-      audience: "team",
-      format: "md",
-      content: "test",
-    });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("admin");
-  });
-
-  it("anonymous creates new slug → error", async () => {
-    const p = anonymous();
-    const result = await publishDocTool.handler(p, {
-      slug: "mcp-anon-new",
-      title: "Anon New",
-      source_path: "t.md",
-      audience: "team",
-      format: "md",
-      content: "test",
-    });
-    expect(result.isError).toBe(true);
-  });
-
-  it("admin updates existing slug → ok", async () => {
-    // Create the doc first
-    await publishDoc({ slug: "mcp-existing", title: "Existing", sourcePath: "t.md", audience: "team", format: "md", content: "v1", by: "Admin", ownerUserId: realAdminId });
-
-    const p = adminPrincipal(realAdminId);
-    const result = await publishDocTool.handler(p, {
-      slug: "mcp-existing",
-      title: "Existing Updated",
-      source_path: "t.md",
-      audience: "team",
-      format: "md",
-      content: "v2 updated content",
+  it.skipIf(!HAVE_GIT)("a space WRITER → ok, commits to main under direct policy (git)", async () => {
+    const writerId = await seedUser({ email: "w@mcp.com", displayName: "Writer", role: "member" });
+    await seedSpaceMember(spaceId, writerId, "writer");
+    const result = await publishDocTool.handler(memberPrincipal(writerId), {
+      space: "mcpspace",
+      path: "os/w.md",
+      content: "writer content",
     });
     expect(result.isError).toBeFalsy();
-  });
-
-  it("member (non-owner) tries to update existing slug → error", async () => {
-    const memberId = await seedUser({ email: "m2@mcp.com", displayName: "Member2", role: "member" });
-    await publishDoc({ slug: "mcp-admin-doc", title: "Admin Doc", sourcePath: "t.md", audience: "team", format: "md", content: "v1", by: "Admin", ownerUserId: realAdminId });
-
-    // memberId is NOT the owner
-    const p = memberPrincipal(memberId);
-    const result = await publishDocTool.handler(p, {
-      slug: "mcp-admin-doc",
-      title: "Admin Doc Updated",
-      source_path: "t.md",
-      audience: "team",
-      format: "md",
-      content: "sneaky update",
-    });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Forbidden");
+    const data = JSON.parse(result.content[0].text);
+    expect(data.target).toBe("main");
   });
 });
 
@@ -749,7 +757,7 @@ describe("MCP decide_revision — admin || owner", () => {
     revId = rev!.id;
   });
 
-  it("admin accepts → ok", async () => {
+  it.skipIf(!HAVE_GIT)("admin accepts → ok (git commit)", async () => {
     const p = adminPrincipal(adminId);
     const result = await decideRevisionTool.handler(p, { id: revId, accept: true });
     expect(result.isError).toBeFalsy();
@@ -790,10 +798,9 @@ describe("MCP update_doc — owner reassignment", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     adminId = await seedUser({ email: "adm@owner.com", displayName: "Admin", role: "admin" });
     targetUserId = await seedUser({ email: "tgt@mcp.com", displayName: "Target", role: "member" });
-    await publishDocOk({ slug: "mcp-owner-doc", title: "MCP Owner Doc", sourcePath: "t.md", audience: "team", format: "md", content: "hi", by: "Admin" });
+    await publishDocOk({ slug: "mcp-owner-doc", title: "MCP Owner Doc", sourcePath: "t.md", format: "md", content: "hi", by: "Admin" });
   });
 
   it("admin reassigns owner → ok", async () => {

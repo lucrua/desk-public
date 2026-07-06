@@ -35,12 +35,15 @@ export function buildMcpServer(principal: Principal): McpServer {
         inputSchema: tool.inputSchema,
       },
       // The SDK validates args against inputSchema before invoking; we pass the
-      // closure-captured principal alongside. The catch keeps unexpected
-      // service exceptions (DB errors etc.) from echoing raw internals to the
-      // client — anticipated failures already return fail() inside handlers.
-      async (args: unknown) => {
+      // closure-captured principal alongside. `extra.signal` is the request's
+      // AbortSignal (cancellation / disconnect) — threaded into the handler ctx
+      // so a long-poll (list_events `wait_seconds`) ends promptly if the caller
+      // goes away. The catch keeps unexpected service exceptions (DB errors etc.)
+      // from echoing raw internals to the client — anticipated failures already
+      // return fail() inside handlers.
+      async (args: unknown, extra: { signal?: AbortSignal }) => {
         try {
-          return await tool.handler(principal, args as never);
+          return await tool.handler(principal, args as never, { signal: extra?.signal });
         } catch (e) {
           console.error(`[mcp] ${tool.name} failed:`, (e as Error)?.message);
           return {

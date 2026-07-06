@@ -33,7 +33,6 @@ function doc(over: Partial<DocListItem> = {}): DocListItem {
   return {
     slug: "d",
     title: "D",
-    audience: "team",
     format: "md",
     path: "",
     versionCount: 1,

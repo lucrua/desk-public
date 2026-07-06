@@ -15,9 +15,10 @@
  */
 import { NextResponse } from "next/server";
 import { getPrincipal, isStaff } from "@/lib/auth";
-import { getDocBySlug, publishDoc, scopeForPrincipal } from "@/lib/docs";
+import { getDocBySlug, getLiveDocBySpacePath, scopeForPrincipal } from "@/lib/docs";
 import { canPublishVersion } from "@/lib/permissions";
-import { normalizePath } from "@/lib/path";
+import { getSpaceById } from "@/lib/spaces";
+import { webAuthorCommit, liveMainTip, type WebAuthorIdentity } from "@/lib/web-author";
 import { MAX_CONTENT_CHARS } from "@/lib/limits";
 
 function err(status: number, message: string) {
@@ -26,6 +27,26 @@ function err(status: number, message: string) {
 
 type RouteContext = { params: Promise<{ slug: string }> };
 
+/** A stable web-author identity from a reviewer/publisher display name. This
+ * direct publish lands on `main` as `owner` (authoritative), so the handle is a
+ * label only. */
+function identityFromName(name: string): WebAuthorIdentity {
+  const handle =
+    (name || "owner")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "") || "owner";
+  return { name: name || "Desk user", email: `${handle}@desk.localhost`, handle };
+}
+
+/**
+ * POST /api/docs/[slug]/publish — direct-publish a new version of an EXISTING
+ * doc (admin OR the doc's owner). Truth = git: the content is committed to the
+ * doc's `(space, sourcePath)` on `main` via `webAuthorCommit` (role forced to
+ * `owner` — a direct publish is authoritative) and the reindex projects it. No
+ * doc content is written to Postgres here.
+ */
 export async function POST(req: Request, { params }: RouteContext) {
   const principal = await getPrincipal(req.headers as unknown as Headers);
   if (!isStaff(principal)) return err(403, "Forbidden — staff only");
@@ -62,42 +83,50 @@ export async function POST(req: Request, { params }: RouteContext) {
     return err(400, `Content too large (max ${MAX_CONTENT_CHARS} chars)`);
   }
 
-  // Title: optional; fall back to existing doc title.
-  const title =
-    typeof b.title === "string" && b.title.trim().length > 0
-      ? b.title.trim()
-      : result.doc.title;
+  // Resolve the doc's owning space (its slug is the commit target).
+  const space = await getSpaceById(result.doc.spaceId);
+  if (!space) return err(500, "Doc has no resolvable space");
 
-  // Path: optional; fall back to existing doc path.
-  let path: string | undefined;
-  if (typeof b.path === "string") {
-    const np = normalizePath(b.path);
-    if (np === null) {
-      return err(400, "Invalid path — segments must match ^[a-z0-9][a-z0-9-]*$, max depth 6");
+  const identity = identityFromName(principal.name);
+  const sourcePath = result.doc.sourcePath;
+
+  // Commit the new content on `main` (CAS on the live tip; retry ONCE on stale).
+  let committed:
+    | Awaited<ReturnType<typeof webAuthorCommit>>
+    | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const baseMainTip = await liveMainTip(space.slug);
+    const r = await webAuthorCommit(space.slug, {
+      role: "owner",
+      identity,
+      writes: [{ path: sourcePath, bytes: Buffer.from(b.content, "utf8") }],
+      baseMainTip,
+      message: `publish ${sourcePath}`,
+    });
+    if (r.ok) {
+      committed = r;
+      break;
     }
-    path = np;
+    if (r.reason === "stale") continue; // re-read the tip and retry once
+    if (r.reason === "forbidden") return err(403, "Forbidden");
+    if (r.reason === "mirrored") return err(409, r.detail ?? "This space mirrors from GitHub — writes are refused.");
+    return err(500, r.detail ?? "Could not publish");
+  }
+  if (!committed || !committed.ok) {
+    return err(409, "This doc changed while you were editing — reload and retry.");
   }
 
-  const published = await publishDoc({
-    slug,
-    title,
-    sourcePath: result.doc.sourcePath,
-    audience: result.doc.audience,
-    format: result.doc.format,
-    content: b.content,
-    by: principal.name,
-    ...(path !== undefined ? { path } : {}),
-  });
+  // Re-read the projected doc for the new version id.
+  const after = await getLiveDocBySpacePath(result.doc.spaceId, sourcePath);
 
-  if (!published.ok) {
-    return err(409, `Version conflict — current version is ${published.currentVersionId}; re-base and retry`);
-  }
-
-  return NextResponse.json({
-    ok: true,
-    slug: published.slug,
-    versionId: published.versionId,
-    isNewVersion: published.isNewVersion,
-    ownerUserId: published.ownerUserId,
-  }, { status: 200 });
+  return NextResponse.json(
+    {
+      ok: true,
+      slug,
+      versionId: after?.currentVersionId ?? null,
+      ref: committed.ref,
+      ownerUserId: result.doc.ownerUserId ?? null,
+    },
+    { status: 200 },
+  );
 }

@@ -13,6 +13,7 @@ import {
 import { listComments } from "@/lib/comments";
 import { loadShareView, formatStamp, excerptFrom, type ShareView } from "./load-share";
 import ShareComments from "./ShareComments";
+import SuggestEdit from "./SuggestEdit";
 import ReaderActions from "./ReaderActions";
 import DirectoryIndex from "./DirectoryIndex";
 import type { CommentDTO } from "@/app/(hub)/docs/[slug]/comments-view-model";
@@ -161,11 +162,27 @@ export default async function SharePage({
     </>
   ) : null;
 
+  // "Suggest an edit" is md-only (html has no editor) and gated on the share's
+  // allow_edits flag — independent of allowComments.
+  const suggestNode =
+    view.kind === "md" && view.allowEdits ? (
+      <>
+        <div
+          style={{
+            maxWidth: 680,
+            margin: "0 auto",
+            borderTop: "1px solid var(--hairline)",
+          }}
+        />
+        <SuggestEdit token={view.token} label={view.shareLabel} source={view.content} />
+      </>
+    ) : null;
+
   if (view.kind === "html") {
     return <HtmlArtifact view={view} comments={commentsNode} />;
   }
 
-  return <MdDoc view={view} comments={commentsNode} />;
+  return <MdDoc view={view} comments={commentsNode} suggest={suggestNode} />;
 }
 
 // ── expired share page ─────────────────────────────────────────────────────────
@@ -346,7 +363,15 @@ function ShareFooter({ createdBy }: { createdBy: string }) {
 }
 
 // ── md doc render ─────────────────────────────────────────────────────────────
-function MdDoc({ view, comments }: { view: ShareView; comments?: React.ReactNode }) {
+function MdDoc({
+  view,
+  comments,
+  suggest,
+}: {
+  view: ShareView;
+  comments?: React.ReactNode;
+  suggest?: React.ReactNode;
+}) {
   return (
     <div
       style={{
@@ -377,6 +402,9 @@ function MdDoc({ view, comments }: { view: ShareView; comments?: React.ReactNode
         <Markdown content={view.content} register="partner" />
         <ShareFooter createdBy={view.createdBy} />
       </article>
+
+      {/* "Suggest an edit" affordance BELOW the footer divider (md + edits-on). */}
+      {suggest}
 
       {/* Comment thread + composer BELOW the footer divider (only when allowed). */}
       {comments}

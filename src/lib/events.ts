@@ -61,11 +61,6 @@ export const EVENT_KINDS = [
   "catalog.item.created",
   "catalog.item.updated",
   "catalog.item.deleted",
-  // Audiences v2 membership kinds. Audience membership is an internal admin
-  // surface (no doc scoping) — staff-visible to admin and member alike. Payload
-  // carries the audience key + userId + displayName, never anything sensitive.
-  "audience.member_added",
-  "audience.member_removed",
   // Doc ownership (migration 0014). Emitted when an admin reassigns a doc's
   // owner via setDocOwner. Payload: slug, fromUserId, toUserId. Admin-only in
   // the event feed (ownership is an internal admin-audit event).
@@ -144,8 +139,6 @@ const STAFF_VISIBLE_KINDS = new Set<string>([
   "catalog.item.created",
   "catalog.item.updated",
   "catalog.item.deleted",
-  "audience.member_added",
-  "audience.member_removed",
 ]);
 
 // ── emitEvent ───────────────────────────────────────────────────────────────
@@ -326,6 +319,96 @@ export async function listEvents(opts: ListEventsOpts): Promise<EventRow[]> {
     .where(and(...conds))
     .orderBy(asc(events.id))
     .limit(limit);
+  return rows;
+}
+
+// ── listEventsWaiting (optional server-side long-poll) ───────────────────────
+
+/**
+ * Upper bound on a long-poll park, in seconds. Kept comfortably under the
+ * ~60 s most proxies/load-balancers use for an idle-connection cutoff, so a
+ * parked request always returns on its own before anything upstream kills it.
+ */
+export const MAX_WAIT_SECONDS = 55;
+
+/** How often the park re-queries the DB while waiting (ms). */
+const WAIT_POLL_MS = 1000;
+
+/**
+ * Clamp a requested wait to the safe integer band `[0, MAX_WAIT_SECONDS]`.
+ * Non-finite / null / undefined / ≤0 → `0` (the immediate, no-wait default);
+ * anything above the cap → the cap. `0` means "behave exactly like listEvents".
+ */
+export function clampWaitSeconds(raw: number | null | undefined): number {
+  if (raw == null || !Number.isFinite(raw)) return 0;
+  if (raw <= 0) return 0;
+  if (raw >= MAX_WAIT_SECONDS) return MAX_WAIT_SECONDS;
+  return Math.floor(raw);
+}
+
+/**
+ * A sleep that resolves after `ms` OR immediately when `signal` aborts —
+ * whichever comes first. Cleans up its timer + listener either way (no leak).
+ */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const timer = setTimeout(finish, ms);
+    function finish() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+  });
+}
+
+/**
+ * `listEvents` with an OPTIONAL server-side long-poll (near-real-time dispatch,
+ * outbound-only — the agent just makes a normal request that may take longer).
+ *
+ * Behaviour:
+ *   - `waitSeconds <= 0` (the default): identical to `listEvents` — one query,
+ *     return immediately (possibly empty).
+ *   - `waitSeconds > 0` AND the immediate query already matches events: return
+ *     those NOW (no wait) — pending events short-circuit the park.
+ *   - `waitSeconds > 0` AND nothing pending: park, re-querying every
+ *     `WAIT_POLL_MS`, until an event matches OR the (clamped) deadline elapses,
+ *     then return (possibly empty).
+ *
+ * RESOURCE SAFETY — the whole point of this being safe:
+ *   - Each poll is a FRESH, short `listEvents` call. Between polls we only
+ *     `abortableSleep`, holding NO DB connection and NO transaction — the pool
+ *     is never checked out across the wait, so a wall of parked agents can't
+ *     exhaust it (they hold an HTTP slot for ≤55 s, not a DB connection).
+ *   - `signal` (client disconnect, wired from `req.signal` / the MCP request's
+ *     abort signal) ends the park PROMPTLY and returns whatever the last query
+ *     produced (empty on a mid-wait abort) — a hung/abandoned request doesn't
+ *     linger for the full timeout.
+ *
+ * Same return shape as `listEvents` in every case.
+ */
+export async function listEventsWaiting(
+  opts: ListEventsOpts,
+  waitSeconds: number,
+  signal?: AbortSignal,
+): Promise<EventRow[]> {
+  // First read is unconditional: if events already match `since`, return NOW —
+  // pending events never wait, exactly like the immediate path.
+  let rows = await listEvents(opts);
+  const wait = clampWaitSeconds(waitSeconds);
+  if (rows.length > 0 || wait === 0 || signal?.aborted) return rows;
+
+  const deadline = Date.now() + wait * 1000;
+  while (!signal?.aborted && Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    await abortableSleep(Math.min(WAIT_POLL_MS, remaining), signal);
+    if (signal?.aborted) break;
+    // Fresh short query; the pool connection is released as it resolves, so the
+    // upcoming sleep holds nothing.
+    rows = await listEvents(opts);
+    if (rows.length > 0) return rows;
+  }
   return rows;
 }
 

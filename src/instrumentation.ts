@@ -29,4 +29,41 @@ export async function register(): Promise<void> {
   } catch (e) {
     console.error("[startup] push-policy hook backfill failed:", (e as Error)?.message);
   }
+
+  // Convergence fix-pass, Slice 1: backfill shares.space_id on pre-migration
+  // rows so every directory share is space-scoped (finding 3). Doc shares take
+  // the doc's space; ambiguous/empty directory shares are revoked (fail-closed,
+  // D-C7). Idempotent + best-effort (a failure logs, never crashes boot).
+  try {
+    const { backfillShareSpaceIds } = await import("@/lib/shares");
+    const r = await backfillShareSpaceIds();
+    if (r.docFilled > 0 || r.dirFilled > 0 || r.dirRevoked > 0) {
+      console.log(
+        `[startup] share space_id backfill: ${r.docFilled} doc + ${r.dirFilled} dir filled, ${r.dirRevoked} dir revoked (ambiguous/empty)`,
+      );
+    }
+  } catch (e) {
+    console.error("[startup] share space_id backfill failed:", (e as Error)?.message);
+  }
+
+  // Convergence fix-pass, Slice 4a: materialize legacy DB-only docs into git.
+  // Pre-Slice-2 docs (created by the retired DB-direct publishDoc) have no blob
+  // at `main` in their space repo — invisible to a clone / the Slice-4 GitHub
+  // mirror. This commits each such doc's current content into its repo so git is
+  // complete. Idempotent (only fills a MISSING blob; never overwrites git),
+  // cheap on a materialized instance (one tree read per space), and best-effort
+  // (a failure logs, never crashes boot).
+  try {
+    const { materializeDbOnlyDocs } = await import("@/lib/materialize");
+    const r = await materializeDbOnlyDocs();
+    if (r.docsMaterialized > 0 || r.collisions > 0 || r.errors > 0) {
+      console.log(
+        `[startup] materialized ${r.docsMaterialized} DB-only doc(s) into git across ${r.spacesCommitted} space(s)` +
+          (r.collisions > 0 ? `; ${r.collisions} sourcePath collision(s) skipped` : "") +
+          (r.errors > 0 ? `; ${r.errors} space(s) failed` : ""),
+      );
+    }
+  } catch (e) {
+    console.error("[startup] DB-only doc materialization failed:", (e as Error)?.message);
+  }
 }

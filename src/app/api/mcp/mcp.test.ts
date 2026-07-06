@@ -12,15 +12,16 @@
  * The transport runs in JSON-response mode, so each POST yields a single
  * `application/json` JSON-RPC envelope we can parse and assert on.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
-  seedAudiences,
   seedDevMemberInDefaultSpace,
   seedSpace,
   seedUser,
 } from "@/test/db";
+import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { publishDoc, getDocBySlug } from "@/lib/docs";
+import { createSpace } from "@/lib/spaces";
 import { listShares } from "@/lib/shares";
 import { POST, GET } from "./route";
 
@@ -91,7 +92,6 @@ const DOC = {
   slug: "test-doc",
   title: "Test Doc",
   sourcePath: "os/test-doc.md",
-  audience: "team",
   format: "md" as const,
   content: "# Hello",
   by: "lucas",
@@ -102,7 +102,6 @@ const DOC = {
 describe("MCP route — auth gate", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("anonymous → 401 JSON-RPC error", async () => {
@@ -128,7 +127,6 @@ describe("MCP route — auth gate", () => {
 describe("MCP route — protocol flow", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("initialize returns serverInfo desk", async () => {
@@ -211,7 +209,6 @@ describe("MCP route — protocol flow", () => {
 describe("MCP route — role scoping", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
   });
@@ -229,24 +226,21 @@ describe("MCP route — role scoping", () => {
     expect(payload.kind).toBe("member");
   });
 
-  it("member calling publish_doc → authz error result (not a crash)", async () => {
+  it("member who is not in the target space calling publish_doc → forbidden error result (not a crash)", async () => {
+    // A space the dev member has no membership in → resolveWebAuthorAccess fails
+    // closed to Forbidden (no existence leak, no git op).
+    const owner = await seedUser({ email: "sp-owner@x.com", displayName: "O", role: "admin" });
+    await createSpace("otherspace", owner, "private", "t");
     const { status, json } = await toolsCall(
       "publish_doc",
-      {
-        slug: "x",
-        title: "X",
-        source_path: "os/x.md",
-        audience: "team",
-        format: "md",
-        content: "# x",
-      },
+      { space: "otherspace", path: "os/x.md", content: "# x" },
       "member",
     );
     // The HTTP/JSON-RPC layer still succeeds — the failure is inside the result.
     expect(status).toBe(200);
     expect(json.result.isError).toBe(true);
     const payload = resultPayload(json);
-    expect(payload.error).toMatch(/admin only/i);
+    expect(payload.error).toMatch(/forbidden/i);
   });
 
   it("member calling create_share / revoke_share / list_shares → all admin-only errors", async () => {
@@ -288,33 +282,44 @@ describe("MCP route — role scoping", () => {
 // ── full publish → share → revoke flow with DB assertions ────────────────────
 
 describe("MCP route — publish→share→revoke flow (admin, DB effects)", () => {
-  beforeEach(async () => {
-    await resetDb();
-    await seedAudiences();
+  // publish_doc commits into a space (truth = git) — isolate to a temp data dir.
+  let restore: (() => Promise<void>) | undefined;
+  beforeAll(async () => {
+    ({ restore } = await useTempDataDir());
+  });
+  afterAll(async () => {
+    if (restore) await restore();
   });
 
-  it("publishes a doc, shares it, lists, and revokes — asserting DB state at each step", async () => {
-    // publish
+  beforeEach(async () => {
+    await resetDb();
+    await clearSpaceRepos();
+    const ownerId = await seedUser({ tokenName: "flow-owner", displayName: "Owner", role: "admin" });
+    await createSpace("flowspace", ownerId, "private", "t");
+  });
+
+  it.skipIf(!HAVE_GIT)("publishes a doc, shares it, lists, and revokes — asserting DB state at each step", async () => {
+    // publish → a git commit; the projection mints the opaque slug.
     const pub = await toolsCall("publish_doc", {
-      slug: "flow-doc",
-      title: "Flow Doc",
-      source_path: "os/flow-doc.md",
-      audience: "team",
-      format: "md",
+      space: "flowspace",
+      path: "os/flow-doc.md",
       content: "# flow",
     });
     expect(pub.json.result.isError).toBeFalsy();
     const pubPayload = resultPayload(pub.json);
-    expect(pubPayload.isNewVersion).toBe(true);
-    expect(pubPayload.hubUrl).toMatch(/\/docs\/flow-doc$/);
+    expect(pubPayload.target).toBe("main");
+    expect(pubPayload.ref).toBe("refs/heads/main");
+    const flowSlug = pubPayload.slug as string;
+    expect(typeof flowSlug).toBe("string");
+    expect(pubPayload.url).toMatch(new RegExp(`/docs/${flowSlug}$`));
 
-    // DB: doc exists + published
-    const doc = await getDocBySlug("flow-doc", { scope: { viewer: "admin" } });
+    // DB: doc exists + published (projected from git)
+    const doc = await getDocBySlug(flowSlug, { scope: { viewer: "admin" } });
     expect(doc).not.toBeNull();
     expect(doc!.version!.content).toBe("# flow");
 
     // share
-    const share = await toolsCall("create_share", { doc_slug: "flow-doc", label: "Pedro" });
+    const share = await toolsCall("create_share", { doc_slug: flowSlug, label: "Pedro" });
     const sharePayload = resultPayload(share.json);
     expect(sharePayload.shareUrl).toMatch(/\/s\/[A-Za-z0-9_-]{43}$/);
     const shareId = sharePayload.id;
@@ -341,31 +346,22 @@ describe("MCP route — publish→share→revoke flow (admin, DB effects)", () =
     expect(revoke2.json.result.isError).toBe(true);
   });
 
-  it("publish_doc ignores the (vestigial) audience field — unknown value is no longer validated", async () => {
-    // Audience MCP tools were removed and read access is space-scoped now; the
-    // `audience` field is vestigial, so an unknown value no longer errors.
+  it("publish_doc rejects an unsafe path (schema/handler guard, no commit)", async () => {
     const { json } = await toolsCall("publish_doc", {
-      slug: "bad-aud",
-      title: "Bad",
-      source_path: "os/bad.md",
-      audience: "nonexistent",
-      format: "md",
-      content: "# x",
-    });
-    expect(json.result.isError).toBeFalsy();
-  });
-
-  it("publish_doc with invalid slug → error result", async () => {
-    const { json } = await toolsCall("publish_doc", {
-      slug: "Bad Slug",
-      title: "Bad",
-      source_path: "os/bad.md",
-      audience: "team",
-      format: "md",
+      space: "flowspace",
+      path: "../escape.md",
       content: "# x",
     });
     expect(json.result.isError).toBe(true);
-    expect(resultPayload(json).error).toMatch(/slug/i);
+  });
+
+  it("publish_doc rejects an unknown space", async () => {
+    const { json } = await toolsCall("publish_doc", {
+      space: "no-such-space",
+      path: "os/bad.md",
+      content: "# x",
+    });
+    expect(json.result.isError).toBe(true);
   });
 
   it("create_share for unknown doc → not-found error result", async () => {

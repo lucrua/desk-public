@@ -200,24 +200,6 @@ body {
   color: var(--ink);
 }
 
-/* --- catalog auto-link refs (staff doc/card readers) --- */
-.md-partner a.catalog-ref,
-.md-operator a.catalog-ref {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
-  background: var(--ref-bg);
-  color: var(--ref-ink);
-  border: 1px solid var(--ref-border);
-  border-radius: 4px;
-  padding: 0 5px;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.md-partner a.catalog-ref:hover,
-.md-operator a.catalog-ref:hover {
-  background: var(--ref-border);
-}
-
 /* --- headings --- */
 .md-partner h1 {
   font-size: clamp(34px, 6vw, 46px);
