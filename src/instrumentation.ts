@@ -45,4 +45,25 @@ export async function register(): Promise<void> {
   } catch (e) {
     console.error("[startup] share space_id backfill failed:", (e as Error)?.message);
   }
+
+  // Convergence fix-pass, Slice 4a: materialize legacy DB-only docs into git.
+  // Pre-Slice-2 docs (created by the retired DB-direct publishDoc) have no blob
+  // at `main` in their space repo — invisible to a clone / the Slice-4 GitHub
+  // mirror. This commits each such doc's current content into its repo so git is
+  // complete. Idempotent (only fills a MISSING blob; never overwrites git),
+  // cheap on a materialized instance (one tree read per space), and best-effort
+  // (a failure logs, never crashes boot).
+  try {
+    const { materializeDbOnlyDocs } = await import("@/lib/materialize");
+    const r = await materializeDbOnlyDocs();
+    if (r.docsMaterialized > 0 || r.collisions > 0 || r.errors > 0) {
+      console.log(
+        `[startup] materialized ${r.docsMaterialized} DB-only doc(s) into git across ${r.spacesCommitted} space(s)` +
+          (r.collisions > 0 ? `; ${r.collisions} sourcePath collision(s) skipped` : "") +
+          (r.errors > 0 ? `; ${r.errors} space(s) failed` : ""),
+      );
+    }
+  } catch (e) {
+    console.error("[startup] DB-only doc materialization failed:", (e as Error)?.message);
+  }
 }
