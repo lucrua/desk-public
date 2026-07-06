@@ -14,6 +14,9 @@ import { resolvePrincipalUserId } from "@/lib/principal-user";
 import { db } from "@/db";
 import {
   listEvents,
+  listEventsWaiting,
+  clampWaitSeconds,
+  MAX_WAIT_SECONDS,
   parseKindsParam,
   EVENT_KINDS,
   emitEvent,
@@ -358,6 +361,106 @@ describe("board event scoping (card.* / bucket.*)", () => {
     // hidden doc still excluded
     const slugs = rows.map((e) => (e.payload as Record<string, unknown>).slug);
     expect(slugs).not.toContain("ev-hidden");
+  });
+});
+
+// ── listEventsWaiting: the optional near-real-time long-poll (Slice 5) ────────
+describe("listEventsWaiting (long-poll)", () => {
+  beforeEach(async () => {
+    await resetDb();
+    await seedAudiences();
+    // Direct insert → emits no event, so the log starts empty and the park
+    // tests below start from a clean cursor.
+    await seedDefaultSpace();
+  });
+
+  // The current max event id (0 if the log is empty) — used as an exclusive
+  // `since` so a park starts from a clean slate regardless of seed noise.
+  async function cursorNow(): Promise<number> {
+    const all = await listEvents({ viewer: "admin" });
+    return all.length > 0 ? all[all.length - 1].id : 0;
+  }
+
+  it("clampWaitSeconds bounds the wait to [0, 55]", () => {
+    expect(MAX_WAIT_SECONDS).toBe(55);
+    expect(clampWaitSeconds(0)).toBe(0);
+    expect(clampWaitSeconds(5)).toBe(5);
+    expect(clampWaitSeconds(55)).toBe(55);
+    expect(clampWaitSeconds(100)).toBe(55); // >55 → clamped to 55
+    expect(clampWaitSeconds(-5)).toBe(0); // negative → 0 (immediate)
+    expect(clampWaitSeconds(undefined)).toBe(0);
+    expect(clampWaitSeconds(null)).toBe(0);
+    expect(clampWaitSeconds(Number.NaN)).toBe(0);
+    expect(clampWaitSeconds(3.9)).toBe(3); // floored
+  });
+
+  it("returns IMMEDIATELY when events already match (no wait)", async () => {
+    await emitEvent(db, {
+      kind: "card.created",
+      payload: { cardId: 1, bucket: "backlog" },
+      actorName: "Alex",
+    });
+    const t0 = Date.now();
+    const rows = await listEventsWaiting({ viewer: "admin" }, 5);
+    const elapsed = Date.now() - t0;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(500); // did not park
+  });
+
+  it("wait <= 0 behaves exactly like listEvents (no park, may be empty)", async () => {
+    const since = await cursorNow();
+    const t0 = Date.now();
+    const rows = await listEventsWaiting({ viewer: "admin", since }, 0);
+    const elapsed = Date.now() - t0;
+    expect(rows).toHaveLength(0);
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it("with nothing pending and a short wait, returns empty after ~the timeout", async () => {
+    const since = await cursorNow();
+    const t0 = Date.now();
+    const rows = await listEventsWaiting({ viewer: "admin", since }, 1);
+    const elapsed = Date.now() - t0;
+    expect(rows).toHaveLength(0);
+    expect(elapsed).toBeGreaterThanOrEqual(900); // actually waited ~1s
+    expect(elapsed).toBeLessThan(2500);
+  });
+
+  it("an event inserted mid-wait returns promptly with it", async () => {
+    const since = await cursorNow();
+    const t0 = Date.now();
+    setTimeout(() => {
+      void emitEvent(db, {
+        kind: "card.created",
+        payload: { cardId: 9, bucket: "review" },
+        actorName: "Alex",
+      });
+    }, 150);
+    const rows = await listEventsWaiting({ viewer: "admin", since }, 5);
+    const elapsed = Date.now() - t0;
+    expect(rows.some((r) => r.kind === "card.created")).toBe(true);
+    expect(elapsed).toBeLessThan(3000); // well before the 5s deadline
+  });
+
+  it("respects an abort signal — returns promptly and empty (no full wait)", async () => {
+    const since = await cursorNow();
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 100);
+    const t0 = Date.now();
+    const rows = await listEventsWaiting({ viewer: "admin", since }, 30, ac.signal);
+    const elapsed = Date.now() - t0;
+    expect(rows).toHaveLength(0);
+    expect(elapsed).toBeLessThan(1500); // aborted — did NOT wait 30s
+  });
+
+  it("an already-aborted signal returns immediately", async () => {
+    const since = await cursorNow();
+    const ac = new AbortController();
+    ac.abort();
+    const t0 = Date.now();
+    const rows = await listEventsWaiting({ viewer: "admin", since }, 30, ac.signal);
+    expect(rows).toHaveLength(0);
+    expect(Date.now() - t0).toBeLessThan(500);
   });
 });
 

@@ -91,4 +91,59 @@ describe("GET /api/events", () => {
     expect(json.events).toHaveLength(0);
     expect(json.nextCursor).toBe(lastId);
   });
+
+  // ── wait_seconds long-poll (Slice 5) ───────────────────────────────────────
+
+  it("wait_seconds returns IMMEDIATELY when events already match (no park)", async () => {
+    const t0 = Date.now();
+    const res = await GET(req("/api/events?wait_seconds=5", "admin"));
+    const elapsed = Date.now() - t0;
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.events.length).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(1000); // pending events short-circuit the wait
+  });
+
+  it("wait_seconds parks then returns empty after ~the timeout when nothing new", async () => {
+    const all = await (await GET(req("/api/events", "admin"))).json();
+    const lastId = all.events[all.events.length - 1].id;
+    const t0 = Date.now();
+    const res = await GET(req(`/api/events?since=${lastId}&wait_seconds=1`, "admin"));
+    const elapsed = Date.now() - t0;
+    const json = await res.json();
+    expect(json.events).toHaveLength(0);
+    expect(json.nextCursor).toBe(lastId); // same shape as the immediate empty path
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeLessThan(2500);
+  });
+
+  it("wait_seconds out of range is clamped (not rejected); non-integer → 400", async () => {
+    // >55 clamps to 55, but pending events → returns immediately, so it's fast.
+    const over = await GET(req("/api/events?wait_seconds=100", "admin"));
+    expect(over.status).toBe(200);
+    // negative clamps to 0 (immediate).
+    const neg = await GET(req("/api/events?wait_seconds=-5", "admin"));
+    expect(neg.status).toBe(200);
+    // a non-integer is a 400 (like since/limit validation).
+    expect((await GET(req("/api/events?wait_seconds=1.5", "admin"))).status).toBe(400);
+    expect((await GET(req("/api/events?wait_seconds=abc", "admin"))).status).toBe(400);
+  });
+
+  it("a parked request ends promptly when the client aborts", async () => {
+    const all = await (await GET(req("/api/events", "admin"))).json();
+    const lastId = all.events[all.events.length - 1].id;
+    const ac = new AbortController();
+    const request = new Request(
+      `http://test/api/events?since=${lastId}&wait_seconds=30`,
+      { method: "GET", headers: headers("admin"), signal: ac.signal },
+    );
+    setTimeout(() => ac.abort(), 100);
+    const t0 = Date.now();
+    const res = await GET(request);
+    const elapsed = Date.now() - t0;
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.events).toHaveLength(0);
+    expect(elapsed).toBeLessThan(1500); // aborted — did NOT wait 30s
+  });
 });

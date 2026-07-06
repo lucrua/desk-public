@@ -476,6 +476,70 @@ describe("MCP tools — revisions behaviour", () => {
   });
 });
 
+// ── list_events wait_seconds long-poll (Slice 5) ─────────────────────────────
+describe("MCP list_events — wait_seconds long-poll", () => {
+  beforeEach(async () => {
+    await resetDb();
+    await seedAudiences();
+  });
+
+  const seedDoc = (slug: string) =>
+    publishDocOk({
+      slug,
+      title: slug,
+      sourcePath: `os/${slug}.md`,
+      format: "md",
+      content: "# e",
+      by: "lucas",
+    });
+
+  it("returns IMMEDIATELY with pending events even when wait_seconds is set", async () => {
+    await seedDoc("evt-a");
+    const t0 = Date.now();
+    const res = await run("list_events", admin, { wait_seconds: 5 });
+    const elapsed = Date.now() - t0;
+    expect(res.isError).toBeFalsy();
+    const body = res.structuredContent as { events: unknown[]; nextCursor: number };
+    expect(body.events.length).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(1000); // did not park
+  });
+
+  it("parks then returns empty after ~the timeout when nothing new (short wait)", async () => {
+    await seedDoc("evt-b");
+    const first = (await run("list_events", admin, {})).structuredContent as {
+      nextCursor: number;
+    };
+    const t0 = Date.now();
+    const res = await run("list_events", admin, { since: first.nextCursor, wait_seconds: 1 });
+    const elapsed = Date.now() - t0;
+    const body = res.structuredContent as { events: unknown[]; nextCursor: number };
+    expect(body.events).toHaveLength(0);
+    expect(body.nextCursor).toBe(first.nextCursor); // unchanged shape after the wait
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeLessThan(2500);
+  });
+
+  it("clamps an over-cap wait_seconds (returns, not an error)", async () => {
+    await seedDoc("evt-c");
+    const res = await run("list_events", admin, { wait_seconds: 100 });
+    expect(res.isError).toBeFalsy();
+    // pending events → immediate despite the clamp to 55.
+    expect((res.structuredContent as { events: unknown[] }).events.length).toBeGreaterThan(0);
+  });
+
+  it("wait_seconds omitted is the immediate default (unchanged behaviour)", async () => {
+    await seedDoc("evt-d");
+    const t0 = Date.now();
+    const res = await run("list_events", admin, {});
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect((res.structuredContent as { events: unknown[] }).events.length).toBeGreaterThan(0);
+  });
+
+  it("non-staff is still refused regardless of wait_seconds", async () => {
+    expect((await run("list_events", anon, { wait_seconds: 5 })).isError).toBe(true);
+  });
+});
+
 describe("maskContact", () => {
   it("masks an email keeping first char + domain", () => {
     expect(maskContact("pedro@example.net")).toBe("p****@example.net");

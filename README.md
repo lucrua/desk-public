@@ -146,6 +146,8 @@ desk status
 
 Desk exposes a **Model Context Protocol** server at **`/mcp`** so external agents (Claude Code, etc.) can call Desk tools directly. It speaks the MCP **Streamable HTTP** transport in stateless mode (each request is self-contained — no session to keep alive), and reuses the exact same authentication and authorization as the web app: the Cloudflare Access wall authenticates the request, `getPrincipal` resolves it to a principal, and each tool enforces space-scoped reads + admin/owner mutation rules.
 
+> **Building an autonomous agent?** [`docs/agent-runbook.md`](docs/agent-runbook.md) is the end-to-end recipe: a Docker bot that provisions its two credentials (a git principal token **and** an MCP identity), clones a space to read catalogs as files, publishes reports through the `push_policy` review gate, distributes them via a directory share, and picks up assigned cards by polling `list_events` (optionally with the `wait_seconds` long-poll for near-real-time dispatch).
+
 **MCP is the agent surface; REST is the UI surface — deliberately not 1:1.** MCP exposes what a headless agent actually drives. Pure web-UI admin actions (user & multi-email management, access-request triage, board-bucket lifecycle, a share's view-log / comment- and edits-toggle) are **REST-only and have no MCP tool**; an agent that needs the "who can see what" audit uses `distribution_overview` + `list_shares`.
 
 **Anonymous "suggest an edit" on a share.** A share whose owner flips on `allow_edits` (`PATCH /api/shares/[id]`, REST-only, admin — the sibling of the comments toggle, and independent of it) grows a "Suggest an edit" affordance on markdown docs. A link visitor (no account — the capability token is the credential) submits a full proposed body; it queues as a **revision** carrying a forced `link:<share label>` identity (never client-supplied), which the owner reviews in the existing diff UI and **accepts** (→ a real git commit on `main`, authored by the proposer) or **rejects** (nothing changes). Fail-closed: while `allow_edits` is off — or the token is revoked/expired, or the doc is HTML — the suggest endpoint returns a uniform 404, indistinguishable from a dead link. Rate-limited per share (5/hour).
@@ -181,7 +183,7 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `update_doc` | admin | Move a doc to a folder (`path`) and/or reassign its owner (`owner_user_id`) — projection metadata, no new version. |
 | `unpublish_doc` | admin | Unpublish a doc by `slug` — kills the hub page and every share instantly. |
 | `delete_doc` | admin | Stage-2 destructive delete: purges content, deletes its share links, frees the slug. |
-| `list_events` | staff | The append-only event log (cursor on `since`, optional `kinds`). Space-scoped for members. |
+| `list_events` | staff | The append-only event log (cursor on `since`, optional `kinds`). Space-scoped for members. Optional `wait_seconds` (0–55, default 0) long-polls — parks server-side until an event arrives or the timeout elapses, then returns (possibly empty). Near-real-time agent dispatch (e.g. `kinds:["card.assigned"]`) without tight polling. |
 | `create_share` | admin | Mint a capability link for a doc (`doc_slug`, `label`, optional `expires_in_days` / `pinned_version_id`). Returns the one-time URL. |
 | `create_directory_share` | admin | Mint a capability link for a whole folder in a space. **Space-scoped:** requires `space` (the space slug) + `path_prefix`; exposes every published doc under the prefix **in that space only** (a same-named folder in another space never leaks). One revoke kills the lot. |
 | `list_shares` | admin | All shares (doc + directory) with view stats. Each row carries `mode` + `docSlug`/`pathPrefix`. |
@@ -336,6 +338,7 @@ desk/
 ├── docs/
 │   ├── cutover-checklist.md  # Supervised cloud cutover runbook
 │   ├── account-merge-runbook.md
+│   ├── agent-runbook.md    # Autonomous reporting-bot recipe (provision → loop → review → distribute → dispatch)
 │   ├── remotes.md          # Source modes + GitHub mirroring (hosted/mirrored recipes)
 │   └── plans/              # Implementation phase plans
 ├── drizzle/                # Generated migration SQL files

@@ -51,7 +51,7 @@ import {
 } from "@/lib/web-author";
 import { isSafeRepoPath } from "@/lib/git/web-commit";
 import { snippetToMarkdown } from "@/app/(hub)/docs/view-model";
-import { listEvents, EVENT_KINDS } from "@/lib/events";
+import { listEventsWaiting, EVENT_KINDS } from "@/lib/events";
 import { normalizePath } from "@/lib/path";
 import {
   createShare,
@@ -167,11 +167,23 @@ import {
  * accepts a raw shape and builds the JSON schema). `handler` receives the
  * resolved principal (closure-injected by the server) plus the validated args.
  */
+/**
+ * Per-call context threaded from the transport into a handler. Currently only
+ * carries the request's `AbortSignal` (client disconnect / cancellation) so a
+ * long-running tool — `list_events`' optional `wait_seconds` park — can end
+ * promptly when the caller goes away. Optional: nearly every handler ignores it.
+ */
+export type ToolCtx = { signal?: AbortSignal };
+
 export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
   name: string;
   description: string;
   inputSchema: Shape;
-  handler: (principal: Principal, args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>;
+  handler: (
+    principal: Principal,
+    args: z.infer<z.ZodObject<Shape>>,
+    ctx?: ToolCtx,
+  ) => Promise<ToolResult>;
 };
 
 // Helper to declare a tool while preserving the precise arg type.
@@ -1230,7 +1242,7 @@ const decideRevisionTool = defineTool({
 const listEventsTool = defineTool({
   name: "list_events",
   description:
-    "Read the append-only event log (staff only). Returns events after `since` (exclusive cursor on the monotonic event id), oldest-first. Optional `kinds` filters to a subset (doc.published, doc.unpublished, doc.moved, revision.proposed, revision.decided, comment.added, user.approved). Members are space-scoped — they only receive events for docs in a space they can see, and never user.approved. Payloads carry ids/slugs/version ids only — never document content (fetch bodies via get_doc / get_version). Advance `since` to the largest id returned to page forward.",
+    "Read the append-only event log (staff only). Returns events after `since` (exclusive cursor on the monotonic event id), oldest-first. Optional `kinds` filters to a subset (e.g. card.assigned for agent dispatch, doc.published, revision.proposed, revision.decided, comment.added). Members are space-scoped — they only receive events for docs in a space they can see, and never user.approved. Payloads carry ids/slugs/version ids only — never document content (fetch bodies via get_doc / get_version). Advance `since` to the largest id returned to page forward. Optional `wait_seconds` (0-55, default 0) long-polls: when >0 and no events match `since`, the call PARKS server-side until an event arrives or the timeout elapses, then returns (possibly empty) — near-real-time dispatch without tight polling. It's a normal outbound request that may just take longer; return shape is unchanged.",
   inputSchema: {
     since: z
       .number()
@@ -1248,20 +1260,34 @@ const listEventsTool = defineTool({
       .positive()
       .optional()
       .describe("Max events to return (default 200, max 1000)."),
+    wait_seconds: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        "Long-poll: if >0 and no events match `since`, park server-side up to this many seconds (clamped to 0-55) waiting for one, then return (possibly empty). 0/omitted = return immediately (the default).",
+      ),
   },
-  handler: async (principal, args) => {
+  handler: async (principal, args, ctx) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
     // Same resolver as the doc read path (scopeForPrincipal) so the events feed
     // and the docs list agree on which spaces a member can see.
     const userId =
       principal.kind === "member" ? await resolvePrincipalUserId(principal) : null;
-    const events = await listEvents({
-      since: args.since,
-      kinds: args.kinds,
-      limit: args.limit,
-      viewer: principal.kind,
-      userId,
-    });
+    // listEventsWaiting with wait_seconds=0 (the default) is exactly the old
+    // immediate query; >0 parks (clamped to [0,55]) releasing the DB connection
+    // between polls, and ends promptly on client disconnect via ctx.signal.
+    const events = await listEventsWaiting(
+      {
+        since: args.since,
+        kinds: args.kinds,
+        limit: args.limit,
+        viewer: principal.kind,
+        userId,
+      },
+      args.wait_seconds ?? 0,
+      ctx?.signal,
+    );
     // The cursor to resume from = the last id in this page (or the requested
     // `since`/0 if the page was empty).
     const nextCursor = events.length > 0 ? events[events.length - 1].id : args.since ?? 0;
