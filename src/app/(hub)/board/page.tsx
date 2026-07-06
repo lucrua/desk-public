@@ -3,7 +3,6 @@ import { getPrincipal } from "@/lib/auth";
 import { listBuckets } from "@/lib/buckets";
 import { listCards } from "@/lib/cards";
 import { listUsers } from "@/lib/users";
-import { listActivePatterns } from "@/lib/catalogs";
 import BoardClient from "./BoardClient";
 import type { BoardCard, BoardBucket } from "./view-model";
 
@@ -21,11 +20,10 @@ export default async function BoardPage() {
   const principal = await getPrincipal(await headers());
   const isAdmin = principal.kind === "admin";
 
-  const [buckets, cards, users, catalogPatterns] = await Promise.all([
+  const [buckets, cards, users] = await Promise.all([
     listBuckets(),
     listCards({ includeArchived: true }),
     listUsers(),
-    listActivePatterns(),
   ]);
 
   const boardBuckets: BoardBucket[] = buckets.map((b) => ({
@@ -73,7 +71,6 @@ export default async function BoardPage() {
       initialBuckets={boardBuckets}
       initialCards={boardCards}
       people={people}
-      catalogPatterns={catalogPatterns}
     />
   );
 }

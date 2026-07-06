@@ -16,7 +16,6 @@ import {
 
 type Person = { id: number; name: string };
 type ActivityEvent = { id: number; kind: string; payload: Record<string, unknown>; actorName: string; createdAt: string };
-type CatalogPattern = { kind: string; idPattern: string };
 
 type Props = {
   isAdmin: boolean;
@@ -24,8 +23,6 @@ type Props = {
   initialBuckets: BoardBucket[];
   initialCards: BoardCard[];
   people: Person[];
-  /** Active catalog id-patterns — auto-link refs in card bodies (staff). */
-  catalogPatterns?: CatalogPattern[];
 };
 
 type DropTarget = { bucketId: number; index: number } | null;
@@ -43,7 +40,7 @@ type DropTarget = { bucketId: number; index: number } | null;
  * read-only drawer banner — mirroring the server authz exactly (uiCanEdit ===
  * canEditCard).
  */
-export default function BoardClient({ isAdmin, myUserId, initialBuckets, initialCards, people, catalogPatterns }: Props) {
+export default function BoardClient({ isAdmin, myUserId, initialBuckets, initialCards, people }: Props) {
   const [buckets, setBuckets] = useState<BoardBucket[]>(initialBuckets);
   const [cards, setCards] = useState<BoardCard[]>(initialCards);
 
@@ -670,7 +667,7 @@ export default function BoardClient({ isAdmin, myUserId, initialBuckets, initial
 
             <div style={{ flex: 1, overflowY: "auto", padding: "18px 22px 28px" }}>
               {drawerCard.body.trim().length > 0 ? (
-                <Markdown content={drawerCard.body} register="operator" catalogPatterns={catalogPatterns} />
+                <Markdown content={drawerCard.body} register="operator" />
               ) : (
                 <div style={{ fontSize: 13, color: "var(--faint)" }}>No description yet.</div>
               )}

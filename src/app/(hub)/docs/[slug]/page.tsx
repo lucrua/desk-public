@@ -20,7 +20,6 @@ import { listComments } from "@/lib/comments";
 import type { CommentDTO } from "./comments-view-model";
 import Revisions, { type RevisionViewData } from "./Revisions";
 import { listRevisions } from "@/lib/revisions";
-import { listActivePatterns } from "@/lib/catalogs";
 import type { RevisionDTO } from "./revisions-view-model";
 import {
   shortHash,
@@ -101,9 +100,6 @@ export default async function DocDetailPage({
   const space = await getSpaceById(doc.spaceId);
   const backHref = space ? `/spaces/${space.slug}` : "/spaces";
   const versions = await listVersions(slug);
-  // Active catalog id-patterns drive doc-body auto-linking for staff readers
-  // (F-012 → /catalog/finding/F-012). Empty when no kinds exist.
-  const catalogPatterns = await listActivePatterns();
   const rail = buildVersionRail(versions);
   // Serializable version options for the share modal's live-vs-pinned picker.
   const shareVersionOptions = rail.map((v) => ({ id: v.id, label: v.label }));
@@ -381,7 +377,7 @@ export default async function DocDetailPage({
           doc.format === "html" ? (
             <HtmlPreview content={version.content} title={doc.title} />
           ) : (
-            <Markdown content={version.content} register="operator" catalogPatterns={catalogPatterns} />
+            <Markdown content={version.content} register="operator" />
           )
         ) : (
           <p style={{ color: "var(--muted)", fontSize: 13.5 }}>
