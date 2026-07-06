@@ -155,6 +155,13 @@
       "when": 1781210300000,
       "tag": "0021_source_modes_mirror",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1781210400000,
+      "tag": "0022_drop_audience_catalog_cruft",
+      "breakpoints": true
     }
   ]
 }

@@ -221,7 +221,7 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 
 > **REST-only admin actions** (no MCP tool): user CRUD + multi-email (`/api/users/**`), access-request triage (`/api/access-requests/**`), board-bucket lifecycle (`/api/buckets/**`), and a share's view-log / comment- and edits-toggle (`GET /api/shares/[id]/views`, `PATCH /api/shares/[id]` — `{ allowComments?, allowEdits? }`).
 >
-> **No catalog tools.** The catalog was reframed (D6) from a Desk-authored registry into a **read-only projection of a space directory's doc frontmatter** (+ an optional `.desk.collection.yml` schema). Its truth is the repo, so an agent "writes" a catalog by committing frontmatter — there is no catalog MCP/REST authoring surface. The dormant `catalog_*` tables are retained.
+> **No catalog tools.** The catalog was reframed (D6) from a Desk-authored registry into a **read-only projection of a space directory's doc frontmatter** (+ an optional `.desk.collection.yml` schema). Its truth is the repo, so an agent "writes" a catalog by committing frontmatter — there is no catalog MCP/REST authoring surface. The dormant P3 registry (`catalog_schemas` / `catalog_items` / `catalog_links` tables + the inert auto-linker) was **removed** in the convergence fix-pass (Slice 6).
 
 ### Verify with curl
 
