@@ -23,7 +23,6 @@ function baseDoc(over: Partial<Parameters<typeof publishDocOk>[0]> = {}) {
     slug: "x",
     title: "X",
     sourcePath: "x.md",
-    audience: "private",
     format: "md" as const,
     content: "# X body content",
     by: "lucas",
@@ -181,14 +180,14 @@ describe("directory shares — security matrix", () => {
       expect(await resolveShareDoc(out.token, "no-such-doc")).toBeNull();
     });
 
-    it("audience bypass is INTENDED: a private-audience doc under the prefix IS exposed", async () => {
-      // finance docs are seeded with audience "private" (member_visible 0).
-      // A capability link bypasses audience — the admin chose to expose the folder.
+    it("a doc under the prefix IS exposed via the capability link (read-boundary bypass by design)", async () => {
+      // A capability link is a separate read door — the admin chose to expose the
+      // folder, so every published doc under the prefix resolves through it.
       const out = await createDirectoryShare("workspace", "finance", "Folder", "lucas");
       if (!out.ok) throw new Error("create failed");
       const r = await resolveShareDoc(out.token, "finance-root");
       expect(r).not.toBeNull();
-      expect(r!.doc.audience).toBe("private");
+      expect(r!.doc.slug).toBe("finance-root");
     });
   });
 

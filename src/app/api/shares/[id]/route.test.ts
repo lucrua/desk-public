@@ -7,7 +7,6 @@ const DOC = {
   slug: "patch-doc",
   title: "Patch Doc",
   sourcePath: "os/p.md",
-  audience: "external:pedro",
   format: "md" as const,
   content: "# Hi",
   by: "lucas",

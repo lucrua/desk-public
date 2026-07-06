@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, seedSpace, seedUser, publishDocOk } from "@/test/db";
+import { resetDb, seedSpace, seedUser, publishDocOk } from "@/test/db";
 import { unpublishDoc } from "@/lib/docs";
 import { GET } from "./route";
 
@@ -30,7 +30,6 @@ const hidden = { ...team, slug: "hidden-doc" };
 describe("GET /api/events", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     const owner = await seedUser({ email: "owner@x.com", displayName: "Owner", role: "admin" });
     const openSpace = await seedSpace({ slug: "open", ownerId: owner, visibility: "unlisted" });
     const privSpace = await seedSpace({ slug: "private-space", ownerId: owner, visibility: "private" });

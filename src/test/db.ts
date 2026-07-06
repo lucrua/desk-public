@@ -6,7 +6,7 @@ import { ensureDefaultSpace, DEFAULT_SPACE_SLUG } from "@/lib/spaces";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
 
 export async function resetDb() {
-  await sql`TRUNCATE events, revisions, comments, share_views, shares, doc_versions, docs, audience_members, user_emails, users, audiences, access_requests, cards, buckets, catalog_links, catalog_items, catalog_schemas, space_invites, space_members, principal_tokens, instance_settings, spaces RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE events, revisions, comments, share_views, shares, doc_versions, docs, user_emails, users, access_requests, cards, buckets, catalog_links, catalog_items, catalog_schemas, space_invites, space_members, principal_tokens, instance_settings, spaces RESTART IDENTITY CASCADE`;
 }
 
 /**
@@ -174,9 +174,9 @@ export async function seedSpaceMember(
  * no explicit space lands in the Phase-1 default space (`workspace`, PRIVATE), so
  * the dev `member` principal — a distinct `dev-member` user — can't see it by
  * default. This makes the dev-member a READER of the default space, so a member
- * sees docs published there (the audience-era "team is member-visible" default).
+ * sees docs published there.
  * Idempotent. Returns the default space id. Call it in a member-visibility test's
- * setup (after the user/space rows exist) the way `seedAudiences()` was called.
+ * setup (after the user/space rows exist).
  */
 export async function seedDevMemberInDefaultSpace(): Promise<number> {
   // Ensure the default space exists (publishDoc would create it lazily, but a
@@ -194,46 +194,3 @@ export async function seedDevMemberInDefaultSpace(): Promise<number> {
   return space.id;
 }
 
-/**
- * Test helper: add a user to an audience (by audience key + userId). Resolves
- * the audience id from its key. Idempotent (onConflictDoNothing on the uniq).
- */
-export async function seedMembership(
-  audienceKey: string,
-  userId: number,
-): Promise<void> {
-  const aud = await db.query.audiences.findFirst({
-    where: eq(schema.audiences.key, audienceKey),
-  });
-  if (!aud) throw new Error(`seedMembership: unknown audience '${audienceKey}'`);
-  await db
-    .insert(schema.audienceMembers)
-    .values({ audienceId: aud.id, userId })
-    .onConflictDoNothing();
-}
-
-/**
- * Seed the canonical audiences (team visible to members; pedro/dani hidden)
- * the way the 0001 migration does in real DBs. resetDb truncates the table, so
- * tests that exercise audience-scoped visibility call this in their setup.
- * Pass extra rows for ad-hoc audiences (e.g. an external one).
- */
-export async function seedAudiences(
-  extra: Array<{ key: string; label: string; memberVisible?: boolean }> = [],
-): Promise<void> {
-  const rows = [
-    // `private` mirrors what migration 0010 seeds (member_visible 0) — the
-    // upload/publish default. resetDb truncates audiences, so seed it here so
-    // the "no audience → private" default resolves in tests.
-    { key: "private", label: "Private", memberVisible: 0 },
-    { key: "team", label: "Team", memberVisible: 1 },
-    { key: "pedro", label: "Pedro", memberVisible: 0 },
-    { key: "dani", label: "Dani", memberVisible: 0 },
-    ...extra.map((e) => ({
-      key: e.key,
-      label: e.label,
-      memberVisible: e.memberVisible ? 1 : 0,
-    })),
-  ];
-  await db.insert(schema.audiences).values(rows).onConflictDoNothing();
-}

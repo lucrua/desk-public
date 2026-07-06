@@ -21,7 +21,6 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
-  seedAudiences,
   publishDocOk,
   seedUser,
   seedSpace,
@@ -121,7 +120,6 @@ async function seedOwnerDoc(ownerUserId: number) {
     slug: "owned-doc",
     title: "Owned Doc",
     sourcePath: "test/owned.md",
-    audience: "team",
     format: "md",
     content: "# Owned\n\noriginal",
     by: "owner",
@@ -212,7 +210,6 @@ describe("canSeeApprovalQueueItem", () => {
 describe("publishDoc — ownership", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("creates a doc with ownerUserId set to creator", async () => {
@@ -221,7 +218,6 @@ describe("publishDoc — ownership", () => {
       slug: "new-doc",
       title: "New Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "hello",
       by: "Admin",
@@ -239,7 +235,6 @@ describe("publishDoc — ownership", () => {
       slug: "legacy-doc",
       title: "Legacy",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "original",
       by: "system",
@@ -257,7 +252,6 @@ describe("publishDoc — ownership", () => {
       slug: "stable-owner-doc",
       title: "Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "v1",
       by: "Admin2",
@@ -269,7 +263,6 @@ describe("publishDoc — ownership", () => {
       slug: "stable-owner-doc",
       title: "Doc v2",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "v2 updated",
       by: "Other",
@@ -288,7 +281,6 @@ describe("publishDoc — ownership", () => {
 describe("setDocOwner", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("admin reassigns owner, emits doc.owner_changed event", async () => {
@@ -299,7 +291,6 @@ describe("setDocOwner", () => {
       slug: "reassign-doc",
       title: "Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "hi",
       by: "Admin",
@@ -320,12 +311,10 @@ describe("setDocOwner", () => {
   });
 
   it("returns invalid-user for unknown user", async () => {
-    await seedAudiences();
     await publishDocOk({
       slug: "owner-check-doc",
       title: "Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "hi",
       by: "system",
@@ -345,7 +334,6 @@ describe("setDocOwner", () => {
       slug: "inactive-target-doc",
       title: "Doc",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "hi",
       by: "system",
@@ -416,7 +404,6 @@ describe("REST POST /api/docs/[slug]/publish — permission matrix", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     ownerId = await seedUser({ email: "owner@test.com", displayName: "Owner", role: "member" });
     nonOwnerId = await seedUser({ email: "nonowner@test.com", displayName: "NonOwner", role: "member" });
   });
@@ -428,7 +415,6 @@ describe("REST POST /api/docs/[slug]/publish — permission matrix", () => {
       slug: "pub-test-doc",
       title: "Pub Test",
       sourcePath: "t.md",
-      audience: "team",
       format: "md",
       content: "# Original",
       by: "Admin",
@@ -498,7 +484,6 @@ describe("REST POST /api/docs/[slug]/publish — permission matrix", () => {
 describe("REST POST /api/docs — space + path required, git-truth", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("missing space → 400", async () => {
@@ -549,9 +534,8 @@ describe("REST PUT /api/docs/[slug]/owner", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     targetUserId = await seedUser({ email: "target@test.com", displayName: "Target", role: "member" });
-    await publishDocOk({ slug: "owner-route-doc", title: "Doc", sourcePath: "t.md", audience: "team", format: "md", content: "hi", by: "Admin" });
+    await publishDocOk({ slug: "owner-route-doc", title: "Doc", sourcePath: "t.md", format: "md", content: "hi", by: "Admin" });
   });
 
   it("admin → 200, updates owner", async () => {
@@ -695,7 +679,6 @@ describe("MCP publish_doc — space-membership matrix (git-truth)", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     realAdminId = await seedUser({ tokenName: "adm-mcp", displayName: "Admin", role: "admin" });
     const s = await createSpace("mcpspace", realAdminId, "private", "t");
     if (!s.ok) throw new Error(s.error);
@@ -815,10 +798,9 @@ describe("MCP update_doc — owner reassignment", () => {
 
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     adminId = await seedUser({ email: "adm@owner.com", displayName: "Admin", role: "admin" });
     targetUserId = await seedUser({ email: "tgt@mcp.com", displayName: "Target", role: "member" });
-    await publishDocOk({ slug: "mcp-owner-doc", title: "MCP Owner Doc", sourcePath: "t.md", audience: "team", format: "md", content: "hi", by: "Admin" });
+    await publishDocOk({ slug: "mcp-owner-doc", title: "MCP Owner Doc", sourcePath: "t.md", format: "md", content: "hi", by: "Admin" });
   });
 
   it("admin reassigns owner → ok", async () => {

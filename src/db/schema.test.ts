@@ -19,7 +19,6 @@ describe("schema smoke test — docs + doc_versions round-trip", () => {
         slug: "test-doc-001",
         title: "Test Document",
         sourcePath: "os/CONTEXT.md",
-        audience: "team",
         spaceId,
         // format defaults to "md", unpublishedAt defaults to null
       })
@@ -68,7 +67,6 @@ describe("schema smoke test — docs + doc_versions round-trip", () => {
     expect(fetched.slug).toBe("test-doc-001");
     expect(fetched.title).toBe("Test Document");
     expect(fetched.sourcePath).toBe("os/CONTEXT.md");
-    expect(fetched.audience).toBe("team");
     expect(fetched.format).toBe("md");
     expect(fetched.currentVersionId).toBe(version.id);
     expect(fetched.unpublishedAt).toBeNull();
@@ -80,7 +78,6 @@ describe("schema smoke test — docs + doc_versions round-trip", () => {
       slug: "duplicate-slug",
       title: "First",
       sourcePath: "os/A.md",
-      audience: "team",
       spaceId,
     });
 
@@ -90,7 +87,6 @@ describe("schema smoke test — docs + doc_versions round-trip", () => {
         slug: "duplicate-slug",
         title: "Second",
         sourcePath: "os/B.md",
-        audience: "team",
         spaceId,
       });
     } catch (e) {

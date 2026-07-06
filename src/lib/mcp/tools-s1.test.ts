@@ -5,7 +5,7 @@
  * tools.test.ts.
  */
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
-import { resetDb, seedAudiences, publishDocOk, seedSpace, seedUser } from "@/test/db";
+import { resetDb, publishDocOk, seedSpace, seedUser } from "@/test/db";
 import { HAVE_GIT, useTempDataDir, clearSpaceRepos } from "@/test/git";
 import { getDocBySlug } from "@/lib/docs";
 import { createSpace } from "@/lib/spaces";
@@ -32,12 +32,11 @@ const DOC = {
   slug: "m-doc",
   title: "M",
   sourcePath: "os/m.md",
-  audience: "team",
   format: "md" as const,
   content: "# v1",
   by: "lucas",
 };
-const HIDDEN = { ...DOC, slug: "m-hidden", audience: "pedro" };
+const HIDDEN = { ...DOC, slug: "m-hidden" };
 
 describe("MCP — registry includes the S1 tools", () => {
   it("update_doc (merged set_doc_path + set_doc_owner) and list_events are registered", () => {
@@ -52,7 +51,6 @@ describe("MCP — registry includes the S1 tools", () => {
 describe("MCP update_doc — path", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await publishDocOk(DOC);
   });
 
@@ -83,7 +81,6 @@ describe("MCP update_doc — path", () => {
 describe("MCP list_events", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Read access is space-scoped. The MCP `member` principal carries no
     // email/tokenName → resolves to no users-row → sees only PUBLIC/UNLISTED
     // spaces. m-doc lands in an unlisted space (visible); m-hidden in a private
@@ -131,7 +128,6 @@ describe.skipIf(!HAVE_GIT)("MCP publish_doc — git-truth (space + path)", () =>
   beforeEach(async () => {
     await resetDb();
     await clearSpaceRepos();
-    await seedAudiences();
     const ownerId = await seedUser({ tokenName: "s1-owner", displayName: "Owner", role: "admin" });
     const s = await createSpace("s1space", ownerId, "private", "t");
     if (!s.ok) throw new Error(s.error);
@@ -174,7 +170,6 @@ describe.skipIf(!HAVE_GIT)("MCP publish_doc — git-truth (space + path)", () =>
 describe("MCP list_docs — path_prefix", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await publishDocOk({ ...DOC, slug: "ld-os", path: "os" });
     await publishDocOk({ ...DOC, slug: "ld-canon", path: "os/canon" });
     await publishDocOk({ ...DOC, slug: "ld-team", path: "team" });
@@ -195,7 +190,6 @@ describe("MCP list_docs — path_prefix", () => {
 describe("MCP create_share — pinned_version_id", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("pins the link to a version", async () => {
@@ -229,7 +223,6 @@ describe("MCP create_share — pinned_version_id", () => {
 describe("MCP create_directory_share", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await publishDocOk({ ...DOC, slug: "fin-q3", path: "finance/q3", content: "# q3", by: "lucas" });
   });
 

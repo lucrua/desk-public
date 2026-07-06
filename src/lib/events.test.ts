@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
-  seedAudiences,
   seedDefaultSpace,
   seedDevMemberInDefaultSpace,
   seedSpace,
@@ -57,7 +56,6 @@ describe("events service", () => {
   beforeEach(async () => {
     await resetDb();
     await clearSpaceRepos();
-    await seedAudiences();
     // Pre-create the Phase-1 default space (inserted directly, emits no event)
     // so publishDoc doesn't lazily create it — and thereby emit a space.created
     // event — mid-test. The event-log assertions count only doc.* events.
@@ -317,7 +315,6 @@ describe("events service", () => {
 describe("board event scoping (card.* / bucket.*)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Pre-create the Phase-1 default space (inserted directly, emits no event)
     // so publishDoc doesn't lazily create it — and thereby emit a space.created
     // event — mid-test. The event-log assertions count only doc.* events.
@@ -368,7 +365,6 @@ describe("board event scoping (card.* / bucket.*)", () => {
 describe("listEventsWaiting (long-poll)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Direct insert → emits no event, so the log starts empty and the park
     // tests below start from a clean cursor.
     await seedDefaultSpace();

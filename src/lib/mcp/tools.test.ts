@@ -7,7 +7,6 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
-  seedAudiences,
   publishDocOk,
   seedDevMemberInDefaultSpace,
   seedSpace,
@@ -64,7 +63,6 @@ describe("MCP tools — registry shape", () => {
 describe("MCP tools — authz matrix", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   const staffTools = ["list_docs", "whoami"];
@@ -98,7 +96,6 @@ describe("MCP tools — authz matrix", () => {
         slug: "x",
         title: "X",
         source_path: "p",
-        audience: "team",
         format: "md",
         content: "# x",
         doc_slug: "x",
@@ -125,7 +122,6 @@ describe("MCP tools — authz matrix", () => {
 describe("MCP tools — behaviour", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
   });
@@ -135,7 +131,6 @@ describe("MCP tools — behaviour", () => {
       slug: "d1",
       title: "D1",
       sourcePath: "os/d1.md",
-      audience: "team",
       format: "md",
       content: "# d1",
       by: "lucas",
@@ -174,7 +169,6 @@ describe("MCP tools — behaviour", () => {
       slug: "cdoc",
       title: "C",
       sourcePath: "os/c.md",
-      audience: "team",
       format: "md",
       content: "# c",
       by: "lucas",
@@ -193,7 +187,7 @@ describe("MCP tools — behaviour", () => {
 
   it("add_comment rejects an oversize body", async () => {
     await publishDocOk({
-      slug: "cdoc2", title: "C2", sourcePath: "os/c2.md", audience: "team", format: "md", content: "# c", by: "lucas",
+      slug: "cdoc2", title: "C2", sourcePath: "os/c2.md", format: "md", content: "# c", by: "lucas",
     });
     const r = await run("add_comment", admin, { slug: "cdoc2", body: "x".repeat(10_001) });
     expect(r.isError).toBe(true);
@@ -234,12 +228,11 @@ describe("MCP tools — behaviour", () => {
 describe("MCP tools — doc shares", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   async function publishAndShare(): Promise<number> {
     await publishDocOk({
-      slug: "sdoc", title: "S", sourcePath: "os/s.md", audience: "team", format: "md", content: "# s", by: "lucas",
+      slug: "sdoc", title: "S", sourcePath: "os/s.md", format: "md", content: "# s", by: "lucas",
     });
     const created = await run("create_share", admin, { doc_slug: "sdoc", label: "Recipient" });
     return (created.structuredContent as { id: number }).id;
@@ -260,7 +253,6 @@ describe("MCP tools — doc shares", () => {
 describe("MCP tools — update_doc (merged set_doc_path + set_doc_owner)", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     await seedDevMemberInDefaultSpace();
   });
 
@@ -326,7 +318,6 @@ describe("MCP tools — update_doc (merged set_doc_path + set_doc_owner)", () =>
 describe("MCP tools — get_version", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
   });
@@ -353,10 +344,10 @@ describe("MCP tools — get_version", () => {
 
   it("404s a cross-doc version id (guarded by the service)", async () => {
     await publishDocOk({
-      slug: "va", title: "VA", sourcePath: "os/va.md", audience: "team", format: "md", content: "# a", by: "lucas",
+      slug: "va", title: "VA", sourcePath: "os/va.md", format: "md", content: "# a", by: "lucas",
     });
     const pubB = await publishDocOk({
-      slug: "vb", title: "VB", sourcePath: "os/vb.md", audience: "team", format: "md", content: "# b", by: "lucas",
+      slug: "vb", title: "VB", sourcePath: "os/vb.md", format: "md", content: "# b", by: "lucas",
     });
     // Ask doc va for vb's version id → not-found (no cross-doc leak).
     const r = await run("get_version", admin, { slug: "va", version_id: pubB.versionId });
@@ -368,12 +359,11 @@ describe("MCP tools — get_version", () => {
 describe("MCP tools — comment moderation", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   async function publishWithComment(): Promise<number> {
     await publishDocOk({
-      slug: "mdoc", title: "M", sourcePath: "os/m.md", audience: "team", format: "md", content: "# m", by: "lucas",
+      slug: "mdoc", title: "M", sourcePath: "os/m.md", format: "md", content: "# m", by: "lucas",
     });
     const added = await run("add_comment", admin, { slug: "mdoc", body: "a comment" });
     return (added.structuredContent as { comment: { id: number } }).comment.id;
@@ -406,7 +396,6 @@ describe("MCP tools — comment moderation", () => {
 describe("MCP tools — revisions behaviour", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
     await publishDocOk({
@@ -480,7 +469,6 @@ describe("MCP tools — revisions behaviour", () => {
 describe("MCP list_events — wait_seconds long-poll", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   const seedDoc = (slug: string) =>

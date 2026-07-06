@@ -61,11 +61,6 @@ export const EVENT_KINDS = [
   "catalog.item.created",
   "catalog.item.updated",
   "catalog.item.deleted",
-  // Audiences v2 membership kinds. Audience membership is an internal admin
-  // surface (no doc scoping) — staff-visible to admin and member alike. Payload
-  // carries the audience key + userId + displayName, never anything sensitive.
-  "audience.member_added",
-  "audience.member_removed",
   // Doc ownership (migration 0014). Emitted when an admin reassigns a doc's
   // owner via setDocOwner. Payload: slug, fromUserId, toUserId. Admin-only in
   // the event feed (ownership is an internal admin-audit event).
@@ -144,8 +139,6 @@ const STAFF_VISIBLE_KINDS = new Set<string>([
   "catalog.item.created",
   "catalog.item.updated",
   "catalog.item.deleted",
-  "audience.member_added",
-  "audience.member_removed",
 ]);
 
 // ── emitEvent ───────────────────────────────────────────────────────────────

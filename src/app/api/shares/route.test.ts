@@ -41,7 +41,6 @@ const DOC = {
   slug: "my-doc",
   title: "My Doc",
   sourcePath: "os/my-doc.md",
-  audience: "external:pedro",
   format: "md" as const,
   content: "# Hello",
   by: "lucas",

@@ -108,30 +108,6 @@ export const accessRequests = pgTable("access_requests", {
   hits: integer("hits").notNull().default(1), // times this email has hit the wall unresolved
 });
 
-export const audiences = pgTable("audiences", {
-  id: serial("id").primaryKey(),
-  key: text("key").notNull().unique(),       // ^[a-z0-9][a-z0-9-]*$ — the value stored on docs.audience
-  label: text("label").notNull(),            // human-facing name, e.g. "Team", "PartnerCo"
-  memberVisible: integer("member_visible").notNull().default(0), // 1|0 — members see docs in this audience
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
-
-// Audience membership — the row that makes an audience a real GROUP. A user
-// "belongs to" an audience; a doc tagged with that audience is visible to every
-// member of the audience (PLUS everyone, when the audience's member_visible flag
-// is on). One row per (audience, user); the unique index makes add idempotent at
-// the DB layer. Both FKs cascade-irrelevant here (we delete memberships
-// explicitly before deleting a user/audience), so plain references suffice.
-export const audienceMembers = pgTable("audience_members", {
-  id: serial("id").primaryKey(),
-  audienceId: integer("audience_id").notNull().references(() => audiences.id),
-  userId: integer("user_id").notNull().references(() => users.id),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-}, (t) => [
-  uniqueIndex("audience_members_uniq").on(t.audienceId, t.userId),
-  index("audience_members_user_idx").on(t.userId),
-]);
-
 // ── Spaces (Phase-1 document host) ───────────────────────────────────────────
 // A SPACE is an owned, access-controlled git repo that Desk hosts — the unit of
 // write/clone access and the security boundary (§3). Truth = the bare repo on
@@ -272,15 +248,9 @@ export const docs = pgTable("docs", {
   slug: text("slug").notNull(),
   title: text("title").notNull(),
   sourcePath: text("source_path").notNull(),   // e.g. os/CONTEXT.md — provenance stamp
-  // VESTIGIAL (Gen-2 consolidation, migration 0016): read access is now
-  // space-scoped (member of the doc's space, OR space.visibility public/unlisted,
-  // OR a capability share) — `audience` no longer gates any read path. Made
-  // NULLABLE so publish/projection need not supply it; the `audiences` /
-  // `audience_members` tables are left dormant (dropped in a later cleanup slice).
-  audience: text("audience"),
   // Implicit folder path: slash-joined segments, each ^[a-z0-9][a-z0-9-]*$, max
-  // depth 6; '' = root. Organizational only — identity stays the slug, and
-  // member visibility is audience-based (path is orthogonal). No folder entities.
+  // depth 6; '' = root. Organizational only — identity stays the slug, and read
+  // access is space-scoped (path is orthogonal). No folder entities.
   path: text("path").notNull().default(""),
   format: formatEnum("format").notNull().default("md"),
   currentVersionId: integer("current_version_id"), // FK intentionally omitted — avoids docs↔doc_versions circular reference

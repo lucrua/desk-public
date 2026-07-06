@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetDb, seedAudiences, publishDocOk, createShareOk } from "@/test/db";
+import { resetDb, publishDocOk, createShareOk } from "@/test/db";
 import { createShare, resolveShare, listSharesForDoc } from "./shares";
 import { unpublishDoc } from "@/lib/docs";
 
@@ -7,7 +7,6 @@ const DOC = {
   slug: "pin-doc",
   title: "Pin",
   sourcePath: "os/pin.md",
-  audience: "team",
   format: "md" as const,
   content: "# v1",
   by: "lucas",
@@ -18,7 +17,6 @@ const OTHER = { ...DOC, slug: "other-doc", content: "# other" };
 describe("pinned shares", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("a pinned share resolves the pinned version even after the doc advances", async () => {

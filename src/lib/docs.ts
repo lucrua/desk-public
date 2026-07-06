@@ -199,12 +199,6 @@ export type PublishInput = {
   slug: string;
   title: string;
   sourcePath: string;
-  /**
-   * VESTIGIAL (Gen-2 consolidation). Read access is space-scoped now — `audience`
-   * no longer gates any read. Optional: when omitted it is stored as null. Kept
-   * on the input only so existing callers compile; new code should not set it.
-   */
-  audience?: string | null;
   format: "md" | "html";
   content: string;
   by: string;
@@ -277,8 +271,6 @@ async function refreshSearchTsv(
 export async function publishDoc(input: PublishInput): Promise<PublishResult> {
   return db.transaction(async (tx) => {
     const { slug, title, sourcePath, format, content, by } = input;
-    // Vestigial — stored as-is (default null). Never read by the access layer.
-    const audience = input.audience ?? null;
     const contentHash = sha256(content);
 
     // Look up the LIVE doc (deleted_at IS NULL) by slug.
@@ -311,7 +303,6 @@ export async function publishDoc(input: PublishInput): Promise<PublishResult> {
           slug,
           title,
           sourcePath,
-          audience,
           format,
           spaceId,
           ...(input.path !== undefined ? { path: input.path } : {}),
@@ -349,7 +340,6 @@ export async function publishDoc(input: PublishInput): Promise<PublishResult> {
     const mutableSet = (extra: Record<string, unknown>) => ({
       title,
       sourcePath,
-      audience,
       format,
       ...(input.path !== undefined ? { path: input.path } : {}),
       ...extra,
@@ -405,8 +395,8 @@ export async function publishDoc(input: PublishInput): Promise<PublishResult> {
     await refreshSearchTsv(tx, docId, title, content);
 
     // Event appended INSIDE the same transaction — a rolled-back publish emits
-    // nothing. Payload carries references only (slug + versionId + audience),
-    // never the doc content.
+    // nothing. Payload carries references only (slug + versionId), never the doc
+    // content.
     await emitEvent(tx, {
       kind: "doc.published",
       docId,
@@ -414,7 +404,6 @@ export async function publishDoc(input: PublishInput): Promise<PublishResult> {
         slug,
         versionId: newVersion.id,
         contentHash,
-        audience,
         format,
       },
       actorName: by,
@@ -457,7 +446,7 @@ export async function unpublishDoc(slug: string): Promise<boolean> {
       await emitEvent(tx, {
         kind: "doc.unpublished",
         docId: doc.id,
-        payload: { slug: doc.slug, audience: doc.audience },
+        payload: { slug: doc.slug },
         actorName: "system",
       });
     }
@@ -531,7 +520,7 @@ export async function deleteDoc(slug: string, actor: string): Promise<boolean> {
 
 /**
  * Move a doc to a new folder path (organizational only — identity stays the
- * slug, audience/visibility unchanged). `path` must already be canonicalized
+ * slug, space/visibility unchanged). `path` must already be canonicalized
  * via normalizePath. Returns:
  *   - "ok" when the move applied (and a doc.moved event was emitted).
  *   - "noop" when the new path equals the current one (no event).

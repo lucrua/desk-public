@@ -15,7 +15,6 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import {
   resetDb,
-  seedAudiences,
   seedDevMemberInDefaultSpace,
   seedSpace,
   seedUser,
@@ -93,7 +92,6 @@ const DOC = {
   slug: "test-doc",
   title: "Test Doc",
   sourcePath: "os/test-doc.md",
-  audience: "team",
   format: "md" as const,
   content: "# Hello",
   by: "lucas",
@@ -104,7 +102,6 @@ const DOC = {
 describe("MCP route — auth gate", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("anonymous → 401 JSON-RPC error", async () => {
@@ -130,7 +127,6 @@ describe("MCP route — auth gate", () => {
 describe("MCP route — protocol flow", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
   });
 
   it("initialize returns serverInfo desk", async () => {
@@ -213,7 +209,6 @@ describe("MCP route — protocol flow", () => {
 describe("MCP route — role scoping", () => {
   beforeEach(async () => {
     await resetDb();
-    await seedAudiences();
     // Member reads docs in the default `workspace` space.
     await seedDevMemberInDefaultSpace();
   });
@@ -299,7 +294,6 @@ describe("MCP route — publish→share→revoke flow (admin, DB effects)", () =
   beforeEach(async () => {
     await resetDb();
     await clearSpaceRepos();
-    await seedAudiences();
     const ownerId = await seedUser({ tokenName: "flow-owner", displayName: "Owner", role: "admin" });
     await createSpace("flowspace", ownerId, "private", "t");
   });

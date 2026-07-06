@@ -26,7 +26,6 @@ function doc(over: Record<string, unknown> = {}) {
     slug: "x",
     title: "X",
     sourcePath: "x.md",
-    audience: "private",
     format: "md" as const,
     content: "# body",
     by: "lucas",

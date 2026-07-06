@@ -60,8 +60,6 @@ describe("document-host read path", () => {
       .values({ tokenName: "owner", displayName: "Owner", role: "admin", active: 1 })
       .returning({ id: schema.users.id });
     await createSpace("acme", owner.id, "private", "t");
-    // The indexer publishes docs with audience 'private'; make it admin-visible.
-    await db.insert(schema.audiences).values({ key: "private", label: "Private", memberVisible: 0 }).onConflictDoNothing();
     dir = await mkdtemp(path.join(tmpdir(), "desk-rp-data-"));
     bareRepo = path.join(dir, "acme.git");
     await initBareRepo(bareRepo);

@@ -15,7 +15,6 @@ const BASE_DOC = {
   slug: "test-doc",
   title: "Test Doc",
   sourcePath: "os/test.md",
-  audience: "team",
   format: "md" as const,
   content: "# Hello",
   by: "lucas",
