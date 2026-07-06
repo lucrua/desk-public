@@ -76,6 +76,7 @@ export async function POST(req: Request) {
 
   if (!result.ok) {
     if (result.reason === "forbidden") return err(403, "Forbidden — you may not write to this space");
+    if (result.reason === "mirrored") return err(409, result.detail ?? "This space mirrors from GitHub — writes are refused.");
     if (result.reason === "stale") {
       return err(409, "The space changed while publishing — reload and retry.");
     }

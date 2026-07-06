@@ -109,6 +109,7 @@ export async function POST(req: Request, { params }: RouteContext) {
     }
     if (r.reason === "stale") continue; // re-read the tip and retry once
     if (r.reason === "forbidden") return err(403, "Forbidden");
+    if (r.reason === "mirrored") return err(409, r.detail ?? "This space mirrors from GitHub — writes are refused.");
     return err(500, r.detail ?? "Could not publish");
   }
   if (!committed || !committed.ok) {

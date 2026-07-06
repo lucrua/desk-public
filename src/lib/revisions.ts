@@ -233,7 +233,7 @@ export async function getRevision(id: number): Promise<RevisionRow | null> {
 }
 
 export type AcceptResult =
-  | { ok: false; reason: "not-found" | "already-decided" | "stale" | "error" }
+  | { ok: false; reason: "not-found" | "already-decided" | "stale" | "error" | "mirrored" }
   | { ok: true; versionId: number; isNewVersion: boolean; staleBase: boolean };
 
 /** Derive a web-author commit identity from a reviewer's display name. The
@@ -304,7 +304,7 @@ export async function acceptRevision(
   // Commit the revision content to the doc's source path on `main`. CAS on the
   // live tip; on `stale`, re-read the tip and retry ONCE.
   let committed = false;
-  let failReason: "stale" | "error" = "stale";
+  let failReason: "stale" | "error" | "mirrored" = "stale";
   for (let attempt = 0; attempt < 2; attempt++) {
     const baseMainTip = await liveMainTip(space.slug);
     const result = await webAuthorCommit(space.slug, {
@@ -321,6 +321,11 @@ export async function acceptRevision(
     if (result.reason === "stale") {
       failReason = "stale";
       continue; // re-read the tip and retry once
+    }
+    // mirrored ⇒ the space's canon is GitHub; the accept is refused (Slice 4b).
+    if (result.reason === "mirrored") {
+      failReason = "mirrored";
+      break;
     }
     // forbidden / conflict / unknown-space / error → not retryable.
     failReason = "error";

@@ -58,6 +58,12 @@ export async function POST(req: Request, { params }: RouteContext) {
         { status: 409 },
       );
     }
+    if (result.reason === "mirrored") {
+      return Response.json(
+        { error: "This space mirrors from GitHub — accepting is refused; apply the change upstream.", detail: result.detail },
+        { status: 409 },
+      );
+    }
     return Response.json({ error: "accept failed", detail: result.detail }, { status: 500 });
   }
 

@@ -343,6 +343,7 @@ const publishDocTool = defineTool({
 
     if (!result.ok) {
       if (result.reason === "forbidden") return fail("Forbidden — you may not write to this space");
+      if (result.reason === "mirrored") return fail(result.detail ?? "This space mirrors from GitHub — writes are refused");
       if (result.reason === "stale") {
         return fail("The space changed while publishing — reload the tip and retry");
       }
@@ -846,6 +847,7 @@ const decideProposalTool = defineTool({
     });
     if (!r.ok) {
       if (r.reason === "conflict") return fail("merge conflict — resolve and re-push the proposal");
+      if (r.reason === "mirrored") return fail(r.detail ?? "This space mirrors from GitHub — accepting is refused; apply the change upstream");
       return fail("Not found");
     }
     return ok({
@@ -1198,6 +1200,9 @@ const decideRevisionTool = defineTool({
         if (res.reason === "not-found") return fail(`Revision ${args.id} not found`);
         if (res.reason === "stale") {
           return fail("The doc changed while reviewing — reload the diff and re-accept");
+        }
+        if (res.reason === "mirrored") {
+          return fail("This space mirrors from GitHub — accepting is refused; apply the change upstream");
         }
         if (res.reason === "error") return fail("Could not apply the revision (commit failed)");
         return fail("Revision already decided");

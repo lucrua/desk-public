@@ -44,6 +44,16 @@ import {
 import { commitFilesToRef, type FileWrite } from "@/lib/git/web-commit";
 import { reindexSpaceByDisk } from "@/lib/git/indexer";
 import { emitEvent } from "@/lib/events";
+import { enqueueMirror } from "@/lib/mirror";
+
+/**
+ * The clear error a Desk-originated write hits on a `mirrored` space (Slice 4b):
+ * GitHub is that space's canon, so Desk refuses its own content commits — the
+ * only write path is the GitHub Action's `git push` over the transport.
+ */
+export const MIRRORED_WRITE_REFUSED =
+  "This space mirrors from GitHub (source_mode=mirrored) — edit upstream on GitHub and let the " +
+  "GitHub Action push to Desk. Desk-originated writes are refused.";
 
 /** Identity for a web commit: author = the principal, committer = Desk (kept
  * distinct, architecture §13.2). */
@@ -89,7 +99,8 @@ export type WebCommitResult =
   | {
       ok: false;
       // forbidden ⇒ route maps to a uniform 404 (ref-level write boundary).
-      reason: "unknown-space" | "forbidden" | "stale" | "conflict" | "error";
+      // mirrored ⇒ the space's canon is GitHub; Desk refuses its own writes.
+      reason: "unknown-space" | "forbidden" | "stale" | "conflict" | "error" | "mirrored";
       detail?: string;
     };
 
@@ -291,6 +302,16 @@ export async function webAuthorCommit(
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return { ok: false, reason: "unknown-space" };
 
+  // MIRRORED-MODE WRITE REFUSAL (Slice 4b). A `mirrored` space's canon is GitHub;
+  // every Desk-originated content write funnels through here (publish_doc /
+  // POST /api/docs / /publish / acceptRevision), so refusing at this ONE point
+  // closes them all. The git transport (how GitHub's canon arrives) does NOT pass
+  // through webAuthorCommit and stays open — getting this backwards breaks
+  // mirrored mode.
+  if (space.sourceMode === "mirrored") {
+    return { ok: false, reason: "mirrored", detail: MIRRORED_WRITE_REFUSED };
+  }
+
   const target = targetRefFor(space.pushPolicy, req.role, req.identity.handle);
   if (!target) return { ok: false, reason: "forbidden" };
 
@@ -362,6 +383,12 @@ export async function webAuthorCommit(
     },
     actorName: req.identity.name,
   });
+
+  // Mirror hook (Slice 4b): a commit that advanced `main` fans out to the space's
+  // GitHub mirror. Fire-and-forget + fail-soft (enqueueMirror no-ops unless the
+  // space is `hosted` with a mirror_remote_url, and never throws) — a proposal
+  // write leaves `main` untouched, so it is not mirrored.
+  if (target.target === "main") enqueueMirror(space.id);
 
   return {
     ok: true,
