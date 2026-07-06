@@ -144,8 +144,8 @@ function parseFlags(args) {
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 //
-// Write commands (`desk publish`, `desk unpublish`, `desk sync`) were RETIRED in
-// the Convergence fix-pass (Slice 2): publishing is now a git push (truth = git),
+// Write commands (`desk publish`, `desk unpublish`) were RETIRED in the
+// Convergence fix-pass (Slice 2): publishing is now a git push (truth = git),
 // so the CLI keeps only the READ + SHARE surface. To publish, `git push` to the
 // space's `main`; to unpublish, delete the file and push. See README "Publishing".
 
@@ -222,10 +222,9 @@ async function cmdList(_args) {
   if (docs.length === 0) {
     console.log("No docs.");
   } else {
-    const header = ["SLUG", "AUDIENCE", "VERSIONS", "UPDATED", "STATUS"];
+    const header = ["SLUG", "VERSIONS", "UPDATED", "STATUS"];
     const rows = docs.map((d) => [
       d.slug,
-      d.audience,
       `v${d.versionCount}`,
       fmtDate(d.updatedAt),
       d.unpublishedAt ? `[unpublished ${fmtDate(d.unpublishedAt)}]` : "published",
@@ -327,7 +326,7 @@ function cmdHelp() {
 
 Publishing is a git push — 'git push <remote> HEAD:main' to the space's repo
 (truth = git; Desk re-renders within seconds). The CLI's write commands
-(publish / unpublish / sync) were retired in the Convergence fix-pass. See the
+(publish / unpublish) were retired in the Convergence fix-pass. See the
 README "Publishing" section.
 
 Commands:
@@ -369,7 +368,6 @@ switch (cmd) {
   case "status":     await cmdStatus(rest); break;
   case "publish":
   case "unpublish":
-  case "sync":
     console.error(`hub: '${cmd}' was retired — publishing is now 'git push' to the space's main branch (truth = git). See the README "Publishing" section.`);
     process.exit(1);
     break;

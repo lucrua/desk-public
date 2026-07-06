@@ -3,12 +3,12 @@
 Command-line interface for Desk. Zero dependencies — plain Node.js >= 20.
 
 > **Publishing is `git push` (truth = git).** The CLI's **write** commands
-> (`desk publish`, `desk unpublish`, `desk sync`) were **retired in the
-> Convergence fix-pass** — a doc is published by pushing it to the space's `main`
-> branch and Desk re-renders within seconds; unpublish by deleting the file and
-> pushing. See the repo `README.md` "Publishing" section. The CLI keeps the
-> **read + share** surface below. (Running a retired command prints a pointer to
-> `git push` and exits non-zero.)
+> (`desk publish`, `desk unpublish`) were **retired in the Convergence
+> fix-pass** — a doc is published by pushing it to the space's `main` branch and
+> Desk re-renders within seconds; unpublish by deleting the file and pushing. See
+> the repo `README.md` "Publishing" section. The CLI keeps the **read + share**
+> surface below. (Running a retired command prints a pointer to `git push` and
+> exits non-zero.)
 
 ## Setup
 
