@@ -10,6 +10,7 @@ import {
   revisionAuthorChip,
   shareBadgeLabel,
   statusLabel,
+  acceptUnavailableReason,
   type RevisionDTO,
 } from "./revisions-view-model";
 
@@ -40,10 +41,14 @@ export default function Revisions({
   slug,
   isAdmin,
   data,
+  isMirrored = false,
 }: {
   slug: string;
   isAdmin: boolean;
   data: RevisionViewData[];
+  /** The doc's space is `source_mode=mirrored` — GitHub is canon there, so an
+   * Accept would be refused server-side. Surfaces a note instead of Accept. */
+  isMirrored?: boolean;
 }) {
   const router = useRouter();
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -130,6 +135,7 @@ export default function Revisions({
               key={rev.id}
               data={d}
               isAdmin={isAdmin}
+              isMirrored={isMirrored}
               expanded={expandedId === rev.id}
               onToggle={() => setExpandedId((x) => (x === rev.id ? null : rev.id))}
               onDecide={decide}
@@ -165,6 +171,7 @@ export default function Revisions({
                   key={rev.id}
                   data={byId.get(rev.id)!}
                   isAdmin={isAdmin}
+                  isMirrored={isMirrored}
                   expanded={expandedId === rev.id}
                   onToggle={() => setExpandedId((x) => (x === rev.id ? null : rev.id))}
                   onDecide={decide}
@@ -183,6 +190,7 @@ export default function Revisions({
 function RevisionCard({
   data,
   isAdmin,
+  isMirrored,
   expanded,
   onToggle,
   onDecide,
@@ -191,6 +199,7 @@ function RevisionCard({
 }: {
   data: RevisionViewData;
   isAdmin: boolean;
+  isMirrored: boolean;
   expanded: boolean;
   onToggle: () => void;
   onDecide: (id: number, accept: boolean) => void;
@@ -200,6 +209,7 @@ function RevisionCard({
   const { rev, diff, staleBase, diffVsCurrent } = data;
   const chip = revisionAuthorChip(rev);
   const shareBadge = shareBadgeLabel(rev.proposerLabel);
+  const acceptUnavailable = acceptUnavailableReason(isMirrored);
   return (
     <div
       style={{
@@ -317,45 +327,69 @@ function RevisionCard({
       )}
 
       {isAdmin && !decided && (
-        <div style={{ marginTop: 12, display: "flex", gap: 10 }}>
-          <button
-            type="button"
-            onClick={() => onDecide(rev.id, true)}
-            disabled={busy}
-            style={{
-              fontSize: 12,
-              fontWeight: 500,
-              padding: "5px 13px",
-              borderRadius: 7,
-              border: "1px solid var(--accent)",
-              background: "var(--accent)",
-              color: "var(--bg)",
-              cursor: busy ? "default" : "pointer",
-              opacity: busy ? 0.6 : 1,
-              fontFamily: "var(--font-sans)",
-            }}
-          >
-            {busy ? "Working…" : "Accept"}
-          </button>
-          <button
-            type="button"
-            onClick={() => onDecide(rev.id, false)}
-            disabled={busy}
-            style={{
-              fontSize: 12,
-              fontWeight: 500,
-              padding: "5px 13px",
-              borderRadius: 7,
-              border: "1px solid var(--hairline)",
-              background: "var(--surface)",
-              color: "var(--danger-ink)",
-              cursor: busy ? "default" : "pointer",
-              opacity: busy ? 0.6 : 1,
-              fontFamily: "var(--font-sans)",
-            }}
-          >
-            Reject
-          </button>
+        <div style={{ marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {acceptUnavailable ? (
+              <span
+                title={acceptUnavailable}
+                style={{
+                  fontSize: 12,
+                  fontWeight: 500,
+                  padding: "5px 13px",
+                  borderRadius: 7,
+                  border: "1px solid var(--hairline)",
+                  background: "var(--surface-alt)",
+                  color: "var(--faint)",
+                }}
+              >
+                Accept unavailable
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onDecide(rev.id, true)}
+                disabled={busy}
+                style={{
+                  fontSize: 12,
+                  fontWeight: 500,
+                  padding: "5px 13px",
+                  borderRadius: 7,
+                  border: "1px solid var(--accent)",
+                  background: "var(--accent)",
+                  color: "var(--bg)",
+                  cursor: busy ? "default" : "pointer",
+                  opacity: busy ? 0.6 : 1,
+                  fontFamily: "var(--font-sans)",
+                }}
+              >
+                {busy ? "Working…" : "Accept"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onDecide(rev.id, false)}
+              disabled={busy}
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                padding: "5px 13px",
+                borderRadius: 7,
+                border: "1px solid var(--hairline)",
+                background: "var(--surface)",
+                color: "var(--danger-ink)",
+                cursor: busy ? "default" : "pointer",
+                opacity: busy ? 0.6 : 1,
+                fontFamily: "var(--font-sans)",
+              }}
+            >
+              Reject
+            </button>
+          </div>
+          {acceptUnavailable && (
+            <p style={{ margin: "8px 0 0", fontSize: 11.5, color: "var(--faint)" }}>
+              {acceptUnavailable}
+            </p>
+          )}
         </div>
       )}
     </div>

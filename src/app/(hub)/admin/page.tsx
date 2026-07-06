@@ -5,6 +5,7 @@ import { listDocs } from "@/lib/docs";
 import { listShares, countRecentViews } from "@/lib/shares";
 import { listUsers, listAllUserEmails } from "@/lib/users";
 import { listAccessRequests } from "@/lib/access-requests";
+import { hasInstanceGithubPat } from "@/lib/instance-settings";
 import { dateStamp } from "../docs/view-model";
 import { computeStats, toShareRow, toUserRow, toAccessRequestRow } from "./view-model";
 import ShareRow from "./ShareRow";
@@ -12,6 +13,7 @@ import DocUnpublish from "./DocUnpublish";
 import UserRow from "./UserRow";
 import AddUser from "./AddUser";
 import AccessRequests from "./AccessRequests";
+import GithubPatSettings from "./GithubPatSettings";
 
 export const dynamic = "force-dynamic";
 
@@ -111,7 +113,7 @@ export default async function AdminPage() {
     return <ForbiddenPanel />;
   }
 
-  const [docs, shares, recentViews, users, accessRequests, emailsByUser] =
+  const [docs, shares, recentViews, users, accessRequests, emailsByUser, githubPatConfigured] =
     await Promise.all([
       listDocs({ includeUnpublished: true, scope: { viewer: "admin" } }),
       listShares(),
@@ -119,6 +121,7 @@ export default async function AdminPage() {
       listUsers(),
       listAccessRequests(),
       listAllUserEmails(),
+      hasInstanceGithubPat(),
     ]);
 
   const stats = computeStats(docs, shares, recentViews);
@@ -369,6 +372,17 @@ export default async function AdminPage() {
               );
             })
           )}
+        </div>
+      </section>
+
+      {/* ── instance settings: GitHub mirror PAT (Slice 4c, D-C5) ── */}
+      <section style={{ marginBottom: 30 }}>
+        <h2 style={sectionH2}>GitHub mirror PAT</h2>
+        <GithubPatSettings initialConfigured={githubPatConfigured} />
+        <div style={{ fontSize: 11.5, color: "var(--faint)", marginTop: 8 }}>
+          Instance-wide credential for mirroring `hosted` spaces&rsquo; `main` out to GitHub (see{" "}
+          <span style={{ fontFamily: "var(--font-mono)" }}>docs/remotes.md</span>). Per-space mode, remote
+          URL, and an optional deploy-key override live on each space&rsquo;s settings page.
         </div>
       </section>
 

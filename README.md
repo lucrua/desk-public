@@ -53,6 +53,7 @@ Write and read have **different natural granularities**:
 | External collaboration: invite links → self-serve onboarding, per-space `push_policy` (`direct`/`proposal`), proposals-as-PRs (diff + accept/reject) | 🟢 built |
 | Doc identity: stable opaque id per file, projection keyed on `(space, path)`, git `-M` rename tracking, link previews | 🟢 built |
 | **Web authoring** (browser new-doc / edit / upload → a real commit, CAS-on-ref) | 🟢 built — owner/writer commits direct (or opens a proposal under `push_policy=proposal`); guest (share-visitor) browser authoring (W2) not yet built |
+| **Source modes + GitHub mirroring** (per-space `hosted`/`mirrored`, one-way mirror-out to a paired GitHub repo, `mirrored`-space write refusal) | 🟢 built — see [`docs/remotes.md`](docs/remotes.md); deploy-key *generation* deferred (paste an existing private key instead) |
 | **Headless-agent loop** (`card.assigned` → runner → propose → review → publish) | 🔴 not built — the event + revision primitives exist; the runner does not |
 | **Packs** (manifest-defined view-repos for scoped agent inputs) | 🔴 not built |
 
@@ -106,6 +107,10 @@ git push desk HEAD:main
 > Creating a new doc, editing a doc, or uploading a file **in the browser** lands as a real git commit for an owner/writer (a non-owner writer under `push_policy=proposal` opens a proposal for review instead). Guest (share-visitor) browser authoring (W2) is not yet built.
 
 **Every content write converges on a git commit** (truth = git; Postgres is a rebuildable projection). The **agent** (`publish_doc`) and **REST** (`POST /api/docs`) publish paths both take a required **`space`** + **`path`** and commit the file to the space's repo — the doc's stable opaque slug is minted by the projection, so you address by `(space, path)`, never by a chosen slug. They honor `push_policy` exactly like a `git push`: owner/admin (and writers under `direct`) land on `main`; a non-owner writer under `proposal` opens a `proposals/<handle>` ref for review. **Accepting a proposed revision** (`decide_revision` / the review UI) likewise commits the revision's content to `main` and lets the indexer project it — the DB is never written directly. After this convergence, **no production path writes doc content to Postgres except the indexer projecting git.**
+
+### Source modes & GitHub mirroring
+
+Every space has a `source_mode`: **`hosted`** (default — Desk is canon, and mirrors `main` out to a paired GitHub repo you configure) or **`mirrored`** (GitHub is canon; a GitHub Action forwards pushes in, and Desk refuses its own content writes). Configure mode, the mirror remote, "Mirror now", and an optional per-space deploy key on a space's settings page (owner/admin); the instance-wide GitHub PAT credential is set once on `/admin` (write-only — never revealed back). Full recipes (including the GitHub Action YAML for `mirrored` spaces) are in **[`docs/remotes.md`](docs/remotes.md)**.
 
 ---
 
@@ -331,6 +336,7 @@ desk/
 ├── docs/
 │   ├── cutover-checklist.md  # Supervised cloud cutover runbook
 │   ├── account-merge-runbook.md
+│   ├── remotes.md          # Source modes + GitHub mirroring (hosted/mirrored recipes)
 │   └── plans/              # Implementation phase plans
 ├── drizzle/                # Generated migration SQL files
 ├── docker-compose.dev.yml  # Local Postgres 16 for development

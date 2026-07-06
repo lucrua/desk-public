@@ -7,6 +7,7 @@ import {
   shareBadgeLabel,
   isStaleBase,
   statusLabel,
+  acceptUnavailableReason,
   type RevisionDTO,
 } from "./revisions-view-model";
 
@@ -103,6 +104,17 @@ describe("revisions view-model", () => {
       expect(statusLabel("open")).toBe("open");
       expect(statusLabel("accepted")).toBe("accepted");
       expect(statusLabel("rejected")).toBe("rejected");
+    });
+  });
+
+  describe("acceptUnavailableReason", () => {
+    it("null (accept available) when the space is not mirrored", () => {
+      expect(acceptUnavailableReason(false)).toBeNull();
+    });
+    it("a note when the space is mirrored", () => {
+      const reason = acceptUnavailableReason(true);
+      expect(reason).not.toBeNull();
+      expect(reason).toMatch(/mirrors from GitHub/i);
     });
   });
 });

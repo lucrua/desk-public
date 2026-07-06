@@ -105,3 +105,18 @@ export function statusLabel(status: RevisionStatus): string {
       return "open";
   }
 }
+
+/**
+ * Why "Accept" is unavailable for an open revision, or null when it's fine to
+ * show. A `mirrored` space's canon is GitHub (convergence fix-pass, D-C3) —
+ * `acceptRevision` refuses server-side there (reason `"mirrored"`, the
+ * `MIRRORED_WRITE_REFUSED` message in `web-author.ts`), because committing on
+ * Desk would drift from the space's real source. Reject is unaffected (it only
+ * marks the DB row decided; no commit) — only Accept is gated. Surfaced as a
+ * small note next to the Accept button instead of a failed request the reviewer
+ * has to interpret.
+ */
+export function acceptUnavailableReason(isMirrored: boolean): string | null {
+  if (!isMirrored) return null;
+  return "This space mirrors from GitHub — accept is unavailable here. Apply the change upstream on GitHub instead.";
+}

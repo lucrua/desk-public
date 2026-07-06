@@ -416,7 +416,12 @@ export default async function DocDetailPage({
             no revisions and the viewer can't propose (handled inside via the
             empty state). */}
         {canEdit && revisionData.length > 0 && (
-          <Revisions slug={doc.slug} isAdmin={isAdmin} data={revisionData} />
+          <Revisions
+            slug={doc.slug}
+            isAdmin={isAdmin}
+            data={revisionData}
+            isMirrored={space?.sourceMode === "mirrored"}
+          />
         )}
 
         {/* Comment thread — only meaningful once the doc has a version to anchor
