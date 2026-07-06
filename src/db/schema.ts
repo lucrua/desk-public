@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, text, timestamp, integer, doublePrecision, jsonb, pgEnum, uniqueIndex, customType, index, check, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, text, timestamp, integer, boolean, doublePrecision, jsonb, pgEnum, uniqueIndex, customType, index, check, primaryKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // Postgres `tsvector` — there is no built-in drizzle column type for it. The
@@ -320,6 +320,14 @@ export const shares = pgTable("shares", {
   label: text("label").notNull(),              // "Pedro", "PartnerCo intro"
   createdBy: text("created_by").notNull(),
   allowComments: integer("allow_comments").notNull().default(1), // 1|0 — link visitors may comment
+  // Per-share "suggest an edit" toggle (convergence fix-pass, Slice 3). When
+  // true, a link visitor (no account, capability-token-scoped) may propose a
+  // full new doc body that queues as a `revision` the owner reviews + accepts
+  // (→ git commit) or rejects — the write sibling of allowComments. FAIL-CLOSED
+  // default OFF: a share never accepts suggestions until the owner opts in, and
+  // the suggest endpoints return a uniform 404 while it is off (no existence
+  // hint). A real Postgres boolean (allowComments predates this as an int flag).
+  allowEdits: boolean("allow_edits").notNull().default(false),
   // null = live (always resolves the doc's current version). Set = pinned: the
   // reader resolves this exact version regardless of later publishes. The
   // version must belong to this share's doc (validated on create).
@@ -383,9 +391,20 @@ export const revisions = pgTable("revisions", {
   baseVersionId: integer("base_version_id").notNull().references(() => docVersions.id),
   content: text("content").notNull(),
   authorName: text("author_name").notNull(),
-  authorKind: text("author_kind").notNull(), // 'admin' | 'member'
+  authorKind: text("author_kind").notNull(), // 'admin' | 'member' | 'link:<label>' (share suggestion)
   note: text("note"), // optional author note, capped at MAX_REVISION_NOTE_CHARS
   status: text("status").notNull().default("open"), // 'open' | 'accepted' | 'rejected'
+  // ── Share-suggestion provenance (convergence fix-pass, Slice 3) ────────────
+  // Set when this revision was proposed ANONYMOUSLY through a share link (the
+  // Tier-1 "suggest an edit" surface), NULL for a staff-proposed revision. The
+  // share is the AUTHORIZATION for the write (the route resolved the doc under
+  // that live, edits-enabled share), exactly as a share comment carries shareId.
+  shareId: integer("share_id").references(() => shares.id),
+  // The FORCED display label for a share suggestion ("link:<share label>"),
+  // never client-supplied — mirrors how a share comment forces authorKind. NULL
+  // for staff proposals. Surfaced in the review queue as a "via share <label>"
+  // badge so the owner knows a suggestion arrived through a capability link.
+  proposerLabel: text("proposer_label"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   decidedAt: timestamp("decided_at"),
 });

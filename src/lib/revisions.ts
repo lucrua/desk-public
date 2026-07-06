@@ -113,6 +113,96 @@ export async function createRevision(
   });
 }
 
+export type CreateShareRevisionInput = {
+  /** The doc the suggestion targets — already resolved + authorized by the
+   *  share (published, under the share's prefix + space, md). */
+  docId: number;
+  /** The doc's slug (for the revision.proposed event payload). */
+  docSlug: string;
+  /** The version the suggestion is anchored to: a pinned share → the pinned
+   *  version; a live share → the current version (the resolver decides). */
+  baseVersionId: number;
+  /** The originating share — the AUTHORIZATION for this write. */
+  shareId: number;
+  /** The share's BARE label (e.g. "Microsoft"). The service derives the FORCED
+   *  "link:<label>" forms for authorKind + proposerLabel — NEVER client input. */
+  shareLabel: string;
+  content: string;
+  note?: string;
+};
+
+/**
+ * Create a proposed revision from a SHARE LINK (Tier-1 anonymous "suggest an
+ * edit", convergence fix-pass Slice 3). The SHARE is the authorization — the
+ * public route already resolved the target doc under a live, edits-enabled share
+ * (published, md, under the prefix + space), exactly as the public comment route
+ * resolves a share before calling addComment. So this bypasses the staff/scope
+ * gate `createRevision` applies (a link visitor has no Principal), WITHOUT
+ * weakening it: the staff endpoints still call `createRevision`, which still
+ * gates on scope.
+ *
+ * Identity is FORCED, never trusted from the client (mirrors how the comment
+ * path forces authorName): authorName = the share label, authorKind + the new
+ * `proposerLabel` column = "link:<label>". The revision queues 'open' for the
+ * owner's existing review + accept (→ git commit) / reject flow.
+ *
+ * Returns null when content is empty (after the caller's checks) or over
+ * MAX_CONTENT_CHARS, the note is over MAX_REVISION_NOTE_CHARS, or the label is
+ * empty. Content caps are enforced here too so no caller can bypass them.
+ */
+export async function createShareRevision(
+  input: CreateShareRevisionInput,
+): Promise<RevisionRow | null> {
+  const shareLabel = input.shareLabel.trim();
+  if (shareLabel.length === 0) return null;
+
+  if (input.content.length === 0) return null;
+  if (input.content.length > MAX_CONTENT_CHARS) return null;
+  if (input.note != null && input.note.length > MAX_REVISION_NOTE_CHARS) return null;
+
+  const note = input.note != null && input.note.trim().length > 0 ? input.note.trim() : null;
+  // The FORCED provenance. authorName is the bare label (mirrors a share
+  // comment); authorKind + proposerLabel carry the "link:" prefix so the review
+  // queue can render a "via share <label>" badge.
+  const linkLabel = `link:${shareLabel}`;
+
+  // Insert + event atomically (a rolled-back insert emits nothing), mirroring
+  // createRevision. authorName / authorKind / proposerLabel are all forced.
+  return db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(revisions)
+      .values({
+        docId: input.docId,
+        baseVersionId: input.baseVersionId,
+        content: input.content,
+        authorName: shareLabel,   // forced — the share label (never client input)
+        authorKind: linkLabel,    // forced — "link:<label>"
+        note,
+        shareId: input.shareId,
+        proposerLabel: linkLabel, // forced — "link:<label>"
+      })
+      .returning();
+
+    if (!inserted) return null;
+
+    await emitEvent(tx, {
+      kind: "revision.proposed",
+      docId: input.docId,
+      payload: {
+        revisionId: inserted.id,
+        slug: input.docSlug,
+        baseVersionId: inserted.baseVersionId,
+        authorKind: inserted.authorKind,
+        // Boolean provenance only — never the share token or the proposed body.
+        viaShare: true,
+      },
+      actorName: shareLabel,
+    });
+
+    return inserted;
+  });
+}
+
 /**
  * List a doc's revisions, newest-first. Optional `status` filter ('open' |
  * 'accepted' | 'rejected').
@@ -203,7 +293,13 @@ export async function acceptRevision(
 
   const staleBase = doc.currentVersionId !== rev.baseVersionId;
   const prevVersionId = doc.currentVersionId;
-  const identity = identityFromName(by);
+  // Commit author: for a SHARE suggestion (proposerLabel set) the author is the
+  // proposer (the share's own label, e.g. "Microsoft") so git attribution shows
+  // who proposed it; for a staff revision it stays the accepting reviewer (`by`),
+  // preserving pre-Slice-3 behaviour. Either way the accept only ever writes the
+  // doc's CURRENT sourcePath — it NEVER changes the doc's path/slug.
+  const commitAuthorName = rev.proposerLabel != null ? rev.authorName : by;
+  const identity = identityFromName(commitAuthorName);
 
   // Commit the revision content to the doc's source path on `main`. CAS on the
   // live tip; on `stale`, re-read the tip and retry ONCE.
@@ -345,6 +441,8 @@ export async function listOpenRevisions(opts?: {
       authorKind: revisions.authorKind,
       note: revisions.note,
       status: revisions.status,
+      shareId: revisions.shareId,
+      proposerLabel: revisions.proposerLabel,
       createdAt: revisions.createdAt,
       decidedAt: revisions.decidedAt,
       // Doc context
@@ -370,6 +468,8 @@ export async function listOpenRevisions(opts?: {
     authorKind: r.authorKind,
     note: r.note,
     status: r.status as "open",
+    shareId: r.shareId,
+    proposerLabel: r.proposerLabel,
     createdAt: r.createdAt,
     decidedAt: r.decidedAt,
     docSlug: r.docSlug,

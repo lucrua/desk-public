@@ -23,6 +23,9 @@ export type ResolvedShare = {
   label: string;
   /** Whether link visitors may comment on this share (per-share flag). */
   allowComments: boolean;
+  /** Whether link visitors may suggest an edit on this share (per-share flag,
+   *  independent of allowComments — either may be on without the other). */
+  allowEdits: boolean;
   expiresAt: Date | null;
   createdBy: string;
   /** True when the share is pinned to a specific version (vs. live/latest). */
@@ -306,6 +309,7 @@ export async function resolveShare(rawToken: string): Promise<ResolvedShare | nu
     shareId: share.id,
     label: share.label,
     allowComments: share.allowComments === 1,
+    allowEdits: share.allowEdits,
     expiresAt: share.expiresAt,
     createdBy: share.createdBy,
     pinned,
@@ -323,6 +327,9 @@ export type ResolvedDirectoryShare = {
    *  share (an unscoped directory share fails closed and never resolves). */
   spaceId: number;
   allowComments: boolean;
+  /** Whether link visitors may suggest an edit on docs under this folder share
+   *  (per-share flag, independent of allowComments). */
+  allowEdits: boolean;
   expiresAt: Date | null;
   createdBy: string;
 };
@@ -386,6 +393,7 @@ export async function resolveDirectoryShare(
     pathPrefix: share.pathPrefix,
     spaceId: share.spaceId,
     allowComments: share.allowComments === 1,
+    allowEdits: share.allowEdits,
     expiresAt: share.expiresAt,
     createdBy: share.createdBy,
   };
@@ -807,6 +815,34 @@ export async function setShareComments(id: number, allow: boolean): Promise<bool
   await db
     .update(shares)
     .set({ allowComments: allow ? 1 : 0 })
+    .where(eq(shares.id, id));
+
+  return true;
+}
+
+// ── setShareEdits ──────────────────────────────────────────────────────────────
+
+/**
+ * Toggle the `allowEdits` flag on a share (admin action) — the "suggest an edit"
+ * per-share switch (convergence fix-pass, Slice 3). FAIL-CLOSED default is OFF;
+ * turning it on lets a link visitor propose a full new body that queues as a
+ * revision for the owner. Independent of allowComments (either may be on without
+ * the other). Returns true if the share exists and was updated, false if not
+ * found. Revoked shares can still be toggled (a no-op in practice — a revoked
+ * link 404s before the suggest composer renders).
+ */
+export async function setShareEdits(id: number, allow: boolean): Promise<boolean> {
+  const shareRows = await db
+    .select({ id: shares.id })
+    .from(shares)
+    .where(eq(shares.id, id))
+    .limit(1);
+
+  if (shareRows.length === 0) return false;
+
+  await db
+    .update(shares)
+    .set({ allowEdits: allow })
     .where(eq(shares.id, id));
 
   return true;

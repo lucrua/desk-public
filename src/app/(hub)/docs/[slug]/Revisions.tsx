@@ -8,6 +8,7 @@ import {
   proposedChangesLabel,
   revisionStamp,
   revisionAuthorChip,
+  shareBadgeLabel,
   statusLabel,
   type RevisionDTO,
 } from "./revisions-view-model";
@@ -198,6 +199,7 @@ function RevisionCard({
 }) {
   const { rev, diff, staleBase, diffVsCurrent } = data;
   const chip = revisionAuthorChip(rev);
+  const shareBadge = shareBadgeLabel(rev.proposerLabel);
   return (
     <div
       style={{
@@ -224,6 +226,24 @@ function RevisionCard({
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--faint)" }}>
           {revisionStamp(rev.createdAt)}
         </span>
+        {/* Share-suggestion provenance — the owner sees a suggestion arrived via
+            a capability link (label is plain text; React escapes). */}
+        {shareBadge && (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              padding: "2px 7px",
+              borderRadius: 99,
+              background: "var(--badge-external-bg)",
+              color: "var(--badge-external-ink)",
+              whiteSpace: "nowrap",
+            }}
+            title="This suggestion arrived through a share link"
+          >
+            via share {shareBadge}
+          </span>
+        )}
         {decided && (
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--faint)" }}>
             {statusLabel(rev.status)}

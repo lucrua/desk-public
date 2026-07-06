@@ -158,6 +158,7 @@ export default async function DocDetailPage({
           status: r.status as RevisionDTO["status"],
           createdAt: r.createdAt.toISOString(),
           decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
+          proposerLabel: r.proposerLabel,
         };
         return {
           rev: dto,

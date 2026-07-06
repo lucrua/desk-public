@@ -141,6 +141,13 @@
       "when": 1781210100000,
       "tag": "0019_share_space_id",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1781210200000,
+      "tag": "0020_share_edits_suggest",
+      "breakpoints": true
     }
   ]
 }

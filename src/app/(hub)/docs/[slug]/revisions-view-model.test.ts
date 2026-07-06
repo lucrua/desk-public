@@ -4,6 +4,7 @@ import {
   proposedChangesLabel,
   revisionStamp,
   revisionAuthorChip,
+  shareBadgeLabel,
   isStaleBase,
   statusLabel,
   type RevisionDTO,
@@ -19,6 +20,7 @@ function rev(over: Partial<RevisionDTO> = {}): RevisionDTO {
     status: "open",
     createdAt: "2026-06-10T12:00:00.000Z",
     decidedAt: null,
+    proposerLabel: null,
     ...over,
   };
 }
@@ -76,6 +78,23 @@ describe("revisions view-model", () => {
     it("true when base != current, false when equal", () => {
       expect(isStaleBase({ baseVersionId: 10 }, 11)).toBe(true);
       expect(isStaleBase({ baseVersionId: 10 }, 10)).toBe(false);
+    });
+  });
+
+  describe("shareBadgeLabel", () => {
+    it("strips the 'link:' prefix for a share suggestion", () => {
+      expect(shareBadgeLabel("link:Microsoft")).toBe("Microsoft");
+    });
+    it("returns the raw value when there is no 'link:' prefix", () => {
+      expect(shareBadgeLabel("Acme")).toBe("Acme");
+    });
+    it("returns null for a staff proposal (no proposer label)", () => {
+      expect(shareBadgeLabel(null)).toBeNull();
+      expect(shareBadgeLabel(undefined)).toBeNull();
+    });
+    it("returns null for an empty label after stripping", () => {
+      expect(shareBadgeLabel("link:")).toBeNull();
+      expect(shareBadgeLabel("")).toBeNull();
     });
   });
 

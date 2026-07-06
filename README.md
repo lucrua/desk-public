@@ -46,6 +46,7 @@ Write and read have **different natural granularities**:
 | Principal tokens (the git Basic-auth credential, self-serve) | 🟢 built |
 | Projection: render cache, catalog/board indexes, doc rows as an index of repo files | 🟢 built |
 | Capability + directory shares, view-tracking, comments, proposed revisions / approvals | 🟢 built |
+| Anonymous "suggest an edit" on a share (opt-in per share via `allow_edits`; queues as a revision the owner accepts → git commit, or rejects) | 🟢 built |
 | Board (kanban) | 🟢 built — native coordination |
 | Catalog (projection of a space directory's frontmatter; optional `.desk.collection.yml` schema + views + drift validation) | 🟢 built — read/render-only (edit an item by editing its doc's frontmatter through web authoring) |
 | Hierarchical file view (full git-tree file browser on a space, incl. non-doc files) | 🟢 built |
@@ -140,7 +141,9 @@ desk status
 
 Desk exposes a **Model Context Protocol** server at **`/mcp`** so external agents (Claude Code, etc.) can call Desk tools directly. It speaks the MCP **Streamable HTTP** transport in stateless mode (each request is self-contained — no session to keep alive), and reuses the exact same authentication and authorization as the web app: the Cloudflare Access wall authenticates the request, `getPrincipal` resolves it to a principal, and each tool enforces space-scoped reads + admin/owner mutation rules.
 
-**MCP is the agent surface; REST is the UI surface — deliberately not 1:1.** MCP exposes what a headless agent actually drives. Pure web-UI admin actions (user & multi-email management, access-request triage, board-bucket lifecycle, a share's view-log / comment-toggle) are **REST-only and have no MCP tool**; an agent that needs the "who can see what" audit uses `distribution_overview` + `list_shares`.
+**MCP is the agent surface; REST is the UI surface — deliberately not 1:1.** MCP exposes what a headless agent actually drives. Pure web-UI admin actions (user & multi-email management, access-request triage, board-bucket lifecycle, a share's view-log / comment- and edits-toggle) are **REST-only and have no MCP tool**; an agent that needs the "who can see what" audit uses `distribution_overview` + `list_shares`.
+
+**Anonymous "suggest an edit" on a share.** A share whose owner flips on `allow_edits` (`PATCH /api/shares/[id]`, REST-only, admin — the sibling of the comments toggle, and independent of it) grows a "Suggest an edit" affordance on markdown docs. A link visitor (no account — the capability token is the credential) submits a full proposed body; it queues as a **revision** carrying a forced `link:<share label>` identity (never client-supplied), which the owner reviews in the existing diff UI and **accepts** (→ a real git commit on `main`, authored by the proposer) or **rejects** (nothing changes). Fail-closed: while `allow_edits` is off — or the token is revoked/expired, or the doc is HTML — the suggest endpoint returns a uniform 404, indistinguishable from a dead link. Rate-limited per share (5/hour).
 
 - **URL:** `https://desk.<domain>/mcp` (also reachable at `/api/mcp`; `/mcp` is the canonical public path).
 - **Auth:** the same CF Access service-token headers the CLI uses (`CF-Access-Client-Id` / `CF-Access-Client-Secret`). An unauthenticated request gets a JSON-RPC `401`. On `share.<domain>` the endpoint is unreachable (the host middleware 404s everything outside `/s/*`).
@@ -209,7 +212,7 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `revoke_token` | staff | Revoke a token by `id` (own token, or any for an admin). |
 | `whoami` | staff | The resolved principal (kind, name, masked email/token) — "is my token wired right?" |
 
-> **REST-only admin actions** (no MCP tool): user CRUD + multi-email (`/api/users/**`), access-request triage (`/api/access-requests/**`), board-bucket lifecycle (`/api/buckets/**`), and a share's view-log / comment-toggle (`GET /api/shares/[id]/views`, `PATCH /api/shares/[id]`).
+> **REST-only admin actions** (no MCP tool): user CRUD + multi-email (`/api/users/**`), access-request triage (`/api/access-requests/**`), board-bucket lifecycle (`/api/buckets/**`), and a share's view-log / comment- and edits-toggle (`GET /api/shares/[id]/views`, `PATCH /api/shares/[id]` — `{ allowComments?, allowEdits? }`).
 >
 > **No catalog tools.** The catalog was reframed (D6) from a Desk-authored registry into a **read-only projection of a space directory's doc frontmatter** (+ an optional `.desk.collection.yml` schema). Its truth is the repo, so an agent "writes" a catalog by committing frontmatter — there is no catalog MCP/REST authoring surface. The dormant `catalog_*` tables are retained.
 

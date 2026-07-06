@@ -33,6 +33,9 @@ export type ShareView = {
   shareLabel: string;
   /** Whether this share permits link-visitor comments (per-share flag). */
   allowComments: boolean;
+  /** Whether this share permits link-visitor "suggest an edit" (per-share flag,
+   *  independent of allowComments). Only md docs surface the affordance. */
+  allowEdits: boolean;
   /** The raw token, so the client composer can POST to the share-comment API. */
   token: string;
   /** True when the share expires within EXPIRING_SOON_DAYS. */
@@ -94,7 +97,7 @@ export async function loadShareView(
   const resolved = await resolveShare(token);
   if (resolved === null) return null;
 
-  const { doc, version, shareId, expiresAt, label, allowComments } = resolved;
+  const { doc, version, shareId, expiresAt, label, allowComments, allowEdits } = resolved;
 
   // A published doc must have a current version; if not, treat as not-there
   // rather than rendering an empty page (uniform 404).
@@ -128,6 +131,7 @@ export async function loadShareView(
     createdBy: resolved.createdBy,
     shareLabel: label,
     allowComments,
+    allowEdits,
     token,
     expiresSoon,
     expiresStamp: expiresAt ? formatStamp(expiresAt) : null,

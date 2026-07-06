@@ -15,11 +15,14 @@ export type RevisionDTO = {
   id: number;
   baseVersionId: number;
   authorName: string;
-  authorKind: string; // 'admin' | 'member'
+  authorKind: string; // 'admin' | 'member' | 'link:<label>' (share suggestion)
   note: string | null;
   status: RevisionStatus;
   createdAt: string; // ISO
   decidedAt: string | null; // ISO | null
+  /** Set on a suggestion that arrived through a share link ("link:<label>"),
+   *  null for a staff-proposed revision. Surfaced as a "via share <label>" badge. */
+  proposerLabel: string | null;
 };
 
 export type GroupedRevisions = {
@@ -75,6 +78,20 @@ export function revisionAuthorChip(
  */
 export function isStaleBase(rev: Pick<RevisionDTO, "baseVersionId">, currentVersionId: number): boolean {
   return rev.baseVersionId !== currentVersionId;
+}
+
+/**
+ * Display label for the "via share <label>" badge on a share-originated
+ * suggestion. `proposerLabel` is stored as "link:<label>" (the forced share
+ * identity); this strips the "link:" prefix for display. Returns null when the
+ * revision has no proposer label (a staff proposal) → the badge is not rendered.
+ */
+export function shareBadgeLabel(proposerLabel: string | null | undefined): string | null {
+  if (!proposerLabel) return null;
+  const stripped = proposerLabel.startsWith("link:")
+    ? proposerLabel.slice("link:".length)
+    : proposerLabel;
+  return stripped.length > 0 ? stripped : null;
 }
 
 /** Human status label for a decided revision. */

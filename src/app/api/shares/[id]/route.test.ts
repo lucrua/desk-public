@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { resetDb, createShareOk, publishDocOk } from "@/test/db";
-import { listShares } from "@/lib/shares";
+import { listShares, resolveShare } from "@/lib/shares";
 import { PATCH } from "./route";
 
 const DOC = {
@@ -65,6 +65,49 @@ describe("PATCH /api/shares/[id]", () => {
     const id = await shareId();
     expect((await PATCH(patchReq(id, { allowComments: "yes" }), ctx(id))).status).toBe(400);
     expect((await PATCH(patchReq(id, {}), ctx(id))).status).toBe(400);
+  });
+
+  // ── allowEdits toggle (Slice 3) — independent of allowComments ──────────────
+  async function freshShare() {
+    const share = await createShareOk("patch-doc", "Pedro", "lucas");
+    return { id: share.id, token: share.shareUrl.split("/").pop()! };
+  }
+
+  it("admin toggles allowEdits on → 200 and persists (default was OFF)", async () => {
+    const { id, token } = await freshShare();
+    // Fail-closed default: a new share starts with edits OFF.
+    expect((await resolveShare(token))!.allowEdits).toBe(false);
+    const res = await PATCH(patchReq(id, { allowEdits: true }), ctx(id));
+    expect(res.status).toBe(200);
+    expect((await res.json()).allowEdits).toBe(true);
+    expect((await resolveShare(token))!.allowEdits).toBe(true);
+  });
+
+  it("allowEdits and allowComments are INDEPENDENT (edits on, comments off in one PATCH)", async () => {
+    const { id, token } = await freshShare();
+    const res = await PATCH(patchReq(id, { allowEdits: true, allowComments: false }), ctx(id));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.allowEdits).toBe(true);
+    expect(body.allowComments).toBe(false);
+    const resolved = (await resolveShare(token))!;
+    expect(resolved.allowEdits).toBe(true);
+    expect(resolved.allowComments).toBe(false);
+  });
+
+  it("non-boolean allowEdits → 400", async () => {
+    const { id } = await freshShare();
+    expect((await PATCH(patchReq(id, { allowEdits: "yes" }), ctx(id))).status).toBe(400);
+  });
+
+  it("member / anonymous cannot toggle allowEdits → 403", async () => {
+    const { id } = await freshShare();
+    expect((await PATCH(patchReq(id, { allowEdits: true }, "member"), ctx(id))).status).toBe(403);
+    expect((await PATCH(patchReq(id, { allowEdits: true }, "anonymous"), ctx(id))).status).toBe(403);
+  });
+
+  it("unknown id with allowEdits → 404", async () => {
+    expect((await PATCH(patchReq(99999, { allowEdits: true }), ctx(99999))).status).toBe(404);
   });
 
   it("unknown id → 404", async () => {

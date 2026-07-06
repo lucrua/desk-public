@@ -9,6 +9,7 @@ import { resolveShareDoc, recordView } from "@/lib/shares";
 import { listComments } from "@/lib/comments";
 import { formatStamp } from "../load-share";
 import ShareComments from "../ShareComments";
+import SuggestEdit from "../SuggestEdit";
 import ReaderActions from "../ReaderActions";
 import type { CommentDTO } from "@/app/(hub)/docs/[slug]/comments-view-model";
 
@@ -110,6 +111,27 @@ export default async function ShareDocPage({
       />
     </>
   ) : null;
+
+  // "Suggest an edit" — md-only, gated on the share's allow_edits flag (folder-
+  // wide, independent of allowComments). Posts to the slug-scoped suggest route.
+  const suggestNode =
+    !isHtml && share.allowEdits ? (
+      <>
+        <div
+          style={{
+            maxWidth: 680,
+            margin: "0 auto",
+            borderTop: "1px solid var(--hairline)",
+          }}
+        />
+        <SuggestEdit
+          token={token}
+          label={share.label}
+          source={version.content}
+          endpoint={`/api/s/${encodeURIComponent(token)}/${encodeURIComponent(slug)}/suggest`}
+        />
+      </>
+    ) : null;
 
   return (
     <div
@@ -237,6 +259,7 @@ export default async function ShareDocPage({
               </span>
             </footer>
           </article>
+          {suggestNode}
           {commentsNode}
         </>
       )}
