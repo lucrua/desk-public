@@ -1,0 +1,44 @@
+# Desk — UI polish pass: share readability, doc search, space-page tabs + file explorer, catalog clarity (design)
+
+> **Status: DRAFT — pending owner review (2026-07-07).** Five owner-reported UX issues, each grounded in a read-only survey of `main@b0e7bf9` (post convergence-fix-pass). Presentational/UX only — **no access-boundary changes** (search reuses the existing viewer-scoped `searchDocs`; the catalog stays read-only). Verified in a real browser before "done" (per `verification-before-frontend-completion`).
+> **Styling note:** this codebase uses **inline `style={{}}` with CSS custom properties** (`var(--ink)`, `var(--muted)`, `var(--hairline)`, `var(--surface)`, `var(--accent)`, `var(--font-serif|sans|mono)`) — no Tailwind, no CSS modules. Match that. Doc-body typography lives in `src/app/globals.css` (`.md-partner` / `.md-operator`).
+
+## Findings (what's actually true on `main`)
+
+- **Share reader** renders markdown at `19px` Newsreader serif / `line-height 1.72` / **~632px** measure (a `maxWidth:680` article box minus 24px×2 padding, border-box). Values are a deliberate "editorial" handoff but read as too big/narrow. The `680`(md)/`1100`(html) width literals are duplicated across ~5 spots in two page files. HTML shares render in a sandboxed iframe with their own CSS — **unaffected**.
+- **Doc search backend is 100% built and tested** — `searchDocs()` (`src/lib/docs.ts:831`) does one weighted FTS query (title weight A, content weight B) over `docs.search_tsv`, viewer-scoped identically to `listDocs`, returning `rank` + a safe delimiter-encoded `snippet`. Exposed via `GET /api/docs?q=` and MCP `search_docs` (both `isStaff`-gated). **There is no search UI.** Pre-built but unused snippet helpers exist: `splitSnippet`/`SnippetRun`/`snippetToMarkdown` in `src/app/(hub)/docs/tree-model.ts`.
+- **Space page** (`src/app/(hub)/spaces/[slug]/page.tsx`) renders **8 config/help sections before content** — content (docs tree + files) is dead last.
+- **File browsing** is two components: `SpaceDocsTree.tsx` (a real recursive tree of *projected docs*, **expanded by default** — test asserts `aria-expanded="true"`) and `SpaceFilesView.tsx` (the git-tree "files" view, actually a **flat list of full path strings**, no tree). Neither scales to 100 files.
+- **Catalog** works (32 pure-logic tests pass). **No "Audience" column exists in code** — auto-mode renders the *union of docs' frontmatter keys* as columns (`unionFields`, `projection.ts:70`), so an "Audience" column means the space's `.md` files carry an `audience:` frontmatter key (data), and/or the owner is viewing **un-redeployed staging**. The **directory picker** (`directoriesInSpace`, `source.ts:83-116`) enumerates *every ancestor prefix* of every doc path as a flat pill list (a doc at `reports/2026/07/x` adds 3 pills) — the "lots of directories" noise. `/help#catalog` has one stale line ("catalog tables retained but dormant" — false after Slice 6).
+
+## Decisions
+
+- **D1 (share type).** Body `~17px`, `line-height ~1.6`, measure `~760px`; scale headings/table/code proportionally. Centralize the md/html width into **one shared constant** consumed by the article + all chrome, killing the scattered literals. `.md-partner` only (operator/hub reader untouched unless it visibly shares the problem).
+- **D2 (search).** A **global search box in the hub header** (`layout.tsx` top bar) → a new **`/search?q=` RSC page** that calls `searchDocs` with `scopeForPrincipal(principal)` and renders results (title → doc, path, highlighted snippet via the existing `splitSnippet` helper). Name-search is primary (title weight A already ranks it above body); content search comes free. **No backend change.** A title-only mode + a header live-dropdown are deferred (YAGNI).
+- **D3 (space page → tabs).** Restructure into **two tabs: Content (default) and Settings**. Content hosts the unified file explorer (D4) + the authoring actions (New doc / Upload). Settings holds visibility, push policy, GitHub mirror, invite, members, setup prompt. Proposals stay on Content (they act on `main`). The individual panels are self-contained and move wholesale — no internal changes.
+- **D4 (unified file explorer).** One collapsible tree of **all committed files** (from `listSpaceFiles`), **folders collapsed by default**. A doc leaf links to its rendered page (`/docs/<slug>`); a non-doc leaf links to the raw file route. Replaces both `SpaceDocsTree` and `SpaceFilesView` on the space page. Tree derived client-side from each entry's `path` (same folder-splitting pattern as `deriveFolders`) — no data/boundary change. Keep `buildDocTree`/`SpaceDocsTree` if `/docs` still uses them; only the space page swaps to the unified explorer.
+- **D5 (catalog clarity).** (a) A **help explainer** at the top of `CatalogProjectionClient.tsx` — what a catalog is (a live read-only render of a directory's frontmatter; edit = edit the file + push), the **directory picker vs field filter** distinction, the crux line **"columns are your docs' frontmatter keys — an unfamiliar column means a doc has that key"** (this directly explains the Audience column), and schema mode in one line. (b) **Directory picker** no longer sprays every ancestor prefix flat — show a **collapsed/tree or top-level-first** control so deep spaces stay tidy. (c) Fix the stale `/help#catalog` line.
+- **D6 (no backend/boundary work).** Every slice is presentational. The catalog "audience column" needs **no code fix** — it's frontmatter data and/or the pending **staging redeploy** (already the standing Slice-0 operator action).
+
+## Slices
+
+Independent; any order, but suggested **S1 → S4 → S5 → (S2+S3 together)**. Each: build → `pnpm build` + `pnpm typecheck` green → **drive the real app in a browser** (dev server, exercise the surface, capture evidence) → commit.
+
+- **S1 — Share reader readability (D1).** `src/app/globals.css` `.md-partner` (font-size/line-height/measure + proportional headings/table/code); the two article blocks + chrome literals in `src/app/s/[token]/page.tsx` and `src/app/s/[token]/[slug]/page.tsx` → one shared width constant. Verify on a real md share (and confirm an html share is visually unchanged).
+- **S4 — Doc search UI (D2).** New `/search` page (`src/app/(hub)/search/page.tsx`) calling `searchDocs` + a small `SnippetLine` presentational component over `splitSnippet`; a header search input in `src/app/(hub)/layout.tsx` that navigates to `/search?q=`. Verify: query returns ranked results with highlighted snippets, viewer-scoped (member sees only their scope), empty query handled.
+- **S5 — Catalog clarity (D5).** Help explainer block in `CatalogProjectionClient.tsx`; directory-picker fix (`source.ts` derivation and/or the picker render in `CatalogProjectionClient.tsx`); stale line in `src/app/(hub)/help/page.tsx`. Verify: a multi-directory space shows a tidy picker + the explainer; a doc with an `audience:` frontmatter key shows the column *with* the explainer making it self-evident.
+- **S2 — Space page Content/Settings tabs (D3).** Restructure `src/app/(hub)/spaces/[slug]/page.tsx` into two tabs; move the config panels under Settings. Verify: opening a space lands on Content (files) first; Settings tab holds all config; owner vs member vs non-member surfaces unchanged (config still gated).
+- **S3 — Unified collapsed file explorer (D4).** New explorer component (collapsed tree of all `listSpaceFiles` entries; doc→rendered, non-doc→raw); replace `SpaceDocsTree` + `SpaceFilesView` usage on the space page; update/replace `SpaceDocsTree.test.tsx` expectations. Verify: folders start collapsed, expand on click, 100-file space stays tidy, doc vs raw links resolve. *(Build with S2 — the explorer is the Content tab's body.)*
+
+## Testing & verification
+
+- Unit/component tests where logic changes (tree collapse default, snippet rendering, tab state, directory-picker derivation). Keep the full `npx vitest run` green.
+- **Browser verification is mandatory** (`verification-before-frontend-completion`): run the dev server, drive each changed surface as a real user (share reader at a real width, `/search` with a query, a space page's tabs + file tree expand/collapse, the catalog picker + explainer), and capture evidence. Structural checks (build/types/tests) do **not** substitute.
+
+## Deferred / out of scope
+
+Title-only search mode · header live-search dropdown · catalog directory-picker as a full filesystem tree with lazy load · restyling the operator/hub markdown reader (`.md-operator`) unless it shares the readability problem · any access-boundary or catalog-write change. **Operator action (unblocks the "audience column" report):** redeploy staging from `main`.
+
+## Outcomes
+
+_(appended after each slice.)_
