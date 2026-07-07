@@ -8,29 +8,25 @@ import { createHash } from "node:crypto";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, basename, extname } from "node:path";
 import process from "node:process";
+import {
+  resolveHubUrl,
+  authHeaders,
+  resolveDevRole,
+  loadConfig,
+  saveConfig,
+  configPath,
+} from "./lib/config.mjs";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-
-const HUB_URL = process.env.HUB_URL ?? "http://localhost:3000";
-
-function authHeaders() {
-  const id = process.env.CF_ACCESS_CLIENT_ID;
-  const secret = process.env.CF_ACCESS_CLIENT_SECRET;
-  if (id && secret) {
-    return {
-      "CF-Access-Client-Id": id,
-      "CF-Access-Client-Secret": secret,
-    };
-  }
-  return {
-    "x-dev-role": process.env.HUB_DEV_ROLE ?? "admin",
-  };
-}
+//
+// The Desk URL + auth resolve via ./lib/config.mjs: ENV > ~/.config/desk/config.json
+// (set with `desk config`) > default. So env vars always win and CI stays
+// env-only. See `desk config` below.
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 async function apiFetch(path, options = {}) {
-  const url = `${HUB_URL}${path}`;
+  const url = `${resolveHubUrl()}${path}`;
   let res;
   try {
     res = await fetch(url, {
@@ -330,6 +326,13 @@ Publishing is a git push — 'git push <remote> HEAD:main' to the space's repo
 README "Publishing" section.
 
 Commands:
+  desk config [show]
+      Configure the Desk URL + auth once (saved to ~/.config/desk/config.json,
+      chmod 600). Interactive by default; 'show' prints the effective config
+      (secret masked). Non-interactive:
+        desk config --hub-url <url> [--client-id <id>] [--client-secret <s>] [--dev-role <role>]
+      ENV (HUB_URL / CF_ACCESS_* / HUB_DEV_ROLE) always overrides the saved file.
+
   desk share <slug> --label <label> [--expires <days>]
       Create a capability share link for a doc. URL printed once — save it.
 
@@ -346,15 +349,135 @@ Commands:
   desk help
       Show this usage.
 
-Environment:
+Environment (always overrides the saved 'desk config' file):
   HUB_URL            Hub base URL (default: http://localhost:3000)
   HUB_DEV_ROLE       Dev-mode role header value (default: admin)
   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET
                      Cloudflare Access service token (if set, used instead of x-dev-role)
+  DESK_CONFIG        Override the config file path (default: ~/.config/desk/config.json)
 
-Alias:
-  alias desk='node ~/desk/cli/desk.mjs'
+Setup:
+  desk config                              # interactive: set Desk URL + auth, saved for reuse
+  alias desk='node /path/to/desk/cli/desk.mjs'   # or install: curl -fsSL <repo>/cli/install.sh | sh
 `);
+}
+
+// ── command: config ───────────────────────────────────────────────────────────
+
+function maskSecret(s) {
+  if (!s) return "(unset)";
+  return s.length <= 4 ? "••••" : "•".repeat(Math.min(8, s.length - 4)) + s.slice(-4);
+}
+
+const normalizeUrl = (u) => String(u).trim().replace(/\/+$/, "");
+
+/**
+ * Minimal line reader that works with BOTH an interactive TTY and piped stdin
+ * (Node's readline/promises can hang on the 2nd question with piped input).
+ * Reads whole lines; resolves each ask() in order as lines arrive; on EOF any
+ * still-pending asks resolve to "".
+ */
+function makeLineReader() {
+  const stdin = process.stdin;
+  stdin.setEncoding("utf8");
+  let buf = "";
+  const lines = [];
+  const waiters = [];
+  let ended = false;
+  const flush = () => {
+    while (waiters.length && lines.length) waiters.shift()(lines.shift());
+    if (ended) while (waiters.length) waiters.shift()("");
+  };
+  const onData = (chunk) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      lines.push(buf.slice(0, idx).replace(/\r$/, ""));
+      buf = buf.slice(idx + 1);
+    }
+    flush();
+  };
+  const onEnd = () => {
+    ended = true;
+    if (buf.length) { lines.push(buf.replace(/\r$/, "")); buf = ""; }
+    flush();
+  };
+  stdin.on("data", onData);
+  stdin.once("end", onEnd);
+  stdin.resume();
+  return {
+    ask(promptText) {
+      process.stdout.write(promptText);
+      return new Promise((resolve) => { waiters.push(resolve); flush(); });
+    },
+    close() { stdin.removeListener("data", onData); stdin.removeListener("end", onEnd); stdin.pause(); },
+  };
+}
+
+/**
+ * `desk config`  — interactive setup (Desk URL + auth).
+ * `desk config show` — print the effective config (secret masked).
+ * `desk config --hub-url <u> [--client-id <i>] [--client-secret <s>] [--dev-role <r>]`
+ *              — non-interactive (used by install.sh / automation).
+ * Writes ~/.config/desk/config.json (chmod 600). ENV always overrides the file.
+ */
+async function cmdConfig(args) {
+  const { flags, positional } = parseFlags(args);
+
+  if (positional[0] === "show") {
+    const cfg = loadConfig();
+    const id = process.env.CF_ACCESS_CLIENT_ID ?? cfg.cfAccessClientId;
+    const secret = process.env.CF_ACCESS_CLIENT_SECRET ?? cfg.cfAccessClientSecret;
+    console.log(`config file: ${configPath()}`);
+    console.log(`hub url:     ${resolveHubUrl()}`);
+    if (id && secret) {
+      console.log(`auth:        Cloudflare Access service token`);
+      console.log(`  client id: ${id}`);
+      console.log(`  secret:    ${maskSecret(secret)}`);
+    } else {
+      console.log(`auth:        dev role → ${resolveDevRole()}`);
+    }
+    for (const env of ["HUB_URL", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET", "HUB_DEV_ROLE"]) {
+      if (process.env[env]) console.log(`  note: $${env} is set and overrides the saved file`);
+    }
+    return;
+  }
+
+  const cfg = loadConfig();
+
+  // Non-interactive when any config flag is supplied.
+  if (flags["hub-url"] || flags["client-id"] || flags["client-secret"] || flags["dev-role"]) {
+    if (flags["hub-url"]) cfg.hubUrl = normalizeUrl(flags["hub-url"]);
+    if (flags["client-id"]) cfg.cfAccessClientId = String(flags["client-id"]);
+    if (flags["client-secret"]) cfg.cfAccessClientSecret = String(flags["client-secret"]);
+    if (flags["dev-role"]) cfg.devRole = String(flags["dev-role"]);
+    console.log(`saved → ${saveConfig(cfg)}`);
+    return;
+  }
+
+  // Interactive.
+  const io = makeLineReader();
+  try {
+    const url = (await io.ask(`Desk URL [${cfg.hubUrl ?? "http://localhost:3000"}]: `)).trim();
+    if (url) cfg.hubUrl = normalizeUrl(url);
+    const method = (await io.ask("Auth — (t)oken for production, or (d)ev role? [t/d]: ")).trim().toLowerCase();
+    if (method.startsWith("d")) {
+      const role = (await io.ask(`Dev role [${cfg.devRole ?? "admin"}]: `)).trim();
+      cfg.devRole = role || cfg.devRole || "admin";
+      delete cfg.cfAccessClientId;
+      delete cfg.cfAccessClientSecret;
+    } else {
+      const id = (await io.ask("CF-Access-Client-Id: ")).trim();
+      if (id) cfg.cfAccessClientId = id;
+      // Note: input is visible. For a hidden secret use --client-secret or
+      // the $CF_ACCESS_CLIENT_SECRET env var instead.
+      const secret = (await io.ask("CF-Access-Client-Secret: ")).trim();
+      if (secret) cfg.cfAccessClientSecret = secret;
+    }
+  } finally {
+    io.close();
+  }
+  console.log(`saved → ${saveConfig(cfg)}`);
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -362,6 +485,7 @@ Alias:
 const [, , cmd, ...rest] = process.argv;
 
 switch (cmd) {
+  case "config":     await cmdConfig(rest); break;
   case "share":      await cmdShare(rest); break;
   case "revoke":     await cmdRevoke(rest); break;
   case "list":       await cmdList(rest); break;

@@ -10,16 +10,40 @@ Command-line interface for Desk. Zero dependencies — plain Node.js >= 20.
 > surface below. (Running a retired command prints a pointer to `git push` and
 > exits non-zero.)
 
-## Setup
+## Install
+
+One line, no clone (downloads `desk.mjs` + `lib/config.mjs`, drops a `desk` launcher on your PATH):
 
 ```bash
-# Adjust the path to wherever you cloned the repo.
-alias desk='node /path/to/desk/cli/desk.mjs'
+curl -fsSL https://raw.githubusercontent.com/lucrua/desk-public/main/cli/install.sh | sh
 ```
 
-Add that line to your `~/.bashrc` or `~/.zshrc` for persistence.
+Or, from a clone, just alias it:
+
+```bash
+alias desk='node /path/to/desk/cli/desk.mjs'   # add to ~/.bashrc / ~/.zshrc
+```
+
+## Configure (Desk URL + auth)
+
+Run once — saved to `~/.config/desk/config.json` (chmod 600, since it can hold a service-token secret):
+
+```bash
+desk config          # interactive: Desk URL + auth (dev role, or CF service token)
+desk config show     # print the effective config (secret masked)
+
+# non-interactive (automation / CI bootstrap):
+desk config --hub-url https://desk.example.com \
+  --client-id <cf-client-id> --client-secret <cf-client-secret>
+```
+
+**Precedence is always ENV > config file > default** — an exported `HUB_URL` / `CF_ACCESS_*` / `HUB_DEV_ROLE` overrides the saved file, so CI can stay env-only. Relocate the file with `DESK_CONFIG`.
 
 ## Commands
+
+### `desk config [show]`
+
+Configure the Desk URL + auth (see [Configure](#configure-desk-url--auth) above). Interactive by default; `show` prints the effective config with the secret masked; flag form (`--hub-url` / `--client-id` / `--client-secret` / `--dev-role`) is non-interactive.
 
 ### `desk share <slug> --label <label> [--expires <days>]`
 
@@ -49,12 +73,15 @@ Print usage.
 
 ## Environment variables
 
+All override the saved `desk config` file (ENV > config file > default), so CI can stay env-only.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HUB_URL` | `http://localhost:3000` | Hub API base URL |
 | `HUB_DEV_ROLE` | `admin` | Dev-mode role sent via `x-dev-role` header |
 | `CF_ACCESS_CLIENT_ID` | — | Cloudflare Access service token client id |
 | `CF_ACCESS_CLIENT_SECRET` | — | Cloudflare Access service token secret |
+| `DESK_CONFIG` | `~/.config/desk/config.json` | Override the `desk config` file path |
 
 If `CF_ACCESS_CLIENT_ID` **and** `CF_ACCESS_CLIENT_SECRET` are both set, Cloudflare Access headers are sent instead of `x-dev-role`.
 

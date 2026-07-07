@@ -126,14 +126,14 @@ pnpm typecheck           # tsc --noEmit
 
 ## CLI
 
-The `desk` CLI publishes docs, creates/revokes share links, and checks drift between local files and published versions. See [`cli/README.md`](cli/README.md) for commands and examples.
+The `desk` CLI manages share links and checks drift between local files and published versions. **Publishing is `git push`** (truth = git) — the CLI's write commands were retired in the Convergence fix-pass. See [`cli/README.md`](cli/README.md) for the full command list.
 
 ```bash
-# One-time alias setup (adjust path to match where you cloned the repo)
-alias desk='node /path/to/desk/cli/desk.mjs'
+# Install without cloning, then configure once (saved to ~/.config/desk/config.json):
+curl -fsSL https://raw.githubusercontent.com/lucrua/desk-public/main/cli/install.sh | sh
+desk config                        # set your Desk URL + auth (dev role or CF service token)
 
-# Quick examples (local dev)
-desk publish ~/docs/overview.md
+# Quick examples
 desk share overview --label "Partner review" --expires 7
 desk revoke "Partner review"
 desk list
