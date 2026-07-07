@@ -7,6 +7,7 @@ import {
   commentStamp,
   type CommentDTO,
 } from "@/app/(hub)/docs/[slug]/comments-view-model";
+import { MD_READER_WIDTH } from "./reader-width";
 
 /**
  * Partner-register comment thread + minimal composer for /s/[token]. Rendered
@@ -76,7 +77,7 @@ export default function ShareComments({
   return (
     <section
       style={{
-        maxWidth: 680,
+        maxWidth: MD_READER_WIDTH,
         margin: "0 auto",
         padding: "0 24px 96px",
         fontFamily: "var(--font-serif)",

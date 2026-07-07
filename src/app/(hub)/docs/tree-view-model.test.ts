@@ -11,6 +11,12 @@ import {
   type TreeFolderRow,
   type TreeDocRow,
 } from "./view-model";
+import {
+  deriveFileFolders,
+  buildFileTree,
+  type FileEntry,
+  type FileTreeFolderRow,
+} from "./tree-model";
 
 type D = { slug: string; path: string; title: string };
 const d = (slug: string, path: string, title = slug): D => ({ slug, path, title });
@@ -206,6 +212,71 @@ describe("railVersionShort", () => {
   it("extracts the bare vN from a rail label", () => {
     expect(railVersionShort("v7 · current")).toBe("v7");
     expect(railVersionShort("v3")).toBe("v3");
+  });
+});
+
+// ── Unified file explorer (UI polish S3) ─────────────────────────────────────
+
+const FILES: FileEntry[] = [
+  { path: "readme.md", isDoc: true, docSlug: "readme-slug" },
+  { path: "logo.png", isDoc: false },
+  { path: "finance/q3.md", isDoc: true, docSlug: "q3-slug" },
+  { path: "finance/notes/draft.md", isDoc: true, docSlug: "draft-slug" },
+  { path: "finance/data.csv", isDoc: false },
+];
+
+describe("deriveFileFolders", () => {
+  it("derives folder prefixes from file paths, NOT the file's own last segment", () => {
+    expect(deriveFileFolders(FILES)).toEqual(["finance", "finance/notes"]);
+  });
+  it("root-only files imply no folders", () => {
+    expect(deriveFileFolders([{ path: "a.md" }, { path: "b.png" }])).toEqual([]);
+  });
+});
+
+describe("buildFileTree", () => {
+  it("folders are COLLAPSED by default — only top-level folders + root files show", () => {
+    const rows = buildFileTree(FILES);
+    const shape = rows.map((r) =>
+      r.kind === "folder" ? `F:${r.path}(${r.collapsed ? "c" : "o"})` : `L:${r.entry.path}`,
+    );
+    // finance folder collapsed (no descendants); root files last.
+    expect(shape).toEqual(["F:finance(c)", "L:logo.png", "L:readme.md"]);
+  });
+
+  it("a folder's count is its recursive file total", () => {
+    const rows = buildFileTree(FILES);
+    const finance = rows.find(
+      (r) => r.kind === "folder" && r.path === "finance",
+    ) as FileTreeFolderRow;
+    // finance/q3.md + finance/notes/draft.md + finance/data.csv = 3
+    expect(finance.count).toBe(3);
+  });
+
+  it("expanding a folder reveals child folders (still collapsed) before its files", () => {
+    const rows = buildFileTree(FILES, { finance: true });
+    const shape = rows.map((r) =>
+      r.kind === "folder" ? `F:${r.path}(${r.collapsed ? "c" : "o"})` : `L:${r.entry.path}`,
+    );
+    expect(shape).toEqual([
+      "F:finance(o)",
+      "F:finance/notes(c)", // child folder first, still collapsed
+      "L:finance/data.csv", // then finance's own files, sorted
+      "L:finance/q3.md",
+      "L:logo.png",
+      "L:readme.md",
+    ]);
+  });
+
+  it("expanding a nested folder reveals its files", () => {
+    const rows = buildFileTree(FILES, { finance: true, "finance/notes": true });
+    expect(rows.some((r) => r.kind === "file" && r.entry.path === "finance/notes/draft.md")).toBe(true);
+  });
+
+  it("does not mutate the input", () => {
+    const copy = JSON.parse(JSON.stringify(FILES));
+    buildFileTree(FILES, { finance: true });
+    expect(FILES).toEqual(copy);
   });
 });
 

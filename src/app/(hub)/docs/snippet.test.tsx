@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { splitSnippet, snippetToMarkdown } from "./view-model";
 import { SNIPPET_START, SNIPPET_STOP } from "@/lib/docs";
+import SnippetLine from "./SnippetLine";
 
 const START = SNIPPET_START;
 const STOP = SNIPPET_STOP;
@@ -54,31 +55,37 @@ describe("snippetToMarkdown (MCP channel)", () => {
   });
 });
 
-// The UI renders runs as React text + <mark> nodes. React escapes text, so a
-// doc body that contains an injection payload becomes inert text in the DOM.
-// We render the same run shape the SnippetLine component uses and assert no
-// raw <img …> tag survives — the `<` from content is escaped to `&lt;`.
+// The real SnippetLine component renders runs as React text + <mark> nodes.
+// React escapes text, so a doc body that contains an injection payload becomes
+// inert text in the DOM. Render the actual component (not a facsimile) and
+// assert no raw <img …> tag survives — the `<` from content is escaped to
+// `&lt;`.
 function renderRuns(snippet: string) {
-  const runs = splitSnippet(snippet);
-  return renderToStaticMarkup(
-    <p>
-      {runs.map((r, i) =>
-        r.match ? <mark key={i}>{r.text}</mark> : <span key={i}>{r.text}</span>,
-      )}
-    </p>,
-  );
+  return renderToStaticMarkup(<SnippetLine snippet={snippet} />);
 }
 
-describe("snippet UI render — XSS", () => {
+describe("SnippetLine — XSS", () => {
   it("a body containing <img onerror=…> renders escaped, with no executable tag", () => {
     const snip = `prefix <img src=x onerror=alert(1)> ${START}target${STOP} suffix`;
     const html = renderRuns(snip);
     // The match is a real <mark> element.
-    expect(html).toContain("<mark>target</mark>");
+    expect(html).toMatch(/<mark[^>]*>target<\/mark>/);
     // The injected payload is escaped — it must NOT appear as a raw <img tag.
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
     // No onerror handler reaches the DOM as an attribute.
     expect(html).not.toMatch(/<[a-z]+[^>]*onerror=/i);
+  });
+
+  it("returns null (renders nothing) for an empty snippet", () => {
+    expect(renderToStaticMarkup(<SnippetLine snippet="" />)).toBe("");
+  });
+
+  it("accepts pre-split runs directly", () => {
+    const html = renderToStaticMarkup(
+      <SnippetLine runs={[{ text: "hello ", match: false }, { text: "world", match: true }]} />,
+    );
+    expect(html).toContain("hello");
+    expect(html).toMatch(/<mark[^>]*>world<\/mark>/);
   });
 });

@@ -11,6 +11,7 @@ import { formatStamp } from "../load-share";
 import ShareComments from "../ShareComments";
 import SuggestEdit from "../SuggestEdit";
 import ReaderActions from "../ReaderActions";
+import { MD_READER_WIDTH, HTML_READER_WIDTH } from "../reader-width";
 import type { CommentDTO } from "@/app/(hub)/docs/[slug]/comments-view-model";
 
 // Resolve fresh every request — revoke / expiry / unpublish / re-prefix must all
@@ -91,7 +92,7 @@ export default async function ShareDocPage({
   }
 
   const isHtml = doc.format === "html";
-  const maxWidth = isHtml ? 1100 : 680;
+  const maxWidth = isHtml ? HTML_READER_WIDTH : MD_READER_WIDTH;
   const updatedStamp = formatStamp(version.publishedAt);
 
   const commentsNode = share.allowComments ? (
@@ -119,7 +120,7 @@ export default async function ShareDocPage({
       <>
         <div
           style={{
-            maxWidth: 680,
+            maxWidth: MD_READER_WIDTH,
             margin: "0 auto",
             borderTop: "1px solid var(--hairline)",
           }}
@@ -234,7 +235,7 @@ export default async function ShareDocPage({
         <>
           <article
             style={{
-              maxWidth: 680,
+              maxWidth: MD_READER_WIDTH,
               margin: "0 auto",
               padding: "56px 24px 40px",
             }}

@@ -237,6 +237,132 @@ export function buildDocTree<T extends { path: string; slug: string }>(
   return rows;
 }
 
+// ── File tree (unified space explorer — all committed files) ─────────────────
+
+/**
+ * One committed file in the unified space explorer. `path` is the full
+ * repo-relative path (slash-joined segments); its LAST segment is the file
+ * itself, every earlier segment is a folder. `isDoc` marks a projected doc-type
+ * file; `docSlug` is that doc's rendered slug (absent for non-doc / unprojected
+ * files, which fall back to the raw route).
+ */
+export type FileEntry = {
+  path: string;
+  isDoc: boolean;
+  docSlug?: string;
+};
+
+/** A folder header row in the file tree. */
+export type FileTreeFolderRow = {
+  kind: "folder";
+  /** Full folder path, e.g. "ops/runbooks" — the expand key. */
+  path: string;
+  /** Last segment only, e.g. "runbooks" (rendered as "runbooks/"). */
+  name: string;
+  /** Recursive file count under this folder (all descendants). */
+  count: number;
+  /** Nesting depth (0 = top-level folder). Drives indentation. */
+  depth: number;
+  /** Whether this folder is currently collapsed. */
+  collapsed: boolean;
+};
+
+/** A file leaf row in the file tree. */
+export type FileTreeFileRow = {
+  kind: "file";
+  entry: FileEntry;
+  /** Last path segment (the filename). */
+  name: string;
+  depth: number;
+};
+
+export type FileTreeRow = FileTreeFolderRow | FileTreeFileRow;
+
+/**
+ * Derive every folder path implied by a flat file list — each directory prefix
+ * of every file path (the file's own last segment is NOT a folder).
+ * "ops/runbooks/x.md" implies "ops" and "ops/runbooks". Sorted lexicographically.
+ */
+export function deriveFileFolders(files: { path: string }[]): string[] {
+  const set = new Set<string>();
+  for (const f of files) {
+    const parts = f.path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      set.add(parts.slice(0, i).join("/"));
+    }
+  }
+  return [...set].sort();
+}
+
+/**
+ * Build the flattened, depth-indented tree of folder + file rows from a flat
+ * file list. Pure — never mutates the input.
+ *
+ * **Folders are COLLAPSED by default** — the inverse of `buildDocTree`. A folder
+ * reveals its children only when `expanded[folderPath] === true`, so a 100-file
+ * space opens tidy (one row per top-level folder). Structure otherwise mirrors
+ * `buildDocTree`: within a folder, CHILD FOLDERS render before FILES; a collapsed
+ * folder emits its own header but no descendants; root files (no slash in the
+ * path) render LAST at depth 0; a folder's `count` is its recursive file total.
+ */
+export function buildFileTree(
+  files: FileEntry[],
+  expanded: Record<string, boolean> = {},
+): FileTreeRow[] {
+  // Sort a COPY by path so the tree is deterministic regardless of caller order
+  // (never mutate the input). `listSpaceFiles` already sorts, but this keeps the
+  // docs-only fallback and any other feed tidy too.
+  const sorted = [...files].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
+  const folders = deriveFileFolders(sorted);
+  const rows: FileTreeRow[] = [];
+
+  const dirOf = (p: string): string => {
+    const i = p.lastIndexOf("/");
+    return i === -1 ? "" : p.slice(0, i);
+  };
+  const baseName = (p: string): string => {
+    const i = p.lastIndexOf("/");
+    return i === -1 ? p : p.slice(i + 1);
+  };
+  const recursiveCount = (folder: string): number =>
+    sorted.filter((f) => f.path.startsWith(folder + "/")).length;
+
+  const walk = (folder: string, depth: number) => {
+    const isExpanded = !!expanded[folder];
+    rows.push({
+      kind: "folder",
+      path: folder,
+      name: folder.split("/").pop()!,
+      count: recursiveCount(folder),
+      depth,
+      collapsed: !isExpanded,
+    });
+    if (!isExpanded) return;
+    // child folders: one segment deeper, same prefix
+    const childFolders = folders.filter(
+      (f) =>
+        f.startsWith(folder + "/") &&
+        f.split("/").length === folder.split("/").length + 1,
+    );
+    for (const cf of childFolders) walk(cf, depth + 1);
+    // files living directly in this folder
+    for (const f of sorted.filter((f) => dirOf(f.path) === folder)) {
+      rows.push({ kind: "file", entry: f, name: baseName(f.path), depth: depth + 1 });
+    }
+  };
+
+  // top-level folders (no slash)
+  for (const top of folders.filter((f) => !f.includes("/"))) walk(top, 0);
+  // root files last, at depth 0
+  for (const f of sorted.filter((f) => !f.path.includes("/"))) {
+    rows.push({ kind: "file", entry: f, name: f.path, depth: 0 });
+  }
+
+  return rows;
+}
+
 /** Display prefix for a doc's folder in search results: "finance/" or "(root)". */
 export function pathContextLabel(path: string): string {
   return path ? path + "/" : "(root)";

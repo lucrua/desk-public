@@ -1,9 +1,8 @@
 /**
- * Tests for cli/lib/config.mjs — run with:  node --test cli/lib/config.test.mjs
- * Zero-dep (node:test / node:assert), matching the CLI's no-build posture.
+ * Tests for cli/lib/config.mjs — run as part of the vitest suite (the repo's
+ * other CLI tests use the vitest API too). Also runnable standalone if desired.
  */
-import { test } from "node:test";
-import assert from "node:assert/strict";
+import { test, expect } from "vitest";
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,14 +39,14 @@ function tmpConfigFile() {
 
 test("configPath honors DESK_CONFIG override", () => {
   withEnv({ DESK_CONFIG: "/tmp/x/desk.json" }, () => {
-    assert.equal(configPath(), "/tmp/x/desk.json");
+    expect(configPath()).toBe("/tmp/x/desk.json");
   });
 });
 
 test("loadConfig returns {} when the file is missing", () => {
   const { file, dir } = tmpConfigFile();
   try {
-    withEnv({ DESK_CONFIG: file }, () => assert.deepEqual(loadConfig(), {}));
+    withEnv({ DESK_CONFIG: file }, () => expect(loadConfig()).toEqual({}));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -58,12 +57,12 @@ test("saveConfig writes chmod-600 JSON that loadConfig round-trips", () => {
   try {
     withEnv({ DESK_CONFIG: file }, () => {
       const p = saveConfig({ hubUrl: "https://desk.example.com", devRole: "member" });
-      assert.equal(p, file);
-      assert.ok(existsSync(file));
+      expect(p).toBe(file);
+      expect(existsSync(file)).toBe(true);
       // 0o600 = owner read/write only.
-      assert.equal(statSync(file).mode & 0o777, 0o600);
-      assert.deepEqual(loadConfig(), { hubUrl: "https://desk.example.com", devRole: "member" });
-      assert.match(readFileSync(file, "utf8"), /\n$/); // trailing newline
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(loadConfig()).toEqual({ hubUrl: "https://desk.example.com", devRole: "member" });
+      expect(readFileSync(file, "utf8")).toMatch(/\n$/); // trailing newline
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -76,7 +75,7 @@ test("loadConfig tolerates a corrupt file (→ {})", () => {
     withEnv({ DESK_CONFIG: file }, () => {
       saveConfig({ hubUrl: "https://x" });
       writeFileSync(file, "{ not json"); // corrupt it
-      assert.deepEqual(loadConfig(), {});
+      expect(loadConfig()).toEqual({});
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -87,16 +86,16 @@ test("resolveHubUrl precedence: ENV > config > default", () => {
   const { file, dir } = tmpConfigFile();
   try {
     // default
-    withEnv({ DESK_CONFIG: file }, () => assert.equal(resolveHubUrl(), "http://localhost:3000"));
+    withEnv({ DESK_CONFIG: file }, () => expect(resolveHubUrl()).toBe("http://localhost:3000"));
     // config
     withEnv({ DESK_CONFIG: file }, () => {
       saveConfig({ hubUrl: "https://from-config" });
-      assert.equal(resolveHubUrl(), "https://from-config");
+      expect(resolveHubUrl()).toBe("https://from-config");
     });
     // env wins
     withEnv({ DESK_CONFIG: file, HUB_URL: "https://from-env" }, () => {
       saveConfig({ hubUrl: "https://from-config" });
-      assert.equal(resolveHubUrl(), "https://from-env");
+      expect(resolveHubUrl()).toBe("https://from-env");
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -109,22 +108,22 @@ test("authHeaders: CF service token when both id+secret present, else dev-role",
     // config-based CF token
     withEnv({ DESK_CONFIG: file }, () => {
       saveConfig({ cfAccessClientId: "id-1", cfAccessClientSecret: "sec-1" });
-      assert.deepEqual(authHeaders(), { "CF-Access-Client-Id": "id-1", "CF-Access-Client-Secret": "sec-1" });
+      expect(authHeaders()).toEqual({ "CF-Access-Client-Id": "id-1", "CF-Access-Client-Secret": "sec-1" });
     });
     // ENV CF token overrides config
     withEnv({ DESK_CONFIG: file, CF_ACCESS_CLIENT_ID: "env-id", CF_ACCESS_CLIENT_SECRET: "env-sec" }, () => {
       saveConfig({ cfAccessClientId: "id-1", cfAccessClientSecret: "sec-1" });
-      assert.deepEqual(authHeaders(), { "CF-Access-Client-Id": "env-id", "CF-Access-Client-Secret": "env-sec" });
+      expect(authHeaders()).toEqual({ "CF-Access-Client-Id": "env-id", "CF-Access-Client-Secret": "env-sec" });
     });
     // no token → dev role (config, then env override)
     withEnv({ DESK_CONFIG: file }, () => {
       saveConfig({ devRole: "member" });
-      assert.deepEqual(authHeaders(), { "x-dev-role": "member" });
-      assert.equal(resolveDevRole(), "member");
+      expect(authHeaders()).toEqual({ "x-dev-role": "member" });
+      expect(resolveDevRole()).toBe("member");
     });
     withEnv({ DESK_CONFIG: file, HUB_DEV_ROLE: "admin" }, () => {
       saveConfig({ devRole: "member" });
-      assert.deepEqual(authHeaders(), { "x-dev-role": "admin" });
+      expect(authHeaders()).toEqual({ "x-dev-role": "admin" });
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });

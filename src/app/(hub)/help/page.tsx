@@ -802,8 +802,10 @@ export default async function HelpPage() {
               <p style={mutedP}>
                 Agents don&rsquo;t need a catalog tool: the truth is the repo, so an
                 agent writes frontmatter the same way it writes any file — commit and
-                push, and the projection refreshes. (The earlier Desk-authored
-                catalog tables are retained but dormant.)
+                push, and the projection refreshes. There is no separate catalog
+                table to keep in sync — the earlier Desk-authored catalog tables
+                were deleted; this projection reads directly from each doc&rsquo;s
+                parsed frontmatter.
               </p>
             </Section>
 

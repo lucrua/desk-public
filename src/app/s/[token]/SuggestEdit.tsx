@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { MD_READER_WIDTH } from "./reader-width";
 
 /**
  * Partner-register "suggest an edit" affordance for /s/[token] (md docs only,
@@ -71,7 +72,7 @@ export default function SuggestEdit({
   return (
     <section
       style={{
-        maxWidth: 680,
+        maxWidth: MD_READER_WIDTH,
         margin: "0 auto",
         padding: "0 24px 40px",
         fontFamily: "var(--font-serif)",
