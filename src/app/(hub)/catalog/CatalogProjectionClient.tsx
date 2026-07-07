@@ -111,11 +111,15 @@ export default function CatalogProjectionClient({
     return rows;
   }, [projection.rows, filterField, filterValue, sortField, sortDir]);
 
+  // Directory picker: a tree (top-level first, expand for nested) built once
+  // from the flat ancestor-prefix list `source.ts` returns. See buildDirTree.
+  const dirTree = useMemo(() => buildDirTree(dirs), [dirs]);
+
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 20px 80px" }}>
       <header style={{ marginBottom: 18 }}>
         <h1 style={{ fontSize: 22, fontWeight: 600, fontFamily: mono, margin: "0 0 4px" }}>Catalog</h1>
-        <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+        <p style={{ margin: "0 0 10px", fontSize: 13, color: "var(--muted)" }}>
           A projection of a space directory&rsquo;s frontmatter. Pick a space and
           directory; Desk renders each doc&rsquo;s metadata.{" "}
           {schema ? (
@@ -127,6 +131,7 @@ export default function CatalogProjectionClient({
             <span>Auto mode — no <code style={{ fontFamily: mono, fontSize: 12 }}>.desk.collection.yml</code> in this directory.</span>
           )}
         </p>
+        <CatalogHelp />
       </header>
 
       {/* Space + directory pickers (set search params; server re-projects). */}
@@ -143,18 +148,10 @@ export default function CatalogProjectionClient({
           )}
         </Picker>
         {space && (
-          <Picker label="directory">
-            {dirs.map((d) => (
-              <PickLink
-                key={d.path || "__root__"}
-                href={`/catalog?space=${encodeURIComponent(space)}&dir=${encodeURIComponent(d.path)}`}
-                active={d.path === dir}
-              >
-                {d.path === "" ? "(root)" : d.path + "/"}{" "}
-                <span style={{ color: "var(--faint)", fontFamily: mono, fontSize: 11 }}>{d.count}</span>
-              </PickLink>
-            ))}
-          </Picker>
+          <div>
+            <div style={{ ...label10, marginBottom: 6 }}>directory</div>
+            <DirectoryTree root={dirTree} space={space} dir={dir} />
+          </div>
         )}
       </div>
 
@@ -479,6 +476,203 @@ function PickLink({ href, active, children }: { href: string; active: boolean; c
   );
 }
 
+/**
+ * Collapsible "what is this" explainer (D5). Answers the two things that
+ * confuse a first-time viewer: where columns come from (a doc's frontmatter
+ * key — this is what a stray "Audience" column means) and that the directory
+ * picker and the field filter are two different controls. Defaults open so
+ * the explanation is visible on first load; collapses to a single line once
+ * learned.
+ */
+function CatalogHelp() {
+  const [open, setOpen] = useState(true);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls="catalog-help-panel"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          background: "none",
+          border: "none",
+          padding: 0,
+          fontSize: 12,
+          fontFamily: mono,
+          color: "var(--muted)",
+          cursor: "pointer",
+        }}
+      >
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+        What is this?
+      </button>
+      {open && (
+        <div
+          id="catalog-help-panel"
+          style={{
+            marginTop: 8,
+            padding: "12px 14px",
+            border: "1px solid var(--hairline)",
+            borderRadius: 8,
+            background: "var(--surface-alt)",
+            maxWidth: 720,
+            fontSize: 12.5,
+            lineHeight: 1.55,
+            color: "var(--muted)",
+          }}
+        >
+          <p style={{ margin: "0 0 8px" }}>
+            A catalog is a <strong>live, read-only render</strong> of a
+            directory&rsquo;s doc frontmatter — not a separate database.
+            Nothing here is stored by the catalog itself; to change a value,
+            edit the file&rsquo;s frontmatter and <code style={inlineCode}>git push</code>{" "}
+            — the catalog re-projects automatically.
+          </p>
+          <p style={{ margin: "0 0 8px" }}>
+            <strong>Each column is a field from your docs&rsquo; YAML
+            frontmatter.</strong> If you see a column you don&rsquo;t
+            recognize — e.g. &ldquo;Audience&rdquo; — it just means a doc in
+            this directory has that key in its frontmatter. There&rsquo;s
+            nothing to configure; that&rsquo;s the data.
+          </p>
+          <p style={{ margin: "0 0 8px" }}>
+            Two separate controls: the <strong>directory picker</strong>{" "}
+            (below) chooses <em>which docs are shown</em>, by folder. The{" "}
+            <strong>filter</strong> control (in the toolbar, once a space is
+            picked) narrows those docs by <em>one frontmatter field&rsquo;s
+            value</em>. They don&rsquo;t do the same thing.
+          </p>
+          <p style={{ margin: 0 }}>
+            Want a pinned column order, typed/enum fields, and drift flags for
+            bad data? Drop a <code style={inlineCode}>.desk.collection.yml</code>{" "}
+            in the directory — that turns on schema mode.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Directory picker: collapsed tree (top-level dirs first) ────────────────
+//
+// `directoriesInSpace` (source.ts) returns EVERY ancestor prefix of every doc
+// path (a doc at reports/2026/07/x yields reports, reports/2026,
+// reports/2026/07) so any directory stays independently selectable. Rendering
+// that flat list as pills sprays a deep space across the page. Presentation
+// fix only: fold the flat list into a tree client-side and show top-level
+// directories first, expanding to reveal nested ones on demand.
+
+type DirNode = { path: string; label: string; count: number; children: DirNode[] };
+
+function buildDirTree(dirs: DirOption[]): DirNode {
+  const byPath = new Map<string, DirNode>();
+  const root: DirNode = { path: "", label: "(root)", count: 0, children: [] };
+  byPath.set("", root);
+  // Ancestors always sort before descendants lexicographically ("reports" <
+  // "reports/2026"), and source.ts guarantees every ancestor is present, so a
+  // single sorted pass can attach each node to its already-known parent.
+  const nonRoot = dirs.filter((d) => d.path !== "").sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  for (const d of nonRoot) {
+    const slash = d.path.lastIndexOf("/");
+    const parentPath = slash < 0 ? "" : d.path.slice(0, slash);
+    const node: DirNode = { path: d.path, label: d.path.slice(slash + 1), count: d.count, children: [] };
+    byPath.set(d.path, node);
+    (byPath.get(parentPath) ?? root).children.push(node);
+  }
+  const rootOption = dirs.find((d) => d.path === "");
+  root.count = rootOption?.count ?? 0;
+  return root;
+}
+
+/** Every proper ancestor path of `path` (excludes `path` itself and the root ""). */
+function ancestorPaths(path: string): string[] {
+  if (!path) return [];
+  const parts = path.split("/");
+  const out: string[] = [];
+  for (let i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join("/"));
+  return out;
+}
+
+function DirectoryTree({ root, space, dir }: { root: DirNode; space: string; dir: string }) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(ancestorPaths(dir)));
+  // Track the `dir` this state was last reconciled against, so a prop change
+  // (nav, back/forward, a shared link) can pull the new active directory's
+  // ancestors into `expanded` — adjusting state during render (React's
+  // documented pattern for "adjusting state when a prop changes") rather than
+  // in an effect, which would cost an extra cascading render.
+  const [reconciledDir, setReconciledDir] = useState(dir);
+  if (dir !== reconciledDir) {
+    setReconciledDir(dir);
+    const needed = ancestorPaths(dir);
+    if (needed.some((a) => !expanded.has(a))) {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        for (const a of needed) next.add(a);
+        return next;
+      });
+    }
+  }
+
+  const toggle = (path: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+
+  const renderNode = (node: DirNode, depth: number, isRoot: boolean): React.ReactNode => {
+    const hasChildren = node.children.length > 0;
+    const isOpen = isRoot || expanded.has(node.path);
+    return (
+      <div key={node.path || "__root__"}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, paddingLeft: depth * 16 }}>
+          {!isRoot && hasChildren ? (
+            <button
+              type="button"
+              onClick={() => toggle(node.path)}
+              aria-expanded={isOpen}
+              aria-label={`${isOpen ? "Collapse" : "Expand"} ${node.label}`}
+              style={chevronBtn}
+            >
+              {isOpen ? "▾" : "▸"}
+            </button>
+          ) : !isRoot ? (
+            <span style={{ display: "inline-block", width: 16 }} aria-hidden="true" />
+          ) : null}
+          <PickLink href={`/catalog?space=${encodeURIComponent(space)}&dir=${encodeURIComponent(node.path)}`} active={dir === node.path}>
+            {node.label}
+            {node.path !== "" ? "/" : ""}{" "}
+            <span style={{ color: "var(--faint)", fontFamily: mono, fontSize: 11 }}>{node.count}</span>
+          </PickLink>
+        </div>
+        {hasChildren && isOpen && node.children.map((child) => renderNode(child, depth + 1, false))}
+      </div>
+    );
+  };
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 3,
+        minWidth: 220,
+        maxHeight: 260,
+        overflowY: "auto",
+        padding: "6px 8px",
+        border: "1px solid var(--hairline)",
+        borderRadius: 8,
+      }}
+    >
+      {renderNode(root, 0, true)}
+    </div>
+  );
+}
+
 function Control({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -544,6 +738,30 @@ const selectStyle = {
   border: "1px solid var(--hairline)",
   background: "var(--surface)",
   color: "var(--ink)",
+} as const;
+
+const inlineCode = {
+  fontFamily: mono,
+  fontSize: 11.5,
+  background: "var(--surface)",
+  border: "1px solid var(--hairline)",
+  borderRadius: 4,
+  padding: "1px 4px",
+} as const;
+
+const chevronBtn = {
+  border: "none",
+  background: "none",
+  color: "var(--muted)",
+  cursor: "pointer",
+  fontSize: 11,
+  lineHeight: 1,
+  padding: 0,
+  width: 16,
+  height: 16,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
 } as const;
 
 const ctrlBtn = {
