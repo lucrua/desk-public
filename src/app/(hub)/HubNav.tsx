@@ -30,6 +30,7 @@ export default function HubNav({
     { href: "/spaces", label: "Spaces" },
     { href: "/board", label: "Board" },
     { href: "/catalog", label: "Catalog" },
+    { href: "/search", label: "Search" },
     { href: "/approvals", label: "Approvals", badge: approvalCount > 0 ? approvalCount : undefined },
     { href: "/settings/tokens", label: "Tokens" },
     { href: "/help", label: "Help" },

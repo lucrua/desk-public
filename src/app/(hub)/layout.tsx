@@ -209,6 +209,30 @@ export default async function HubLayout({
 
         <HubNav isAdmin={isAdmin} approvalCount={approvalCount} />
 
+        {/* Plain GET form, no client JS needed — submits straight to the
+            `/search` RSC page (D2). Layouts don't receive `searchParams` in
+            this Next version (only pages do), so this can't pre-fill the
+            current query when navigated via nav links; a direct link to
+            `/search?q=…` still round-trips correctly through the page itself. */}
+        <form action="/search" method="get" role="search">
+          <input
+            type="search"
+            name="q"
+            placeholder="Search docs…"
+            aria-label="Search docs"
+            style={{
+              fontSize: 12.5,
+              padding: "5px 10px",
+              borderRadius: 6,
+              border: "1px solid var(--hairline)",
+              background: "var(--surface-alt)",
+              color: "var(--ink)",
+              width: 170,
+              fontFamily: "var(--font-sans)",
+            }}
+          />
+        </form>
+
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ThemeToggle />
           {!showSwitcher && (
