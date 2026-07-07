@@ -24,8 +24,8 @@ import InvitePanel from "./InvitePanel";
 import SetupPromptView from "./SetupPromptView";
 import MembersPanel, { type MemberRow, type UserChoice } from "./MembersPanel";
 import PushHelp from "./PushHelp";
-import SpaceDocsTree from "./SpaceDocsTree";
-import SpaceFilesView from "./SpaceFilesView";
+import SpaceFileExplorer, { type FileEntry } from "./SpaceFileExplorer";
+import SpaceTabs from "./SpaceTabs";
 import NewDocPanel from "./NewDocPanel";
 import UploadPanel from "./UploadPanel";
 import ProposalsPanel from "./ProposalsPanel";
@@ -89,16 +89,34 @@ export default async function SpaceDetailPage({
   // writer authors too (direct → main, proposal → a PR). Readers cannot author.
   const canWebAuthor = canManage || myRole === "writer";
   const canPublishDirect = canManage; // owner/admin commit straight to main
-  // Full git tree (every committed file, not just projected docs) — uploads of
-  // any type show here. Doc-type files link to their rendered page via the
-  // deterministic slug; other files link to the raw route.
-  const spaceFiles = canWebAuthor || isAdmin || myMembership
+
+  // ⚠ ACCESS BOUNDARY (do not weaken). The full git tree — every committed file,
+  // INCLUDING non-doc raw uploads (images, PDFs, data) — is gated exactly as
+  // before: shown only to `canWebAuthor || isAdmin || myMembership`. Doc-type
+  // files link to their rendered page via the real projected slug; other files
+  // link to the raw route.
+  const canSeeRawFiles = canWebAuthor || isAdmin || myMembership;
+  const spaceFiles: FileEntry[] = canSeeRawFiles
     ? (await listSpaceFiles(space.slug)).map((f) => ({
         path: f.path,
         isDoc: f.isDoc,
         docSlug: f.docSlug, // the REAL projected slug (opaque id), not path-derived
       }))
     : [];
+
+  // The unified explorer (S3) feed. For the gated audience: the full tree above.
+  // For a viewer who can see the space but is OUTSIDE that gate, fall back to a
+  // DOCS-ONLY tree (the projected docs, exactly what `SpaceDocsTree` showed) —
+  // no raw non-doc file, and no unpublished doc for a non-admin (visibleDocs is
+  // already filtered). A synthetic `folder/slug.ext` path lets the same tree
+  // builder fold docs into their folders; the leaf still links by real slug.
+  const explorerFiles: FileEntry[] = canSeeRawFiles
+    ? spaceFiles
+    : visibleDocs.map((d) => ({
+        path: (d.path ? d.path + "/" : "") + d.slug + "." + d.format,
+        isDoc: true,
+        docSlug: d.slug,
+      }));
 
   // The setup-prompt TEMPLATE for members: a `<token>` placeholder (not a live
   // credential — the live token is handed out once at invite-accept time, or
@@ -122,37 +140,71 @@ export default async function SpaceDetailPage({
 
   const memberRows: MemberRow[] = members.map(toMemberRow);
 
-  return (
-    <div style={{ maxWidth: 820, margin: "0 auto", padding: "32px 20px 80px" }}>
-      <div style={{ marginBottom: 4 }}>
-        <Link href="/spaces" style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none" }}>
-          ← Spaces
-        </Link>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, fontFamily: "var(--font-mono)", margin: 0 }}>
-          {space.slug}
-        </h1>
-        {myRole && (
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              padding: "3px 10px",
-              borderRadius: 999,
-              border: "1px solid var(--hairline)",
-              background: "var(--surface-alt)",
-              color: "var(--muted)",
-            }}
-          >
-            your role: {myRole}
-          </span>
-        )}
-      </div>
-      <p style={{ margin: "0 0 24px", fontSize: 13, color: "var(--muted)" }}>
-        Owned by {memberRows.find((m) => m.isOwner)?.label ?? `user ${space.ownerUserId}`}.
-      </p>
+  // The Settings tab surfaces space config. Its read-only visibility / push-policy
+  // / mirror notes + members list + setup prompt are shown to every ADMIN or
+  // MEMBER today (WHO is unchanged — only WHERE moves), so the tab is present for
+  // them. A viewer who is NEITHER (only reachable if the membership gate above is
+  // ever relaxed for public spaces) has nothing to configure → NO Settings tab,
+  // never newly exposing anything.
+  const hasSettings = isAdmin || myMembership != null;
 
+  // ── Content tab: the file explorer + authoring actions + proposals (all act
+  //    on `main`). Server-rendered here, handed to the client tab shell. ─────────
+  const contentGroup = (
+    <>
+      {/* Author from the web (owner/admin direct; writer direct-or-proposal). */}
+      {canWebAuthor && (
+        <section style={{ marginBottom: 28 }}>
+          <h2 style={sectionLabel}>author from the web</h2>
+          <p style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--muted)" }}>
+            Every save is one git commit into this space&rsquo;s repo
+            {canPublishDirect
+              ? "."
+              : pushPolicy === "proposal"
+                ? " — your saves open a proposal for the owner to review."
+                : "."}
+          </p>
+          <div style={{ marginBottom: 16 }}>
+            <NewDocPanel
+              slug={space.slug}
+              pushPolicy={pushPolicy}
+              canPublishDirect={canPublishDirect}
+            />
+          </div>
+          <div>
+            <h3 style={{ ...sectionLabel, margin: "0 0 8px" }}>upload a file</h3>
+            <UploadPanel
+              slug={space.slug}
+              pushPolicy={pushPolicy}
+              canPublishDirect={canPublishDirect}
+            />
+          </div>
+        </section>
+      )}
+
+      {/* Proposals (PR review) — owner/admin act; a writer sees the list. They
+          act on `main`, so they live under Content. */}
+      {canSeeProposals && (pushPolicy === "proposal" || proposals.length > 0) && (
+        <section style={{ marginBottom: 28 }}>
+          <h2 style={sectionLabel}>proposals ({proposals.length})</h2>
+          <ProposalsPanel slug={space.slug} proposals={proposals} canDecide={canManage} />
+        </section>
+      )}
+
+      {/* Files — one unified collapsed tree of every committed file (folders
+          start collapsed). Doc leaves link to their rendered page; raw leaves to
+          the raw route. The list is boundary-gated upstream (explorerFiles). */}
+      <section>
+        <h2 style={sectionLabel}>files ({explorerFiles.length})</h2>
+        <SpaceFileExplorer slug={space.slug} files={explorerFiles} />
+      </section>
+    </>
+  );
+
+  // ── Settings tab: visibility, push policy, GitHub mirror, invites, push help,
+  //    setup prompt, members. Each panel keeps its OWN gate. ────────────────────
+  const settingsGroup = (
+    <>
       {/* Visibility */}
       <section style={{ marginBottom: 28 }}>
         <h2 style={sectionLabel}>visibility</h2>
@@ -208,14 +260,6 @@ export default async function SpaceDetailPage({
         )}
       </section>
 
-      {/* Proposals (PR review) — owner/admin act; a writer sees the list. */}
-      {canSeeProposals && (pushPolicy === "proposal" || proposals.length > 0) && (
-        <section style={{ marginBottom: 28 }}>
-          <h2 style={sectionLabel}>proposals ({proposals.length})</h2>
-          <ProposalsPanel slug={space.slug} proposals={proposals} canDecide={canManage} />
-        </section>
-      )}
-
       {/* Invites (owner/admin) */}
       {canManage && (
         <section style={{ marginBottom: 28 }}>
@@ -248,55 +292,41 @@ export default async function SpaceDetailPage({
           canManage={canManage}
         />
       </section>
+    </>
+  );
 
-      {/* Author from the web (owner/admin direct; writer direct-or-proposal). */}
-      {canWebAuthor && (
-        <section style={{ marginBottom: 28 }}>
-          <h2 style={sectionLabel}>author from the web</h2>
-          <p style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--muted)" }}>
-            Every save is one git commit into this space&rsquo;s repo
-            {canPublishDirect
-              ? "."
-              : pushPolicy === "proposal"
-                ? " — your saves open a proposal for the owner to review."
-                : "."}
-          </p>
-          <div style={{ marginBottom: 16 }}>
-            <NewDocPanel
-              slug={space.slug}
-              pushPolicy={pushPolicy}
-              canPublishDirect={canPublishDirect}
-            />
-          </div>
-          <div>
-            <h3 style={{ ...sectionLabel, margin: "0 0 8px" }}>upload a file</h3>
-            <UploadPanel
-              slug={space.slug}
-              pushPolicy={pushPolicy}
-              canPublishDirect={canPublishDirect}
-            />
-          </div>
-        </section>
-      )}
-
-      {/* Docs — collapsible folder tree by the doc `path` field. */}
-      <section style={{ marginBottom: 28 }}>
-        <h2 style={sectionLabel}>docs in this space ({visibleDocs.length})</h2>
-        {visibleDocs.length === 0 ? (
-          <p style={{ fontSize: 13, color: "var(--faint)", margin: 0 }}>
-            No docs yet. Create one above, push files to this space, and
-            they&rsquo;ll render here.
-          </p>
-        ) : (
-          <SpaceDocsTree docs={visibleDocs} />
+  return (
+    <div style={{ maxWidth: 820, margin: "0 auto", padding: "32px 20px 80px" }}>
+      <div style={{ marginBottom: 4 }}>
+        <Link href="/spaces" style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none" }}>
+          ← Spaces
+        </Link>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 600, fontFamily: "var(--font-mono)", margin: 0 }}>
+          {space.slug}
+        </h1>
+        {myRole && (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              padding: "3px 10px",
+              borderRadius: 999,
+              border: "1px solid var(--hairline)",
+              background: "var(--surface-alt)",
+              color: "var(--muted)",
+            }}
+          >
+            your role: {myRole}
+          </span>
         )}
-      </section>
+      </div>
+      <p style={{ margin: "0 0 24px", fontSize: 13, color: "var(--muted)" }}>
+        Owned by {memberRows.find((m) => m.isOwner)?.label ?? `user ${space.ownerUserId}`}.
+      </p>
 
-      {/* Files — the full git tree (uploads of any type included). */}
-      <section>
-        <h2 style={sectionLabel}>files ({spaceFiles.length})</h2>
-        <SpaceFilesView slug={space.slug} files={spaceFiles} />
-      </section>
+      <SpaceTabs content={contentGroup} settings={settingsGroup} hasSettings={hasSettings} />
     </div>
   );
 }
