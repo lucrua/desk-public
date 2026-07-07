@@ -16,6 +16,7 @@ import ShareComments from "./ShareComments";
 import SuggestEdit from "./SuggestEdit";
 import ReaderActions from "./ReaderActions";
 import DirectoryIndex from "./DirectoryIndex";
+import { MD_READER_WIDTH, HTML_READER_WIDTH } from "./reader-width";
 import type { CommentDTO } from "@/app/(hub)/docs/[slug]/comments-view-model";
 
 // Every request must resolve the share fresh — revocation / expiry / unpublish
@@ -153,7 +154,7 @@ export default async function SharePage({
     <>
       <div
         style={{
-          maxWidth: view.kind === "html" ? 1100 : 680,
+          maxWidth: view.kind === "html" ? HTML_READER_WIDTH : MD_READER_WIDTH,
           margin: "0 auto",
           borderTop: "1px solid var(--hairline)",
         }}
@@ -169,7 +170,7 @@ export default async function SharePage({
       <>
         <div
           style={{
-            maxWidth: 680,
+            maxWidth: MD_READER_WIDTH,
             margin: "0 auto",
             borderTop: "1px solid var(--hairline)",
           }}
@@ -235,7 +236,7 @@ function ExpiringBanner({ stamp, createdBy }: { stamp: string; createdBy: string
     >
       <div
         style={{
-          maxWidth: 680,
+          maxWidth: MD_READER_WIDTH,
           margin: "0 auto",
           padding: "10px 24px",
           display: "flex",
@@ -269,7 +270,7 @@ function MinimalHeader({
   updatedStamp,
   createdBy,
   actions,
-  maxWidth = 680,
+  maxWidth = MD_READER_WIDTH,
 }: {
   title: string;
   updatedStamp: string;
@@ -394,7 +395,7 @@ function MdDoc({
 
       <article
         style={{
-          maxWidth: 680,
+          maxWidth: MD_READER_WIDTH,
           margin: "0 auto",
           padding: "56px 24px 40px",
         }}
@@ -433,7 +434,7 @@ function HtmlArtifact({ view, comments }: { view: ShareView; comments?: React.Re
         updatedStamp={view.updatedStamp}
         createdBy={view.createdBy}
         actions={<ReaderActions token={view.token} source={view.content} />}
-        maxWidth={1100}
+        maxWidth={HTML_READER_WIDTH}
       />
 
       <div style={{ flex: 1, display: "flex" }}>
