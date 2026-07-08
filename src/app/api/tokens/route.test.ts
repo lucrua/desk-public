@@ -184,7 +184,7 @@ describe("token REST routes", () => {
       // resolveSpaceRole (the git transport's authz) accepts it as that role.
       const adminId = (await db.query.users.findFirst({ where: eq(schema.users.tokenName, "owner") }))!.id;
       const created = await createSpace("proj", adminId, "private", "test");
-      expect(created.ok).toBe(true);
+      if (!created.ok) throw new Error("setup");
 
       // Mint a token for the dev member (creates the dev-member user row).
       const mint = await mintPOST(req("/api/tokens", "POST", "member", { label: "git" }));
@@ -195,7 +195,7 @@ describe("token REST routes", () => {
       expect(memberRow).toBeTruthy();
 
       // Add the member as a reader on the space.
-      await setSpaceMemberRole("proj", memberRow!.id, "reader", "test");
+      await setSpaceMemberRole(created.space.id, memberRow!.id, "reader", "test");
 
       // The git transport authz primitive: owner segment = the admin owner's slug.
       const ownerSlug = "owner"; // tokenName-derived owner segment for the admin

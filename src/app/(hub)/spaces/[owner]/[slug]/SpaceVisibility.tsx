@@ -7,13 +7,16 @@ type Visibility = "private" | "unlisted" | "public";
 
 /**
  * Admin/owner visibility control: a <select> that PATCHes
- * /api/spaces/[slug] { visibility } and re-fetches. Visibility governs DISCOVERY
- * only — never the git ACL (membership-based), which the help line makes clear.
+ * /api/spaces/[owner]/[slug] { visibility } and re-fetches. Visibility governs
+ * DISCOVERY only — never the git ACL (membership-based), which the help line
+ * makes clear.
  */
 export default function SpaceVisibility({
+  owner,
   slug,
   current,
 }: {
+  owner: string;
   slug: string;
   current: Visibility;
 }) {
@@ -27,7 +30,7 @@ export default function SpaceVisibility({
     setSelected(next);
     if (next === current) return;
     try {
-      const res = await fetch(`/api/spaces/${slug}`, {
+      const res = await fetch(`/api/spaces/${owner}/${slug}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ visibility: next }),

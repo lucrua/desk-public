@@ -328,7 +328,7 @@ const publishDocTool = defineTool({
     if (!resolved.ok) return fail(resolved.error);
 
     // READ/existence boundary + space role (owner|writer|reader), FAIL-CLOSED.
-    const access = await resolveWebAuthorAccess(principal, resolved.space.slug);
+    const access = await resolveWebAuthorAccess(principal, resolved.space);
     if (!access.ok) {
       if (access.reason === "unknown-space") return fail(`Space '${args.space}' not found`);
       return fail("Forbidden — you may not write to this space");
@@ -353,8 +353,8 @@ const publishDocTool = defineTool({
         ? `# ${title}\n\n${args.content}`
         : args.content;
 
-    const baseMainTip = await liveMainTip(access.spaceSlug);
-    const result = await webAuthorCommit(access.spaceSlug, {
+    const baseMainTip = await liveMainTip(access.spaceId);
+    const result = await webAuthorCommit(access.spaceId, {
       role: access.role,
       identity: access.identity,
       writes: [{ path: repoPath, bytes: Buffer.from(content, "utf8") }],
@@ -759,7 +759,7 @@ const setSpaceMemberTool = defineTool({
     if (!resolved.ok) return fail(resolved.error);
     const space = resolved.space;
     if (!(await canManageSpace(principal, space))) return fail(ADMIN_ONLY);
-    const out = await setSpaceMemberRole(space.slug, args.user_id, args.role, principal.name);
+    const out = await setSpaceMemberRole(space.id, args.user_id, args.role, principal.name);
     if (!out.ok) return fail(out.error);
     return ok({ ok: true, role: out.role });
   },
@@ -800,7 +800,7 @@ const createInviteTool = defineTool({
     const expiresInDays = args.expires_in_days === 0 ? null : args.expires_in_days;
 
     const out = await createInvite({
-      spaceSlug: space.slug,
+      spaceId: space.id,
       role: args.role,
       createdByUserId,
       email: args.email,
@@ -847,13 +847,13 @@ const listProposalsTool = defineTool({
     if (!canSee) {
       const myUserId = await resolvePrincipalUserId(principal);
       if (myUserId != null) {
-        const members = (await listSpaceMembers(space.slug)) ?? [];
+        const members = (await listSpaceMembers(space.id)) ?? [];
         const myRole = members.find((m) => m.userId === myUserId)?.role ?? null;
         canSee = myRole === "owner" || myRole === "writer";
       }
     }
     if (!canSee) return fail("Not found");
-    const result = await listProposalsForSpace(space.slug);
+    const result = await listProposalsForSpace(space.id);
     if (!result.ok) return fail("Not found");
     return ok({ proposals: result.proposals });
   },
@@ -878,13 +878,13 @@ const decideProposalTool = defineTool({
     if (!(await canManageSpace(principal, space))) return fail("Not found");
 
     if (args.decision === "reject") {
-      const r = await rejectProposalForSpace(space.slug, args.name, principal.name);
+      const r = await rejectProposalForSpace(space.id, args.name, principal.name);
       if (!r.ok) return fail("Not found");
       return ok({ ok: true, decision: "reject", name: args.name });
     }
 
     const email = "email" in principal && principal.email ? principal.email : "desk@localhost";
-    const r = await acceptProposalForSpace(space.slug, args.name, {
+    const r = await acceptProposalForSpace(space.id, args.name, {
       name: principal.name,
       email,
     });

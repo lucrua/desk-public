@@ -24,10 +24,12 @@ export type ProposalRow = {
 };
 
 export default function ProposalsPanel({
+  owner,
   slug,
   proposals,
   canDecide,
 }: {
+  owner: string;
   slug: string;
   proposals: ProposalRow[];
   canDecide: boolean;
@@ -44,17 +46,19 @@ export default function ProposalsPanel({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {proposals.map((p) => (
-        <ProposalCard key={p.ref} slug={slug} proposal={p} canDecide={canDecide} />
+        <ProposalCard key={p.ref} owner={owner} slug={slug} proposal={p} canDecide={canDecide} />
       ))}
     </div>
   );
 }
 
 function ProposalCard({
+  owner,
   slug,
   proposal,
   canDecide,
 }: {
+  owner: string;
   slug: string;
   proposal: ProposalRow;
   canDecide: boolean;
@@ -83,7 +87,7 @@ function ProposalCard({
     setError(null);
     try {
       const res = await fetch(
-        `/api/spaces/${slug}/proposals/${nameEnc}/diff`,
+        `/api/spaces/${owner}/${slug}/proposals/${nameEnc}/diff`,
       );
       if (!res.ok) {
         setError(`Could not load diff (${res.status})`);
@@ -103,7 +107,7 @@ function ProposalCard({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/spaces/${slug}/proposals/${nameEnc}/${action}`, {
+      const res = await fetch(`/api/spaces/${owner}/${slug}/proposals/${nameEnc}/${action}`, {
         method: "POST",
       });
       if (!res.ok) {

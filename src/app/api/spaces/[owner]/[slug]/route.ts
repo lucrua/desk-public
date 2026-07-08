@@ -62,7 +62,7 @@ export async function PATCH(req: Request, { params }: RouteContext) {
     if (typeof b.push_policy !== "string" || !PUSH_POLICIES.includes(b.push_policy as SpacePushPolicy)) {
       return err(400, "Invalid push_policy — must be 'direct' or 'proposal'");
     }
-    const ok = await setSpacePushPolicy(slug, b.push_policy as SpacePushPolicy, principal.name);
+    const ok = await setSpacePushPolicy(space.id, b.push_policy as SpacePushPolicy, principal.name);
     if (!ok) return err(404, "Not found");
     return NextResponse.json({ ok: true, push_policy: b.push_policy }, { status: 200 });
   }
@@ -70,7 +70,7 @@ export async function PATCH(req: Request, { params }: RouteContext) {
   if (typeof b.visibility !== "string" || !VISIBILITIES.includes(b.visibility as SpaceVisibility)) {
     return err(400, "Invalid visibility — must be 'private', 'unlisted', or 'public'");
   }
-  const ok = await setSpaceVisibility(slug, b.visibility as SpaceVisibility, principal.name);
+  const ok = await setSpaceVisibility(space.id, b.visibility as SpaceVisibility, principal.name);
   if (!ok) return err(404, "Not found");
   return NextResponse.json({ ok: true, visibility: b.visibility }, { status: 200 });
 }

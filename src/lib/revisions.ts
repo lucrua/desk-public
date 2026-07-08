@@ -306,8 +306,8 @@ export async function acceptRevision(
   let committed = false;
   let failReason: "stale" | "error" | "mirrored" = "stale";
   for (let attempt = 0; attempt < 2; attempt++) {
-    const baseMainTip = await liveMainTip(space.slug);
-    const result = await webAuthorCommit(space.slug, {
+    const baseMainTip = await liveMainTip(space.id);
+    const result = await webAuthorCommit(space.id, {
       role: "owner",
       identity,
       writes: [{ path: doc.sourcePath, bytes: Buffer.from(rev.content, "utf8") }],

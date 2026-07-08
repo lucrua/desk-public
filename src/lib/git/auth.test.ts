@@ -61,8 +61,8 @@ describe("git auth — authorizeGit (THE matrix)", () => {
     const created = await createSpace("acme", ownerId, "private", "tester");
     if (!created.ok) throw new Error("setup");
     ownerSlug = ownerSlugForUser({ tokenName: "owner", email: null }, ownerId);
-    await setSpaceMemberRole("acme", writerId, "writer", "tester");
-    await setSpaceMemberRole("acme", readerId, "reader", "tester");
+    await setSpaceMemberRole(created.space.id, writerId, "writer", "tester");
+    await setSpaceMemberRole(created.space.id, readerId, "reader", "tester");
     ownerTok = (await mintPrincipalToken(ownerId, "t")).token;
     writerTok = (await mintPrincipalToken(writerId, "t")).token;
     readerTok = (await mintPrincipalToken(readerId, "t")).token;

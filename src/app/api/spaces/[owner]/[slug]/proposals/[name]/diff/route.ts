@@ -31,7 +31,7 @@ export async function GET(req: Request, { params }: RouteContext) {
   if (isStaff(principal)) {
     const myUserId = await resolvePrincipalUserId(principal);
     if (myUserId != null) {
-      const members = (await listSpaceMembers(slug)) ?? [];
+      const members = (await listSpaceMembers(space.id)) ?? [];
       myRole = members.find((m) => m.userId === myUserId)?.role ?? null;
     }
   }
@@ -39,7 +39,7 @@ export async function GET(req: Request, { params }: RouteContext) {
   if (!canSee) return notFound();
 
   const decoded = decodeURIComponent(name);
-  const result = await proposalDiffForSpace(slug, decoded);
+  const result = await proposalDiffForSpace(space.id, decoded);
   if (!result.ok) return notFound();
   return Response.json({
     base: result.diff.base,

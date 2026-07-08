@@ -42,7 +42,7 @@ async function gate(req: Request, owner: string, slug: string) {
       res: err(403, "Forbidden — only an admin or the space owner can manage this space"),
     };
   }
-  return { ok: true as const };
+  return { ok: true as const, spaceId: space.id };
 }
 
 export async function POST(req: Request, { params }: RouteContext) {
@@ -61,7 +61,7 @@ export async function POST(req: Request, { params }: RouteContext) {
     return err(400, "Missing or invalid privateKeyPem — must be a non-empty string");
   }
 
-  const ok = await setSpaceDeployKey(slug, b.privateKeyPem);
+  const ok = await setSpaceDeployKey(gated.spaceId, b.privateKeyPem);
   if (!ok) {
     return err(500, "DESK_TOKEN_KEY is not configured on this instance — cannot store a deploy key");
   }
@@ -73,6 +73,6 @@ export async function DELETE(req: Request, { params }: RouteContext) {
   const gated = await gate(req, owner, slug);
   if (!gated.ok) return gated.res;
 
-  await clearSpaceDeployKey(slug);
+  await clearSpaceDeployKey(gated.spaceId);
   return NextResponse.json({ ok: true, hasDeployKey: false });
 }

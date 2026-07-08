@@ -27,14 +27,11 @@ import { getPrincipal, isStaff } from "@/lib/auth";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
 import {
   getSpace,
-  getSpaceBySlug,
   listSpaceMembers,
   type SpaceRole,
 } from "@/lib/spaces";
 import { getDocBySlug, getLiveDocBySpacePath } from "@/lib/docs";
-import { refTip, DEFAULT_BRANCH } from "@/lib/git/repo";
-import { spaceRepoPath } from "@/lib/space-repo-path";
-import { webAuthorCommit, type WebAuthorIdentity } from "@/lib/web-author";
+import { webAuthorCommit, liveMainTip, type WebAuthorIdentity } from "@/lib/web-author";
 import { isSafeRepoPath } from "@/lib/git/web-commit";
 import { MAX_CONTENT_CHARS } from "@/lib/limits";
 import { normalizePath } from "@/lib/path";
@@ -59,7 +56,6 @@ function notFound() {
 type RouteContext = { params: Promise<{ owner: string; slug: string }> };
 
 type Resolved = {
-  spaceSlug: string;
   role: SpaceRole;
   identity: WebAuthorIdentity;
   spaceId: number;
@@ -78,7 +74,7 @@ async function gate(req: Request, owner: string, slug: string): Promise<Resolved
   const space = await getSpace(owner, slug);
   if (!space) return notFound();
 
-  const members = (await listSpaceMembers(slug)) ?? [];
+  const members = (await listSpaceMembers(space.id)) ?? [];
   const myUserId = await resolvePrincipalUserId(principal);
   const myMembership = myUserId != null ? members.find((m) => m.userId === myUserId) : undefined;
   const isAdmin = principal.kind === "admin";
@@ -110,19 +106,7 @@ async function gate(req: Request, owner: string, slug: string): Promise<Resolved
     handle,
   };
 
-  return { spaceSlug: slug, role, identity, spaceId: space.id };
-}
-
-/** The live `main` tip for the space's bare repo (null when never pushed). */
-async function liveMainTip(spaceSlug: string): Promise<string | null> {
-  const space = await getSpaceBySlug(spaceSlug);
-  if (!space) return null;
-  const repoPath = await spaceRepoPath(space);
-  try {
-    return await refTip(repoPath, DEFAULT_BRANCH);
-  } catch {
-    return null; // repo absent — a never-pushed space.
-  }
+  return { role, identity, spaceId: space.id };
 }
 
 /** Map a web-author failure reason to an HTTP response. forbidden ⇒ uniform
@@ -189,8 +173,8 @@ async function handleNewDoc(req: Request, g: Resolved): Promise<NextResponse> {
   const content =
     title && !/^#[ \t]+/m.test(b.content) ? `# ${title}\n\n${b.content}` : b.content;
 
-  const baseMainTip = await liveMainTip(g.spaceSlug);
-  const result = await webAuthorCommit(g.spaceSlug, {
+  const baseMainTip = await liveMainTip(g.spaceId);
+  const result = await webAuthorCommit(g.spaceId, {
     role: g.role,
     identity: g.identity,
     writes: [{ path: repoPath, bytes: Buffer.from(content, "utf8") }],
@@ -244,8 +228,8 @@ async function handleUpload(req: Request, g: Resolved): Promise<NextResponse> {
 
   const bytes = Buffer.from(await file.arrayBuffer());
 
-  const baseMainTip = await liveMainTip(g.spaceSlug);
-  const result = await webAuthorCommit(g.spaceSlug, {
+  const baseMainTip = await liveMainTip(g.spaceId);
+  const result = await webAuthorCommit(g.spaceId, {
     role: g.role,
     identity: g.identity,
     writes: [{ path: repoPath, bytes }],
@@ -305,7 +289,7 @@ export async function PUT(req: Request, { params }: RouteContext) {
       ? b.baseCommit
       : found.doc.currentCommit;
 
-  const result = await webAuthorCommit(g.spaceSlug, {
+  const result = await webAuthorCommit(g.spaceId, {
     role: g.role,
     identity: g.identity,
     writes: [{ path: repoPath, bytes: Buffer.from(b.content, "utf8") }],

@@ -43,7 +43,7 @@ export async function POST(req: Request, { params }: RouteContext) {
   const decoded = decodeURIComponent(name);
   const email =
     "email" in principal && principal.email ? principal.email : "desk@localhost";
-  const result = await acceptProposalForSpace(slug, decoded, {
+  const result = await acceptProposalForSpace(space.id, decoded, {
     name: principal.name,
     email,
   });

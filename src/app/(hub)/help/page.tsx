@@ -430,7 +430,7 @@ export default async function HelpPage() {
                   teammate with a Desk account see a doc, add them to the
                   doc&rsquo;s <strong>space</strong> as a member (or make the
                   space <strong>unlisted</strong> / <strong>public</strong>) — set
-                  on the space at <a href="#spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>/spaces/[slug]</a>. No link required.
+                  on the space at <a href="#spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>/spaces/[owner]/[slug]</a>. No link required.
                 </li>
                 <li style={{ marginBottom: 6 }}>
                   <strong>Outside Desk — a capability link.</strong> For people
@@ -872,7 +872,7 @@ export default async function HelpPage() {
                 <li style={{ marginBottom: 6 }}>
                   Review the <strong>view log</strong>. Space membership and
                   visibility are managed per space on{" "}
-                  <a href="#spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>/spaces/[slug]</a>, not here.
+                  <a href="#spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>/spaces/[owner]/[slug]</a>, not here.
                 </li>
               </ul>
             </Section>
@@ -896,7 +896,7 @@ export default async function HelpPage() {
                 (clone + push), or <strong>owner</strong>. Browse your spaces at{" "}
                 <a href="/spaces" style={{ color: "var(--accent)", textDecoration: "none" }}>/spaces</a> (open one to manage
                 its members and visibility). Programmatically: manage roles from{" "}
-                {code("POST /api/spaces/[slug]/members")} or the MCP{" "}
+                {code("POST /api/spaces/[owner]/[slug]/members")} or the MCP{" "}
                 {code("set_space_member")} tool; list spaces with{" "}
                 {code("list_spaces")} / {code("GET /api/spaces")}; create one with{" "}
                 {code("create_space")} / {code("POST /api/spaces")}.
@@ -944,7 +944,7 @@ git push desk HEAD:main`}
               <p style={pStyle}>
                 <strong>Recovery.</strong> The projection is always rebuildable
                 from the repo. If it drifts, re-project a space with{" "}
-                {code("POST /api/spaces/[slug]/reindex")} (admin only). The bare
+                {code("POST /api/spaces/[owner]/[slug]/reindex")} (admin only). The bare
                 repos under {code("DESK_DATA_DIR")} are the canon — back them up
                 off-box.
               </p>
@@ -1218,7 +1218,7 @@ desk sync`}
                   <ol style={{ ...pStyle, paddingLeft: 20, margin: "0 0 8px" }}>
                     <li style={{ marginBottom: 4 }}>
                       Open the doc&rsquo;s space at{" "}
-                      <InLink href="/spaces">/spaces/[slug]</InLink> and{" "}
+                      <InLink href="/spaces">/spaces/[owner]/[slug]</InLink> and{" "}
                       <strong>add their user</strong> as a member. Keep the space{" "}
                       {code("private")} so only members see it.
                     </li>

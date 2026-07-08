@@ -68,6 +68,14 @@ const TEST_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="; // 32-byte base
 const admin: Principal = { kind: "admin", name: "Admin" };
 const SPACE = "proof";
 
+/** Owner-namespace S5: the space-scoped service helpers now take a spaceId (a
+ * slug is no longer unique). This single-owner test resolves the id from the slug
+ * via the still-exported transitional `getSpaceBySlug`; an unknown slug → -1 so
+ * the fail-closed paths still exercise. */
+async function sid(slug: string = SPACE): Promise<number> {
+  return (await getSpaceBySlug(slug))?.id ?? -1;
+}
+
 function tool(name: string): ToolDef {
   const t = TOOLS.find((x) => x.name === name);
   if (!t) throw new Error(`no tool ${name}`);
@@ -103,20 +111,20 @@ describe("Slice 4b — source_mode default + config", () => {
 
   it("setMirrorConfig sets mode + url, and clears url with null", async () => {
     await createSpace(SPACE, ownerUserId, "private", "t");
-    const r = await setMirrorConfig(SPACE, { sourceMode: "mirrored", mirrorRemoteUrl: "https://github.com/o/r.git" });
+    const r = await setMirrorConfig(await sid(), { sourceMode: "mirrored", mirrorRemoteUrl: "https://github.com/o/r.git" });
     expect(r.ok).toBe(true);
     let space = await getSpaceBySlug(SPACE);
     expect(space!.sourceMode).toBe("mirrored");
     expect(space!.mirrorRemoteUrl).toBe("https://github.com/o/r.git");
 
-    await setMirrorConfig(SPACE, { mirrorRemoteUrl: null });
+    await setMirrorConfig(await sid(), { mirrorRemoteUrl: null });
     space = await getSpaceBySlug(SPACE);
     expect(space!.mirrorRemoteUrl).toBeNull();
     expect(space!.sourceMode).toBe("mirrored"); // unchanged
   });
 
   it("setMirrorConfig on an unknown space fails closed", async () => {
-    const r = await setMirrorConfig("no-such", { sourceMode: "mirrored" });
+    const r = await setMirrorConfig(await sid("no-such"), { sourceMode: "mirrored" });
     expect(r.ok).toBe(false);
   });
 });
@@ -169,16 +177,16 @@ describe("Slice 4b — credentials stored encrypted (write-only)", () => {
 
   it("a per-space deploy key is stored ENCRYPTED and never returned in cleartext", async () => {
     const PEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAAsecretkeymaterial\n-----END OPENSSH PRIVATE KEY-----";
-    expect(await setSpaceDeployKey(SPACE, PEM)).toBe(true);
-    expect(await hasSpaceDeployKey(SPACE)).toBe(true);
+    expect(await setSpaceDeployKey(await sid(), PEM)).toBe(true);
+    expect(await hasSpaceDeployKey(await sid())).toBe(true);
 
     const space = await getSpaceBySlug(SPACE);
     expect(space!.mirrorDeployKeyEnc).toBeTruthy();
     expect(space!.mirrorDeployKeyEnc).not.toContain("secretkeymaterial");
     expect(decryptToken(space!.mirrorDeployKeyEnc!)).toBe(PEM);
 
-    await clearSpaceDeployKey(SPACE);
-    expect(await hasSpaceDeployKey(SPACE)).toBe(false);
+    await clearSpaceDeployKey(await sid());
+    expect(await hasSpaceDeployKey(await sid())).toBe(false);
   });
 
   it("without DESK_TOKEN_KEY, setInstanceGithubPat REFUSES to store plaintext", async () => {
@@ -251,8 +259,8 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
    * Uses liveMainTip (null when the bare repo doesn't exist yet — the first
    * commit) so we never spawn git in a non-existent cwd. */
   async function commitMain(p: string, content: string): Promise<string> {
-    const baseMainTip = await liveMainTip(SPACE);
-    const r = await webAuthorCommit(SPACE, {
+    const baseMainTip = await liveMainTip(await sid());
+    const r = await webAuthorCommit(await sid(), {
       role: "owner",
       identity: ownerIdentity,
       writes: [{ path: p, bytes: Buffer.from(content, "utf8") }],
@@ -268,7 +276,7 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
     try {
       // Establish main + point the mirror at the fake remote.
       await commitMain("readme.md", "# Readme\n");
-      await setMirrorConfig(SPACE, { mirrorRemoteUrl: remote.path });
+      await setMirrorConfig(await sid(), { mirrorRemoteUrl: remote.path });
 
       // A main-advancing commit → the hook enqueues a mirror push.
       await commitMain("reports/q1.md", "# Q1\n\nrevenue up\n");
@@ -292,13 +300,13 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
     try {
       // main + a writer-authored proposal ref (proposal policy).
       await commitMain("readme.md", "hello\n");
-      await setMirrorConfig(SPACE, { mirrorRemoteUrl: remote.path });
+      await setMirrorConfig(await sid(), { mirrorRemoteUrl: remote.path });
       const { setSpacePushPolicy } = await import("@/lib/spaces");
-      await setSpacePushPolicy(SPACE, "proposal", "t");
+      await setSpacePushPolicy(await sid(), "proposal", "t");
 
       const writerId = await seedUser({ tokenName: "alex", displayName: "Alex", role: "member" });
       await seedSpaceMember(spaceId, writerId, "writer");
-      const prop = await webAuthorCommit(SPACE, {
+      const prop = await webAuthorCommit(await sid(), {
         role: "writer",
         identity: { name: "Alex", email: "alex@desk.localhost", handle: "alex" },
         writes: [{ path: "reports/draft.md", bytes: Buffer.from("# Draft\n\nwip\n", "utf8") }],
@@ -309,7 +317,7 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
       if (!prop.ok) return;
       const name = prop.proposalName!;
 
-      const acc = await acceptProposalForSpace(SPACE, name, { name: "Lucas", email: "l@x" });
+      const acc = await acceptProposalForSpace(await sid(), name, { name: "Lucas", email: "l@x" });
       expect(acc.ok).toBe(true);
       await settleMirror(spaceId);
 
@@ -328,7 +336,7 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
     const restoreRetry = __setMirrorRetryForTests({ maxAttempts: 2, baseMs: 5, maxMs: 10 });
     try {
       await commitMain("readme.md", "hi\n");
-      await setMirrorConfig(SPACE, { mirrorRemoteUrl: "/nonexistent/definitely-not-a-repo.git" });
+      await setMirrorConfig(await sid(), { mirrorRemoteUrl: "/nonexistent/definitely-not-a-repo.git" });
 
       // The triggering write SUCCEEDS despite the mirror being doomed.
       const before = await refTip(repoPath(), DEFAULT_BRANCH);
@@ -346,14 +354,14 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
   });
 
   it("mirrorNow gates: unknown / not-hosted / no-remote", async () => {
-    expect((await mirrorNow("no-such")).ok).toBe(false);
+    expect((await mirrorNow(await sid("no-such"))).ok).toBe(false);
     await createSpace("hosted-no-remote", ownerUserId, "private", "t");
-    const noRemote = await mirrorNow("hosted-no-remote");
+    const noRemote = await mirrorNow(await sid("hosted-no-remote"));
     expect(noRemote.ok).toBe(false);
     if (!noRemote.ok) expect(noRemote.reason).toBe("no-remote");
 
-    await setMirrorConfig(SPACE, { sourceMode: "mirrored", mirrorRemoteUrl: "/x.git" });
-    const mirrored = await mirrorNow(SPACE);
+    await setMirrorConfig(await sid(), { sourceMode: "mirrored", mirrorRemoteUrl: "/x.git" });
+    const mirrored = await mirrorNow(await sid());
     expect(mirrored.ok).toBe(false);
     if (!mirrored.ok) expect(mirrored.reason).toBe("not-hosted");
   });
@@ -362,7 +370,7 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
     const remote = await initFakeRemote();
     try {
       await commitMain("readme.md", "hi\n");
-      await setMirrorConfig(SPACE, { mirrorRemoteUrl: remote.path });
+      await setMirrorConfig(await sid(), { mirrorRemoteUrl: remote.path });
       // Also set a PAT — it must never be persisted anywhere on disk.
       await setInstanceGithubPat("github_pat_should_never_touch_config");
 
@@ -384,8 +392,8 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
   it("a deploy-key push cleans up its temp keyfile (no /tmp leak)", async () => {
     await commitMain("readme.md", "hi\n");
     // An ssh remote that will fail to connect — we only assert cleanup + no throw.
-    await setMirrorConfig(SPACE, { mirrorRemoteUrl: "git@github.invalid:o/r.git" });
-    await setSpaceDeployKey(SPACE, "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----");
+    await setMirrorConfig(await sid(), { mirrorRemoteUrl: "git@github.invalid:o/r.git" });
+    await setSpaceDeployKey(await sid(), "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----");
 
     const before = (await readdir(tmpdir())).filter((d) => d.startsWith("desk-mirror-key-")).length;
     const space = await getSpaceBySlug(SPACE);
@@ -400,11 +408,11 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
     beforeEach(async () => {
       // Establish a real doc while hosted, THEN flip to mirrored.
       await commitMain("os/guide.md", "# Guide\n\nbody\n");
-      await setMirrorConfig(SPACE, { sourceMode: "mirrored", mirrorRemoteUrl: "/gh.git" });
+      await setMirrorConfig(await sid(), { sourceMode: "mirrored", mirrorRemoteUrl: "/gh.git" });
     });
 
     it("webAuthorCommit is refused", async () => {
-      const r = await webAuthorCommit(SPACE, {
+      const r = await webAuthorCommit(await sid(), {
         role: "owner",
         identity: ownerIdentity,
         writes: [{ path: "os/guide.md", bytes: Buffer.from("# Guide\n\nEDIT\n", "utf8") }],
@@ -448,7 +456,7 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
     });
 
     it("proposal-accept is refused (before the proposal is even resolved)", async () => {
-      const acc = await acceptProposalForSpace(SPACE, "anything", { name: "Lucas", email: "l@x" });
+      const acc = await acceptProposalForSpace(await sid(), "anything", { name: "Lucas", email: "l@x" });
       expect(acc.ok).toBe(false);
       if (!acc.ok) expect(acc.reason).toBe("mirrored");
     });
@@ -456,7 +464,7 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — mirror-out + refusal (git)", () => {
     it("enqueueMirror is a no-op on a mirrored space (never mirrors out)", async () => {
       const remote = await initFakeRemote();
       try {
-        await setMirrorConfig(SPACE, { sourceMode: "mirrored", mirrorRemoteUrl: remote.path });
+        await setMirrorConfig(await sid(), { sourceMode: "mirrored", mirrorRemoteUrl: remote.path });
         enqueueMirror(spaceId);
         await settleMirror(spaceId);
         // The fake remote received nothing — a mirrored space never pushes out.

@@ -65,9 +65,10 @@ describe("git transport route — auth matrix + smart-HTTP", () => {
       .values({ tokenName: "coworker", displayName: "Coworker", role: "member", active: 1 })
       .returning({ id: schema.users.id });
 
-    await createSpace("acme", owner.id, "private", "tester");
-    await setSpaceMemberRole("acme", writer.id, "writer", "tester");
-    await setSpaceMemberRole("acme", reader.id, "reader", "tester");
+    const acme = await createSpace("acme", owner.id, "private", "tester");
+    if (!acme.ok) throw new Error("setup");
+    await setSpaceMemberRole(acme.space.id, writer.id, "writer", "tester");
+    await setSpaceMemberRole(acme.space.id, reader.id, "reader", "tester");
     ownerSlug = ownerSlugForUser({ tokenName: "lucas", email: null }, owner.id);
 
     ownerTok = (await mintPrincipalToken(owner.id, "t")).token;

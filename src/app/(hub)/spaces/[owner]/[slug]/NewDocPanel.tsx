@@ -5,20 +5,22 @@ import { useState, useTransition } from "react";
 
 /**
  * New-doc panel (Web-author W1.4). An owner/writer types a title + body and
- * POSTs to /api/spaces/[slug]/docs — the server turns the save into ONE git
- * commit and re-projects. Under `proposal` push-policy a non-owner writer's save
- * opens a `proposals/<handle>` ref instead of touching main; the panel reports
- * which happened.
+ * POSTs to /api/spaces/[owner]/[slug]/docs — the server turns the save into ONE
+ * git commit and re-projects. Under `proposal` push-policy a non-owner writer's
+ * save opens a `proposals/<handle>` ref instead of touching main; the panel
+ * reports which happened.
  *
  * Token-styled like MembersPanel (inline styles over CSS variables). The body is
  * a plain <textarea> — the CodeMirror editor stays on the dedicated edit page;
  * this is a fast "dump a note" affordance, the core of Lucas's use case.
  */
 export default function NewDocPanel({
+  owner,
   slug,
   pushPolicy,
   canPublishDirect,
 }: {
+  owner: string;
   slug: string;
   pushPolicy: "direct" | "proposal";
   /** True for owner/admin — direct commit to main. False → a writer under
@@ -44,7 +46,7 @@ export default function NewDocPanel({
     setDone(null);
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/spaces/${slug}/docs`, {
+      const res = await fetch(`/api/spaces/${owner}/${slug}/docs`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

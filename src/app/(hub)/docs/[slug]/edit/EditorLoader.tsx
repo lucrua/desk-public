@@ -21,6 +21,7 @@ export default function EditorLoader(props: {
   slug: string;
   initialContent: string;
   canPublishDirect: boolean;
+  spaceOwner?: string;
   spaceSlug?: string;
   baseCommit?: string | null;
 }) {

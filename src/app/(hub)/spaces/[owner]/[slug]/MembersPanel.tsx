@@ -42,14 +42,16 @@ const selectStyle = {
  * or the owner (`canManage`), an add-member control (pick a user + role) and per-
  * row role change / remove. The space owner row is never editable here
  * (ownership transfer is out of scope). All mutations POST
- * /api/spaces/[slug]/members.
+ * /api/spaces/[owner]/[slug]/members.
  */
 export default function MembersPanel({
+  owner,
   slug,
   members,
   userChoices,
   canManage,
 }: {
+  owner: string;
   slug: string;
   members: MemberRow[];
   userChoices: UserChoice[];
@@ -68,7 +70,7 @@ export default function MembersPanel({
   async function post(userId: number, role: "writer" | "reader" | null) {
     setError(null);
     try {
-      const res = await fetch(`/api/spaces/${slug}/members`, {
+      const res = await fetch(`/api/spaces/${owner}/${slug}/members`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ userId, role }),

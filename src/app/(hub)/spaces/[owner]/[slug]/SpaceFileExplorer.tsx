@@ -16,7 +16,7 @@ export type { FileEntry };
  * the flat committed-file list, **folders COLLAPSED by default** so a big space
  * opens tidy. A doc-type leaf (`isDoc` + a projected `docSlug`) links to its
  * rendered page (`/docs/<slug>`); any other leaf links to the raw route
- * (`/api/spaces/<slug>/raw/<path>`).
+ * (`/api/spaces/<owner>/<slug>/raw/<path>`).
  *
  * ⚠ ACCESS BOUNDARY: this island renders only what it is HANDED. The page feeds
  * it the full file list (incl. NON-doc raw files) ONLY to the gated audience
@@ -30,9 +30,11 @@ export type { FileEntry };
  * role="treeitem" rows.
  */
 export default function SpaceFileExplorer({
+  owner,
   slug,
   files,
 }: {
+  owner: string;
   slug: string;
   files: FileEntry[];
 }) {
@@ -68,6 +70,7 @@ export default function SpaceFileExplorer({
         <FileTreeRowView
           key={rowKey(row)}
           row={row}
+          owner={owner}
           slug={slug}
           first={i === 0}
           onToggle={toggle}
@@ -85,11 +88,13 @@ const INDENT = 16; // px per depth level
 
 function FileTreeRowView({
   row,
+  owner,
   slug,
   first,
   onToggle,
 }: {
   row: FileTreeRow;
+  owner: string;
   slug: string;
   first: boolean;
   onToggle: (path: string) => void;
@@ -155,7 +160,7 @@ function FileTreeRowView({
   const href =
     f.isDoc && f.docSlug
       ? `/docs/${f.docSlug}`
-      : `/api/spaces/${slug}/raw/${f.path}`;
+      : `/api/spaces/${owner}/${slug}/raw/${f.path}`;
   return (
     <li role="treeitem" aria-selected={false}>
       <Link

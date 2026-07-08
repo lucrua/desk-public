@@ -41,7 +41,7 @@ export async function GET(req: Request, { params }: RouteContext) {
   const { owner, slug } = await params;
   const space = await getSpace(owner, slug);
   if (!space) return err(404, "Not found");
-  const members = (await listSpaceMembers(slug)) ?? [];
+  const members = (await listSpaceMembers(space.id)) ?? [];
 
   // Admins see any space's members; a non-admin must be a member of THIS space.
   if (principal.kind !== "admin") {
@@ -81,7 +81,7 @@ export async function POST(req: Request, { params }: RouteContext) {
     return err(400, "Invalid role — must be 'writer', 'reader', or null");
   }
 
-  const out = await setSpaceMemberRole(slug, b.userId, role, principal.name);
+  const out = await setSpaceMemberRole(space.id, b.userId, role, principal.name);
   if (!out.ok) return err(400, out.error);
   return NextResponse.json({ ok: true, role: out.role }, { status: 200 });
 }

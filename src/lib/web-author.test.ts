@@ -54,8 +54,8 @@ describe("listSpaceFiles — real opaque slugs", () => {
   });
 
   it("gives a doc file its real projected slug, and a non-doc file none", async () => {
-    await importRepoAsSpace({ sourceDir: src, slug: "workspace", ownerUserId: ownerId, actorName: "t" });
-    const files = await listSpaceFiles("workspace");
+    const imported = await importRepoAsSpace({ sourceDir: src, slug: "workspace", ownerUserId: ownerId, actorName: "t" });
+    const files = await listSpaceFiles(imported.spaceId);
     const byPath = Object.fromEntries(files.map((f) => [f.path, f]));
 
     const [readmeDoc] = await db

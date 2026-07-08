@@ -83,7 +83,7 @@ type LiveDocRow = {
   spaceOwnerUserId: number;
 };
 
-type SpaceGroup = { spaceSlug: string; ownerUserId: number; docs: LiveDocRow[] };
+type SpaceGroup = { spaceId: number; spaceSlug: string; ownerUserId: number; docs: LiveDocRow[] };
 
 export async function materializeDbOnlyDocs(): Promise<MaterializeResult> {
   const result: MaterializeResult = {
@@ -124,7 +124,7 @@ export async function materializeDbOnlyDocs(): Promise<MaterializeResult> {
   for (const r of rows) {
     let g = bySpace.get(r.spaceId);
     if (!g) {
-      g = { spaceSlug: r.spaceSlug, ownerUserId: r.spaceOwnerUserId, docs: [] };
+      g = { spaceId: r.spaceId, spaceSlug: r.spaceSlug, ownerUserId: r.spaceOwnerUserId, docs: [] };
       bySpace.set(r.spaceId, g);
     }
     g.docs.push(r);
@@ -188,7 +188,7 @@ export async function materializeDbOnlyDocs(): Promise<MaterializeResult> {
       // Commit onto main (owner role → main regardless of push_policy), building
       // on the live tip we read. webAuthorCommit creates the repo if absent and
       // reindexes so the projection stays consistent.
-      const commit = await webAuthorCommit(g.spaceSlug, {
+      const commit = await webAuthorCommit(g.spaceId, {
         role: "owner",
         identity: MATERIALIZE_IDENTITY,
         writes,

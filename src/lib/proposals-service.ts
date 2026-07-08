@@ -1,9 +1,11 @@
 /**
- * Proposals service (space-slug level) — ties the git-plumbing proposals layer
+ * Proposals service (space-ID level) — ties the git-plumbing proposals layer
  * (lib/git/proposals.ts) to the space row, the projection reindex, and the event
- * log. The REST routes + MCP tools call THIS; it resolves the on-disk repo path
- * from the space's owner+slug, performs the read/accept/reject, and (on accept)
- * reindexes `main` so the merged content projects immediately.
+ * log. The REST routes + MCP tools call THIS with the ALREADY-RESOLVED `spaceId`
+ * (Owner-namespace S5 — never a bare slug, which is no longer unique); it loads
+ * the exact space by id, resolves the on-disk repo path from its owner+slug,
+ * performs the read/accept/reject, and (on accept) reindexes `main` so the merged
+ * content projects immediately.
  *
  * AUTH: this module does NOT make the access decision — every entry point
  * assumes the caller already gated to the right principal (list: owner/admin or
@@ -12,7 +14,7 @@
  * lib/git/repo.ts.)
  */
 import { db } from "@/db";
-import { getSpaceBySlug } from "@/lib/spaces";
+import { getSpaceById } from "@/lib/spaces";
 import { spaceRepoPath } from "@/lib/space-repo-path";
 import { repoExists } from "@/lib/git/repo";
 import {
@@ -41,10 +43,10 @@ export type ListProposalsResult =
  * not a security boundary on its own.
  */
 export async function listProposalsForSpace(
-  spaceSlug: string,
+  spaceId: number,
   opts: { pusherFilter?: string } = {},
 ): Promise<ListProposalsResult> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return { ok: false, reason: "unknown-space" };
   const repoPath = await spaceRepoPath(space);
   // A space whose bare repo has not been created yet (never pushed) has no
@@ -64,10 +66,10 @@ export type ProposalDiffResult =
 
 /** The review diff for one proposal (merge-base(main, proposal)..proposal). */
 export async function proposalDiffForSpace(
-  spaceSlug: string,
+  spaceId: number,
   name: string,
 ): Promise<ProposalDiffResult> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return { ok: false, reason: "unknown-space" };
   const repoPath = await spaceRepoPath(space);
   const diff = await proposalDiff(repoPath, name);
@@ -94,11 +96,11 @@ export type AcceptResult =
  * a non-ff merge) + the event actor.
  */
 export async function acceptProposalForSpace(
-  spaceSlug: string,
+  spaceId: number,
   name: string,
   acceptedBy: { name: string; email: string },
 ): Promise<AcceptResult> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return { ok: false, reason: "unknown-space" };
 
   // MIRRORED-MODE WRITE REFUSAL (Slice 4b). Accepting a proposal merges into
@@ -124,7 +126,9 @@ export async function acceptProposalForSpace(
   // is rebuildable) — log and continue, mirroring the push hot-path posture.
   let reindexed = 0;
   try {
-    const r = await reindexSpaceFull(spaceSlug, repoPath, acceptedBy.name);
+    const r = await reindexSpaceFull(space.slug, repoPath, acceptedBy.name, {
+      spaceId: space.id,
+    });
     reindexed = r.indexed;
   } catch (e) {
     console.error("[proposals] reindex after accept failed:", (e as Error)?.message);
@@ -158,11 +162,11 @@ export type RejectResult =
  * Reject a proposal: delete the ref (main untouched), emit `proposal.rejected`.
  */
 export async function rejectProposalForSpace(
-  spaceSlug: string,
+  spaceId: number,
   name: string,
   rejectedBy: string,
 ): Promise<RejectResult> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return { ok: false, reason: "unknown-space" };
   const repoPath = await spaceRepoPath(space);
   const outcome = await rejectProposal(repoPath, name);

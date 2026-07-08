@@ -5,16 +5,18 @@ import { useRef, useState, useTransition } from "react";
 
 /**
  * Upload panel (Web-author W1.4). An owner/writer drops a file; the panel POSTs
- * a multipart body to /api/spaces/[slug]/docs and the server commits the bytes
- * byte-for-byte into the space's git repo (truth-in-git). A markdown/HTML upload
- * projects + renders as a doc; any other file is served raw and appears in the
- * file view. Token-styled, matches MembersPanel/NewDocPanel.
+ * a multipart body to /api/spaces/[owner]/[slug]/docs and the server commits the
+ * bytes byte-for-byte into the space's git repo (truth-in-git). A markdown/HTML
+ * upload projects + renders as a doc; any other file is served raw and appears in
+ * the file view. Token-styled, matches MembersPanel/NewDocPanel.
  */
 export default function UploadPanel({
+  owner,
   slug,
   pushPolicy,
   canPublishDirect,
 }: {
+  owner: string;
   slug: string;
   pushPolicy: "direct" | "proposal";
   canPublishDirect: boolean;
@@ -41,7 +43,7 @@ export default function UploadPanel({
       const fd = new FormData();
       fd.set("file", file);
       if (folder.trim()) fd.set("path", folder.trim());
-      const res = await fetch(`/api/spaces/${slug}/docs`, { method: "POST", body: fd });
+      const res = await fetch(`/api/spaces/${owner}/${slug}/docs`, { method: "POST", body: fd });
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
         setError(data?.error ?? `Upload failed (${res.status})`);

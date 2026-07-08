@@ -104,7 +104,7 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — git-transport mirror hook (live)", () =
     const remote = await initFakeRemote();
     const work = await mkdtemp(path.join(tmpdir(), "desk-mirror-work-"));
     try {
-      await setMirrorConfig("e2e", { mirrorRemoteUrl: remote.path }); // hosted (default)
+      await setMirrorConfig(spaceId, { mirrorRemoteUrl: remote.path }); // hosted (default)
 
       const o = path.join(work, "o");
       await run("git", ["clone", repoUrl(ownerTok), o], { env: GIT_ENV });
@@ -131,7 +131,7 @@ describe.skipIf(!HAVE_GIT)("Slice 4b — git-transport mirror hook (live)", () =
     const work = await mkdtemp(path.join(tmpdir(), "desk-mirror-work2-"));
     try {
       // Mirrored: GitHub is canon; the transport push is how content ARRIVES.
-      await setMirrorConfig("e2e", { sourceMode: "mirrored", mirrorRemoteUrl: remote.path });
+      await setMirrorConfig(spaceId, { sourceMode: "mirrored", mirrorRemoteUrl: remote.path });
 
       const o = path.join(work, "o");
       await run("git", ["clone", repoUrl(ownerTok), o], { env: GIT_ENV });

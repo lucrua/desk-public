@@ -34,7 +34,7 @@ export async function POST(req: Request, { params }: RouteContext) {
     return err(403, "Forbidden — only an admin or the space owner can manage this space");
   }
 
-  const result = await mirrorNow(slug);
+  const result = await mirrorNow(space.id);
   if (!result.ok) {
     if (result.reason === "unknown-space") return err(404, "Not found");
     if (result.reason === "not-hosted") {

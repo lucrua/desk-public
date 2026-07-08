@@ -34,7 +34,7 @@ Mental model: **the filing cabinet is the git repos; Desk is the room** with eve
 
 ## 3. Spaces and the access model
 
-A **space** is an owned, access-controlled **git repo that Desk hosts.** It is the unit of write/clone access and the security boundary. Desk is **multi-tenant**: N owners × spaces, symmetric. Each principal's home = *"my spaces + what's shared with me."*
+A **space** is an owned, access-controlled **git repo that Desk hosts.** It is the unit of write/clone access and the security boundary. Desk is **multi-tenant**: N owners × spaces, symmetric — and this is now **real, not aspirational** (owner-namespace, 2026-07). A space is keyed by the composite **`(owner_user_id, slug)`**, not a globally-unique slug, so **two owners can each own `reports`**; each resolves independently at **`/spaces/<owner>/<slug>`** (web), `/api/spaces/<owner>/<slug>/*` (API), and `/api/git/<owner>/<slug>.git` (git), where `<owner>` is the owner's **stable `users.handle`** (URL-safe, unique, rename-safe — decoupled from the mutable email). Every space-scoped operation resolves the owner-qualified space to its **id** and keys off that id, so the two same-slug owners are fully isolated (a member of `alice/reports` never touches `bob/reports`), not merely fail-closed. Each principal's home = *"my spaces + what's shared with me."*
 
 Write and read have **different natural granularities**:
 

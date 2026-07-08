@@ -34,7 +34,7 @@ const DOCS_ONLY: FileEntry[] = [
 ];
 
 function html(files: FileEntry[]): string {
-  return renderToStaticMarkup(<SpaceFileExplorer slug="acme" files={files} />);
+  return renderToStaticMarkup(<SpaceFileExplorer owner="alice" slug="acme" files={files} />);
 }
 
 describe("SpaceFileExplorer", () => {
@@ -60,7 +60,7 @@ describe("SpaceFileExplorer", () => {
     const out = html(FULL);
     // Root-level leaves always render (no enclosing folder).
     expect(out).toContain('href="/docs/readme-slug"');
-    expect(out).toContain('href="/api/spaces/acme/raw/logo.png"');
+    expect(out).toContain('href="/api/spaces/alice/acme/raw/logo.png"');
     // Raw leaves carry the "raw" badge; doc leaves the "doc" badge.
     expect(out).toContain(">raw<");
     expect(out).toContain(">doc<");
@@ -69,7 +69,7 @@ describe("SpaceFileExplorer", () => {
   it("expands a folder on toggle, revealing its nested doc leaf", () => {
     render(
       <AppRouterContext.Provider value={stubRouter}>
-        <SpaceFileExplorer slug="acme" files={FULL} />
+        <SpaceFileExplorer owner="alice" slug="acme" files={FULL} />
       </AppRouterContext.Provider>,
     );
     // Collapsed: nested doc absent.

@@ -95,8 +95,8 @@ export async function POST(req: Request, { params }: RouteContext) {
     | Awaited<ReturnType<typeof webAuthorCommit>>
     | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const baseMainTip = await liveMainTip(space.slug);
-    const r = await webAuthorCommit(space.slug, {
+    const baseMainTip = await liveMainTip(space.id);
+    const r = await webAuthorCommit(space.id, {
       role: "owner",
       identity,
       writes: [{ path: sourcePath, bytes: Buffer.from(b.content, "utf8") }],

@@ -118,6 +118,7 @@ describe.skipIf(!HAVE_GIT)("POST /api/spaces/[slug]/mirror/now (git)", () => {
   let restore: () => Promise<void>;
   let ownerUserId: number;
   let ownerSlug: string;
+  let spaceId: number;
   const SPACE = "proof";
 
   beforeAll(async () => {
@@ -133,6 +134,7 @@ describe.skipIf(!HAVE_GIT)("POST /api/spaces/[slug]/mirror/now (git)", () => {
     ownerUserId = await seedUserObj({ tokenName: "lucas", displayName: "Lucas", role: "admin" });
     const created = await createSpace(SPACE, ownerUserId, "private", "t");
     if (!created.ok) throw new Error(created.error);
+    spaceId = created.space.id;
     ownerSlug = ownerSlugForUser({ tokenName: "lucas", email: null }, ownerUserId);
   });
 
@@ -146,8 +148,8 @@ describe.skipIf(!HAVE_GIT)("POST /api/spaces/[slug]/mirror/now (git)", () => {
   it("admin triggering 'Mirror now' actually pushes main to the configured remote", async () => {
     const remote = await initFakeRemote();
     try {
-      const baseMainTip = await liveMainTip(SPACE);
-      const commit = await webAuthorCommit(SPACE, {
+      const baseMainTip = await liveMainTip(spaceId);
+      const commit = await webAuthorCommit(spaceId, {
         role: "owner",
         identity: { name: "Lucas", email: "lucas@desk.localhost", handle: "lucas" },
         writes: [{ path: "readme.md", bytes: Buffer.from("# hi\n", "utf8") }],

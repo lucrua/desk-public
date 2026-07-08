@@ -89,12 +89,12 @@ pnpm dev
 
 ## Publishing — push to a space
 
-Publishing is `git push`. Get a **principal token** (the git credential), then push to the space's `main` branch:
+Publishing is `git push`. Get a **principal token** (the git credential), then push to the space's `main` branch. The URL is **owner-qualified**: `<owner>` is the owner's **stable `users.handle`** (URL-safe, unique — not the mutable email), and `<space>` is the slug. Slugs are unique **per owner**, so two owners can each host a `reports` and `/api/git/alice/reports.git` and `/api/git/bob/reports.git` are different repos, isolated by the write boundary.
 
 ```bash
 # Mint a principal token in the UI: /settings/tokens (shown ONCE) — or POST /api/tokens.
 
-# clone (reader, writer, or owner)
+# clone (reader, writer, or owner) — <owner> is the owner's handle, <space> its slug
 git clone https://git:<token>@<host>/api/git/<owner>/<space>.git
 
 # push from an existing repo (writer or owner)

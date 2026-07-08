@@ -67,6 +67,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
   let ownerSlug: string;
   let ownerTok: string;
   let writerTok: string;
+  let collabId: number;
 
   beforeAll(async () => {
     await resetDb();
@@ -82,8 +83,10 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
       .insert(schema.users)
       .values({ tokenName: "writer", displayName: "Writer", role: "member", active: 1 })
       .returning({ id: schema.users.id });
-    await createSpace("collab", owner.id, "private", "t");
-    await setSpaceMemberRole("collab", writer.id, "writer", "t");
+    const collab = await createSpace("collab", owner.id, "private", "t");
+    if (!collab.ok) throw new Error("setup");
+    collabId = collab.space.id;
+    await setSpaceMemberRole(collabId, writer.id, "writer", "t");
     ownerSlug = ownerSlugForUser({ tokenName: "owner", email: null }, owner.id);
     ownerTok = (await mintPrincipalToken(owner.id, "t")).token;
     writerTok = (await mintPrincipalToken(writer.id, "t")).token;
@@ -151,7 +154,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
 
   describe("direct mode (unchanged behaviour)", () => {
     beforeEach(async () => {
-      await setSpacePushPolicy("collab", "direct", "t");
+      await setSpacePushPolicy(collabId, "direct", "t");
     });
     it("a non-owner WRITER pushes main (allowed — exactly today's behaviour)", async () => {
       const ok = await pushSucceeds(writerTok, "main", "direct-writer.md", "# direct writer\n");
@@ -161,7 +164,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
 
   describe("proposal mode — the E2 write boundary", () => {
     beforeEach(async () => {
-      await setSpacePushPolicy("collab", "proposal", "t");
+      await setSpacePushPolicy(collabId, "proposal", "t");
     });
 
     it("a non-owner WRITER's push to main is REJECTED", async () => {
@@ -176,7 +179,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
     it("a non-owner WRITER's push to proposals/<name> SUCCEEDS", async () => {
       const ok = await pushSucceeds(writerTok, "proposals/feat-a", "feat-a.md", "# feature a\n");
       expect(ok).toBe(true);
-      const list = await listProposalsForSpace("collab");
+      const list = await listProposalsForSpace(collabId);
       expect(list.ok).toBe(true);
       if (list.ok) expect(list.proposals.some((p) => p.name === "feat-a")).toBe(true);
     });
@@ -194,7 +197,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
 
   describe("Accept / Reject round-trip", () => {
     beforeEach(async () => {
-      await setSpacePushPolicy("collab", "proposal", "t");
+      await setSpacePushPolicy(collabId, "proposal", "t");
     });
 
     it("ACCEPT (fast-forward): writer proposes off current main → merges, projects, ref deleted", async () => {
@@ -202,7 +205,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
       const ok = await pushSucceeds(writerTok, "proposals/ff", "ff-doc.md", "# FF Doc\nff body\n");
       expect(ok).toBe(true);
 
-      const accepted = await acceptProposalForSpace("collab", "ff", { name: "Owner", email: "o@x" });
+      const accepted = await acceptProposalForSpace(collabId, "ff", { name: "Owner", email: "o@x" });
       expect(accepted.ok).toBe(true);
       if (accepted.ok) {
         // ff-doc projected into the index.
@@ -211,7 +214,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
         expect(docs[0].title).toBe("FF Doc");
       }
       // The proposal ref is gone.
-      const list = await listProposalsForSpace("collab");
+      const list = await listProposalsForSpace(collabId);
       if (list.ok) expect(list.proposals.some((p) => p.name === "ff")).toBe(false);
       // main contains the file.
       const repoPath = bareRepoPath(ownerSlug, "collab");
@@ -227,7 +230,7 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
       const okMain = await pushSucceeds(ownerTok, "main", "from-owner.md", "# From Owner\n");
       expect(okMain).toBe(true);
 
-      const accepted = await acceptProposalForSpace("collab", "diverge", { name: "Owner", email: "o@x" });
+      const accepted = await acceptProposalForSpace(collabId, "diverge", { name: "Owner", email: "o@x" });
       expect(accepted.ok).toBe(true);
       if (accepted.ok) expect(accepted.merged).toBe("merge-commit");
 
@@ -249,10 +252,10 @@ describe.skipIf(!HAVE_GIT)("git transport — E2 push-policy + proposals e2e", (
       const repoPath = bareRepoPath(ownerSlug, "collab");
       const mainBefore = await refTip(repoPath, "main");
 
-      const rejected = await rejectProposalForSpace("collab", "nope", "Owner");
+      const rejected = await rejectProposalForSpace(collabId, "nope", "Owner");
       expect(rejected.ok).toBe(true);
 
-      const list = await listProposalsForSpace("collab");
+      const list = await listProposalsForSpace(collabId);
       if (list.ok) expect(list.proposals.some((p) => p.name === "nope")).toBe(false);
       const mainAfter = await refTip(repoPath, "main");
       expect(mainAfter).toBe(mainBefore); // main untouched

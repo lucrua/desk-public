@@ -67,10 +67,11 @@ describe("git transport — live clone/push round-trip", () => {
       .insert(schema.users)
       .values({ tokenName: "bob", displayName: "Bob", role: "admin", active: 1 })
       .returning({ id: schema.users.id });
-    await createSpace("e2e", owner.id, "private", "t");
-    // Set the reader membership while `e2e` is still a UNIQUE slug (the slug-based
-    // setSpaceMemberRole is transitional — it no-ops on an ambiguous slug, S3/D5).
-    await setSpaceMemberRole("e2e", reader.id, "reader", "t");
+    const lucasE2e = await createSpace("e2e", owner.id, "private", "t");
+    if (!lucasE2e.ok) throw new Error("setup");
+    // Owner-namespace S5: membership is set by the RESOLVED space id, so it targets
+    // lucas's `e2e` exactly even once bob owns a same-slug `e2e` below.
+    await setSpaceMemberRole(lucasE2e.space.id, reader.id, "reader", "t");
     // NOW add a SECOND owner's same-slug `e2e` space (the S3 isolation fixture).
     await createSpace("e2e", bob.id, "private", "t");
     ownerSlug = ownerSlugForUser({ tokenName: "lucas", email: null }, owner.id);

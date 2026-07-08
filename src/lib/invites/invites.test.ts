@@ -26,25 +26,27 @@ async function seedUser(
   return u.id;
 }
 
-/** Create a space owned by `ownerId` and return its slug. */
-async function seedSpace(slug: string, ownerId: number): Promise<string> {
+/** Create a space owned by `ownerId` and return its id (Owner-namespace S5:
+ * createInvite is keyed by spaceId, not a bare slug). */
+async function seedSpace(slug: string, ownerId: number): Promise<number> {
   const out = await createSpace(slug, ownerId, "private", "test");
   if (!out.ok) throw new Error(out.error);
-  return out.space.slug;
+  return out.space.id;
 }
 
 describe("invites service", () => {
   let ownerId: number;
+  let projId: number;
   beforeEach(async () => {
     await resetDb();
     ownerId = await seedUser("Owner", { email: "owner@desk.test", role: "admin" });
-    await seedSpace("proj", ownerId);
+    projId = await seedSpace("proj", ownerId);
   });
 
   describe("createInvite", () => {
     it("mints a writer invite with a one-time URL + token, default 1 use / 7d", async () => {
       const out = await createInvite({
-        spaceSlug: "proj",
+        spaceId: projId,
         role: "writer",
         createdByUserId: ownerId,
         actorName: "owner@desk.test",
@@ -67,7 +69,7 @@ describe("invites service", () => {
 
     it("honours maxUses, never-expire (null), and a target email", async () => {
       const out = await createInvite({
-        spaceSlug: "proj",
+        spaceId: projId,
         role: "reader",
         createdByUserId: ownerId,
         email: "Partner@Co.COM",
@@ -86,13 +88,13 @@ describe("invites service", () => {
     });
 
     it("rejects an unknown space + an invalid maxUses", async () => {
-      expect((await createInvite({ spaceSlug: "nope", role: "writer", createdByUserId: ownerId, actorName: "x" })).ok).toBe(false);
-      const bad = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, maxUses: 0, actorName: "x" });
+      expect((await createInvite({ spaceId: -1, role: "writer", createdByUserId: ownerId, actorName: "x" })).ok).toBe(false);
+      const bad = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, maxUses: 0, actorName: "x" });
       expect(bad.ok).toBe(false);
     });
 
     it("emits space.invite_created", async () => {
-      await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "owner@desk.test" });
+      await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "owner@desk.test" });
       const ev = await db.query.events.findFirst({
         where: eq(schema.events.kind, "space.invite_created"),
       });
@@ -103,7 +105,7 @@ describe("invites service", () => {
 
   describe("resolveInvite — uniform null on every failure", () => {
     it("resolves a live invite to its space + role", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "reader", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "reader", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       const r = await resolveInvite(out.token);
       expect(r).not.toBeNull();
@@ -118,7 +120,7 @@ describe("invites service", () => {
     });
 
     it("null for an expired invite", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       // Force-expire it.
       await db
@@ -129,14 +131,14 @@ describe("invites service", () => {
     });
 
     it("null for an over-maxUses invite", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, maxUses: 1, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, maxUses: 1, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       await db.update(schema.spaceInvites).set({ uses: 1 }).where(eq(schema.spaceInvites.id, out.id));
       expect(await resolveInvite(out.token)).toBeNull();
     });
 
     it("null for a revoked invite", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       await db.update(schema.spaceInvites).set({ revokedAt: new Date() }).where(eq(schema.spaceInvites.id, out.id));
       expect(await resolveInvite(out.token)).toBeNull();
@@ -145,7 +147,7 @@ describe("invites service", () => {
 
   describe("acceptInvite — NEW email", () => {
     it("creates the user + member + principal token, consumes one use", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
 
       const acc = await acceptInvite(out.token, "new@partner.test");
@@ -184,7 +186,7 @@ describe("invites service", () => {
       const existingId = await seedUser("Existing", { email: "exists@partner.test" });
       await db.insert(schema.userEmails).values({ userId: existingId, email: "exists@partner.test" });
 
-      const out = await createInvite({ spaceSlug: "proj", role: "reader", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "reader", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
 
       const acc = await acceptInvite(out.token, "exists@partner.test");
@@ -208,8 +210,8 @@ describe("invites service", () => {
       const existingId = await seedUser("Existing2", { email: "known@partner.test" });
       await db.insert(schema.userEmails).values({ userId: existingId, email: "known@partner.test" });
 
-      const i1 = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
-      const i2 = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const i1 = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const i2 = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
       if (!i1.ok || !i2.ok) throw new Error("mint failed");
 
       const accExisting = await acceptInvite(i1.token, "known@partner.test");
@@ -224,7 +226,7 @@ describe("invites service", () => {
 
     it("never downgrades an existing OWNER membership", async () => {
       // The space owner accepts their own space's reader invite — must stay owner.
-      const out = await createInvite({ spaceSlug: "proj", role: "reader", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "reader", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       // owner@desk.test is the space owner; ensure a user_emails row to resolve them.
       await db.insert(schema.userEmails).values({ userId: ownerId, email: "owner@desk.test" }).onConflictDoNothing();
@@ -248,7 +250,7 @@ describe("invites service", () => {
     });
 
     it("missing/blank email → invalid-email (no use consumed)", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       const acc = await acceptInvite(out.token, "   ");
       expect(acc.ok).toBe(false);
@@ -259,14 +261,14 @@ describe("invites service", () => {
     });
 
     it("expired invite → not-found", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       await db.update(schema.spaceInvites).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(schema.spaceInvites.id, out.id));
       expect((await acceptInvite(out.token, "x@y.test")).ok).toBe(false);
     });
 
     it("over-maxUses → not-found, and the cap is honoured across accepts", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "reader", createdByUserId: ownerId, maxUses: 1, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "reader", createdByUserId: ownerId, maxUses: 1, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       const first = await acceptInvite(out.token, "first@p.test");
       expect(first.ok).toBe(true);
@@ -275,7 +277,7 @@ describe("invites service", () => {
     });
 
     it("revoked invite → not-found", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       await db.update(schema.spaceInvites).set({ revokedAt: new Date() }).where(eq(schema.spaceInvites.id, out.id));
       expect((await acceptInvite(out.token, "x@y.test")).ok).toBe(false);
@@ -284,7 +286,7 @@ describe("invites service", () => {
 
   describe("the minted token AUTHORIZES a git op at the invited role", () => {
     it("a writer invite's token resolves to writer on the space (resolveSpaceRole)", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       const acc = await acceptInvite(out.token, "writer@partner.test");
       expect(acc.ok).toBe(true);
@@ -298,7 +300,7 @@ describe("invites service", () => {
     });
 
     it("a reader invite's token resolves to reader (clone-only)", async () => {
-      const out = await createInvite({ spaceSlug: "proj", role: "reader", createdByUserId: ownerId, actorName: "x" });
+      const out = await createInvite({ spaceId: projId, role: "reader", createdByUserId: ownerId, actorName: "x" });
       if (!out.ok) throw new Error("mint failed");
       const acc = await acceptInvite(out.token, "reader@partner.test");
       if (!acc.ok) throw new Error("accept failed");

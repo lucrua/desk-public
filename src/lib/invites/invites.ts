@@ -24,7 +24,7 @@ import { db } from "@/db";
 import { spaceInvites, spaceMembers, users, userEmails, principalTokens } from "@/db/schema";
 import { mintToken, hashToken } from "@/lib/tokens";
 import { emitEvent } from "@/lib/events";
-import { getSpaceBySlug, ownerSlugForSpace } from "@/lib/spaces";
+import { getSpaceById, ownerSlugForSpace } from "@/lib/spaces";
 import { assignUserHandle } from "@/lib/user-handle";
 
 const SHARE_BASE_URL = process.env.SHARE_BASE_URL ?? "http://localhost:3000";
@@ -63,7 +63,7 @@ function normalizeEmail(raw: string | null | undefined): string | undefined {
  *   - email: optional target (audit only — never restricts who may accept).
  */
 export async function createInvite(opts: {
-  spaceSlug: string;
+  spaceId: number;
   role: InviteRole;
   createdByUserId: number;
   email?: string | null;
@@ -78,7 +78,9 @@ export async function createInvite(opts: {
     return { ok: false, error: "invalid-max-uses" };
   }
 
-  const space = await getSpaceBySlug(opts.spaceSlug);
+  // Owner-namespace S5: the caller (route/MCP) resolved the owner-qualified space
+  // and passes its id — never a bare slug (no longer unique).
+  const space = await getSpaceById(opts.spaceId);
   if (!space) return { ok: false, error: "unknown-space" };
 
   const token = mintToken();
@@ -173,6 +175,7 @@ export async function resolveInvite(
 export type AcceptInviteResult = {
   token: string;       // raw principal token — appears exactly once
   userId: number;
+  spaceId: number;
   spaceSlug: string;
   ownerSlug: string;
   role: InviteRole;
@@ -337,6 +340,7 @@ export async function acceptInvite(
       ok: true,
       token: txOut.token,
       userId: txOut.userId,
+      spaceId: txOut.spaceRow.id,
       spaceSlug: txOut.spaceRow.slug,
       ownerSlug,
       role: txOut.role,

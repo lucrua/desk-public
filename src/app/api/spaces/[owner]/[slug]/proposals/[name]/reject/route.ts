@@ -31,7 +31,7 @@ export async function POST(req: Request, { params }: RouteContext) {
   }
 
   const decoded = decodeURIComponent(name);
-  const result = await rejectProposalForSpace(slug, decoded, principal.name);
+  const result = await rejectProposalForSpace(space.id, decoded, principal.name);
   if (!result.ok) return notFound();
   return Response.json({ ok: true });
 }

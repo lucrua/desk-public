@@ -25,15 +25,17 @@ const ctx = (token: string) => ({ params: Promise.resolve({ token }) });
 
 describe("POST /api/invite/[token]/accept", () => {
   let ownerId: number;
+  let projId: number;
   beforeEach(async () => {
     await resetDb();
     ownerId = await seedAdmin();
     const out = await createSpace("proj", ownerId, "private", "test");
     if (!out.ok) throw new Error("space create failed");
+    projId = out.space.id;
   });
 
   it("accepts a live invite → 200 with token + cloneUrl + setupPrompt", async () => {
-    const inv = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+    const inv = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
     if (!inv.ok) throw new Error("mint failed");
 
     const res = await acceptPOST(req(inv.token, { email: "new@partner.test" }), ctx(inv.token));
@@ -48,8 +50,8 @@ describe("POST /api/invite/[token]/accept", () => {
   });
 
   it("setup prompt push line follows push_policy=proposal", async () => {
-    await setSpacePushPolicy("proj", "proposal", "test");
-    const inv = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+    await setSpacePushPolicy(projId, "proposal", "test");
+    const inv = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
     if (!inv.ok) throw new Error("mint failed");
 
     const res = await acceptPOST(req(inv.token, { email: "p@partner.test" }), ctx(inv.token));
@@ -60,7 +62,7 @@ describe("POST /api/invite/[token]/accept", () => {
   });
 
   it("missing email → 400", async () => {
-    const inv = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+    const inv = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
     if (!inv.ok) throw new Error("mint failed");
     const res = await acceptPOST(req(inv.token, {}), ctx(inv.token));
     expect(res.status).toBe(400);
@@ -71,19 +73,19 @@ describe("POST /api/invite/[token]/accept", () => {
     expect((await acceptPOST(req("garbage", { email: "a@b.test" }), ctx("garbage"))).status).toBe(404);
 
     // expired
-    const exp = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+    const exp = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
     if (!exp.ok) throw new Error();
     await db.update(schema.spaceInvites).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(schema.spaceInvites.id, exp.id));
     expect((await acceptPOST(req(exp.token, { email: "a@b.test" }), ctx(exp.token))).status).toBe(404);
 
     // over-cap (maxUses 1, accept twice)
-    const cap = await createInvite({ spaceSlug: "proj", role: "reader", createdByUserId: ownerId, maxUses: 1, actorName: "x" });
+    const cap = await createInvite({ spaceId: projId, role: "reader", createdByUserId: ownerId, maxUses: 1, actorName: "x" });
     if (!cap.ok) throw new Error();
     expect((await acceptPOST(req(cap.token, { email: "first@b.test" }), ctx(cap.token))).status).toBe(200);
     expect((await acceptPOST(req(cap.token, { email: "second@b.test" }), ctx(cap.token))).status).toBe(404);
 
     // revoked
-    const rev = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+    const rev = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
     if (!rev.ok) throw new Error();
     await db.update(schema.spaceInvites).set({ revokedAt: new Date() }).where(eq(schema.spaceInvites.id, rev.id));
     expect((await acceptPOST(req(rev.token, { email: "a@b.test" }), ctx(rev.token))).status).toBe(404);
@@ -97,8 +99,8 @@ describe("POST /api/invite/[token]/accept", () => {
       .returning({ id: schema.users.id });
     await db.insert(schema.userEmails).values({ userId: existing.id, email: "known@partner.test" });
 
-    const i1 = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
-    const i2 = await createInvite({ spaceSlug: "proj", role: "writer", createdByUserId: ownerId, actorName: "x" });
+    const i1 = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
+    const i2 = await createInvite({ spaceId: projId, role: "writer", createdByUserId: ownerId, actorName: "x" });
     if (!i1.ok || !i2.ok) throw new Error();
 
     const rExisting = await acceptPOST(req(i1.token, { email: "known@partner.test" }), ctx(i1.token));

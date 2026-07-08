@@ -45,7 +45,7 @@ export async function GET(req: Request, { params }: RouteContext) {
   if (isStaff(principal)) {
     const myUserId = await resolvePrincipalUserId(principal);
     if (myUserId != null) {
-      const members = (await listSpaceMembers(slug)) ?? [];
+      const members = (await listSpaceMembers(space.id)) ?? [];
       myRole = members.find((m) => m.userId === myUserId)?.role ?? null;
     }
   }
@@ -55,7 +55,7 @@ export async function GET(req: Request, { params }: RouteContext) {
   const canSee = isAdmin || myRole === "owner" || myRole === "writer";
   if (!canSee) return notFound();
 
-  const result = await listProposalsForSpace(slug);
+  const result = await listProposalsForSpace(space.id);
   if (!result.ok) return notFound();
   return Response.json({ proposals: result.proposals });
 }

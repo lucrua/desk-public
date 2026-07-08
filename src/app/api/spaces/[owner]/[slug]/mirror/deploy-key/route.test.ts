@@ -5,6 +5,7 @@ import { db, schema } from "@/db";
 import { POST as deployKeyPOST, DELETE as deployKeyDELETE } from "./route";
 import { POST as createSpacePOST } from "../../../../route";
 import { hasSpaceDeployKey } from "@/lib/mirror";
+import { getSpaceBySlug } from "@/lib/spaces";
 import { getPrincipal } from "@/lib/auth";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
 
@@ -111,7 +112,7 @@ describe("POST/DELETE /api/spaces/[slug]/mirror/deploy-key", () => {
       const body = await res.json();
       expect(body).toEqual({ ok: true, hasDeployKey: true });
       expect(JSON.stringify(body)).not.toContain("secretkeymaterial");
-      expect(await hasSpaceDeployKey("p")).toBe(true);
+      expect(await hasSpaceDeployKey((await getSpaceBySlug("p"))!.id)).toBe(true);
 
       const space = await db.query.spaces.findFirst({ where: (s, { eq }) => eq(s.slug, "p") });
       expect(space?.mirrorDeployKeyEnc).toBeTruthy();
@@ -130,7 +131,7 @@ describe("POST/DELETE /api/spaces/[slug]/mirror/deploy-key", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toEqual({ ok: true, hasDeployKey: false });
-      expect(await hasSpaceDeployKey("p")).toBe(false);
+      expect(await hasSpaceDeployKey((await getSpaceBySlug("p"))!.id)).toBe(false);
     });
 
     it("empty privateKeyPem → 400", async () => {
@@ -148,7 +149,7 @@ describe("POST/DELETE /api/spaces/[slug]/mirror/deploy-key", () => {
         ctx("p"),
       );
       expect(res.status).toBe(500);
-      expect(await hasSpaceDeployKey("p")).toBe(false);
+      expect(await hasSpaceDeployKey((await getSpaceBySlug("p"))!.id)).toBe(false);
     });
   });
 });

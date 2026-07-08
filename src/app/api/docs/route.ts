@@ -6,6 +6,7 @@ import {
   liveMainTip,
   resolveWebAuthorAccess,
 } from "@/lib/web-author";
+import { resolveSpaceArg } from "@/lib/spaces";
 import { isSafeRepoPath } from "@/lib/git/web-commit";
 import { normalizePath } from "@/lib/path";
 
@@ -39,7 +40,7 @@ export async function POST(req: Request) {
   const { space, path, content, title, message } = b;
 
   if (!space || typeof space !== "string") {
-    return err(400, "Missing or invalid space (the space slug to publish into)");
+    return err(400, "Missing or invalid space (owner-qualified `handle/slug`, or a bare slug when unambiguous)");
   }
   if (!path || typeof path !== "string" || !isSafeRepoPath(path)) {
     return err(400, "Missing or invalid path (repo-relative file path; no leading slash, no '..')");
@@ -51,10 +52,16 @@ export async function POST(req: Request) {
     return err(413, `Content too large (${content.length} chars; max ${MAX_CONTENT_CHARS})`);
   }
 
+  // Owner-qualify the space arg (handle/slug, or an unambiguous bare slug — D6).
+  // Unknown/ambiguous resolves to the SAME 403 as no write authority (no leak).
+  const resolvedSpace = await resolveSpaceArg(space.trim());
+  if (!resolvedSpace.ok) {
+    return err(403, "Forbidden — you may not write to this space");
+  }
   // READ/existence boundary + resolve space role (owner|writer|reader), FAIL-CLOSED.
-  const access = await resolveWebAuthorAccess(principal, space.trim());
+  const access = await resolveWebAuthorAccess(principal, resolvedSpace.space);
   if (!access.ok) {
-    // A non-member / reader / unknown space → 403 (no space-write authority).
+    // A non-member / reader → 403 (no space-write authority).
     return err(403, "Forbidden — you may not write to this space");
   }
 
@@ -65,8 +72,8 @@ export async function POST(req: Request) {
   const finalContent =
     titleStr && isMd && !/^#[ \t]+/m.test(content) ? `# ${titleStr}\n\n${content}` : content;
 
-  const baseMainTip = await liveMainTip(access.spaceSlug);
-  const result = await webAuthorCommit(access.spaceSlug, {
+  const baseMainTip = await liveMainTip(access.spaceId);
+  const result = await webAuthorCommit(access.spaceId, {
     role: access.role,
     identity: access.identity,
     writes: [{ path, bytes: Buffer.from(finalContent, "utf8") }],

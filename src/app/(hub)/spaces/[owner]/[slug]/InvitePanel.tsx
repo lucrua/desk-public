@@ -5,9 +5,9 @@ import { useState } from "react";
 /**
  * Owner/admin invite panel (External Collaboration, E1): mint a capability-link
  * invite for this space at a writer|reader role. POSTs to
- * /api/spaces/[slug]/invites and shows the one-time invite URL (the raw token
- * appears once; we never re-fetch it). Send that URL to the external partner —
- * opening it lets them self-serve into the space.
+ * /api/spaces/[owner]/[slug]/invites and shows the one-time invite URL (the raw
+ * token appears once; we never re-fetch it). Send that URL to the external
+ * partner — opening it lets them self-serve into the space.
  */
 type Role = "writer" | "reader";
 
@@ -25,7 +25,7 @@ const codeBlock: React.CSSProperties = {
   margin: "10px 0 0",
 };
 
-export default function InvitePanel({ slug }: { slug: string }) {
+export default function InvitePanel({ owner, slug }: { owner: string; slug: string }) {
   const [role, setRole] = useState<Role>("writer");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +37,7 @@ export default function InvitePanel({ slug }: { slug: string }) {
     setInviteUrl(null);
     setPending(true);
     try {
-      const res = await fetch(`/api/spaces/${slug}/invites`, {
+      const res = await fetch(`/api/spaces/${owner}/${slug}/invites`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ role }),

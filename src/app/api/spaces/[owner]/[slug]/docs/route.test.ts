@@ -64,6 +64,7 @@ describe.skipIf(!HAVE_GIT)("web-author route authz matrix", () => {
   let prevDataDir: string | undefined;
   let ownerSlug: string;
   let ownerUserId: number;
+  let spaceId: number;
 
   beforeAll(async () => {
     await resetDb();
@@ -79,8 +80,10 @@ describe.skipIf(!HAVE_GIT)("web-author route authz matrix", () => {
     const owner = await db.query.users.findFirst({ where: eq(schema.users.id, ownerUserId) });
     ownerSlug = ownerSlugForUser(owner ?? null, ownerUserId);
 
-    await createSpace(SPACE, ownerUserId, "private", "t");
-    await setSpaceMemberRole(SPACE, memberUserId, "reader", "t");
+    const createdSpace = await createSpace(SPACE, ownerUserId, "private", "t");
+    if (!createdSpace.ok) throw new Error("setup");
+    spaceId = createdSpace.space.id;
+    await setSpaceMemberRole(spaceId, memberUserId, "reader", "t");
   });
 
   afterAll(async () => {
@@ -96,7 +99,7 @@ describe.skipIf(!HAVE_GIT)("web-author route authz matrix", () => {
   // ── 4: owner/admin commit to main projects ──────────────────────────────────
   describe("owner-direct (assertion 4)", () => {
     beforeEach(async () => {
-      await setSpacePushPolicy(SPACE, "direct", "t");
+      await setSpacePushPolicy(spaceId, "direct", "t");
     });
 
     it("admin/owner creates a doc on main → 200, projects, git has the commit", async () => {
@@ -125,11 +128,11 @@ describe.skipIf(!HAVE_GIT)("web-author route authz matrix", () => {
   // ── 1: reader / non-member / anonymous → uniform 404, no ref moved ──────────
   describe("read-only / unauthenticated (assertion 1)", () => {
     beforeEach(async () => {
-      await setSpacePushPolicy(SPACE, "direct", "t");
+      await setSpacePushPolicy(spaceId, "direct", "t");
     });
 
     it("a READER write → 404, main tip unchanged", async () => {
-      await setSpaceMemberRole(SPACE, await devMemberId(), "reader", "t");
+      await setSpaceMemberRole(spaceId, await devMemberId(), "reader", "t");
       const before = await refTip(repoPath(), "main");
       const res = await POST(
         reqJson("POST", "member", { title: "Reader Doc", content: "nope" }),
@@ -151,7 +154,7 @@ describe.skipIf(!HAVE_GIT)("web-author route authz matrix", () => {
 
     it("a NON-MEMBER (unknown user) write → 404", async () => {
       // Remove the dev-member from the space → they are a non-member now.
-      await setSpaceMemberRole(SPACE, await devMemberId(), null, "t");
+      await setSpaceMemberRole(spaceId, await devMemberId(), null, "t");
       const before = await refTip(repoPath(), "main");
       const res = await POST(
         reqJson("POST", "member", { title: "Outsider", content: "nope" }),
@@ -160,15 +163,15 @@ describe.skipIf(!HAVE_GIT)("web-author route authz matrix", () => {
       expect(res.status).toBe(404);
       expect(await refTip(repoPath(), "main")).toBe(before);
       // restore as reader for isolation
-      await setSpaceMemberRole(SPACE, await devMemberId(), "reader", "t");
+      await setSpaceMemberRole(spaceId, await devMemberId(), "reader", "t");
     });
   });
 
   // ── 2: writer under proposal policy → proposals/<handle>, main unchanged ────
   describe("writer under proposal policy (assertion 2)", () => {
     beforeEach(async () => {
-      await setSpacePushPolicy(SPACE, "proposal", "t");
-      await setSpaceMemberRole(SPACE, await devMemberId(), "writer", "t");
+      await setSpacePushPolicy(spaceId, "proposal", "t");
+      await setSpaceMemberRole(spaceId, await devMemberId(), "writer", "t");
     });
 
     it("a WRITER's create lands on proposals/<handle>, main UNCHANGED", async () => {
@@ -195,7 +198,7 @@ describe.skipIf(!HAVE_GIT)("web-author route authz matrix", () => {
     let baseCommit: string;
 
     beforeEach(async () => {
-      await setSpacePushPolicy(SPACE, "direct", "t");
+      await setSpacePushPolicy(spaceId, "direct", "t");
       // Seed a doc as owner to edit.
       const res = await POST(
         reqJson("POST", "admin", { title: "Edit Target", content: "v0" }),

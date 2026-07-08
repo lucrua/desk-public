@@ -83,7 +83,7 @@ describe("E2 proposals routes — authz boundary", () => {
       const adminId = await seedUser("admin1", "admin");
       await createSpace("s", adminId, "private", "t");
       const me = await devMemberUserId();
-      await setSpaceMemberRole("s", me, "writer", "t");
+      await setSpaceMemberRole((await getSpaceBySlug("s"))!.id, me, "writer", "t");
       await ensureRepo("s");
       const res = await listGET(req("/api/spaces/s/proposals", "GET", "member"), listCtx("s"));
       expect(res.status).toBe(200);
@@ -93,7 +93,7 @@ describe("E2 proposals routes — authz boundary", () => {
       const adminId = await seedUser("admin1", "admin");
       await createSpace("s", adminId, "private", "t");
       const me = await devMemberUserId();
-      await setSpaceMemberRole("s", me, "reader", "t");
+      await setSpaceMemberRole((await getSpaceBySlug("s"))!.id, me, "reader", "t");
       await ensureRepo("s");
       const res = await listGET(req("/api/spaces/s/proposals", "GET", "member"), listCtx("s"));
       expect(res.status).toBe(404);
@@ -126,7 +126,7 @@ describe("E2 proposals routes — authz boundary", () => {
       const adminId = await seedUser("admin1", "admin");
       await createSpace("s", adminId, "private", "t");
       const me = await devMemberUserId();
-      await setSpaceMemberRole("s", me, "writer", "t");
+      await setSpaceMemberRole((await getSpaceBySlug("s"))!.id, me, "writer", "t");
       await ensureRepo("s");
       const res = await acceptPOST(req("/api/spaces/s/proposals/x/accept", "POST", "member"), nameCtx("s", "x"));
       expect(res.status).toBe(404);
@@ -136,7 +136,7 @@ describe("E2 proposals routes — authz boundary", () => {
       const adminId = await seedUser("admin1", "admin");
       await createSpace("s", adminId, "private", "t");
       const me = await devMemberUserId();
-      await setSpaceMemberRole("s", me, "writer", "t");
+      await setSpaceMemberRole((await getSpaceBySlug("s"))!.id, me, "writer", "t");
       await ensureRepo("s");
       const res = await rejectPOST(req("/api/spaces/s/proposals/x/reject", "POST", "member"), nameCtx("s", "x"));
       expect(res.status).toBe(404);
@@ -146,7 +146,7 @@ describe("E2 proposals routes — authz boundary", () => {
       const adminId = await seedUser("admin1", "admin");
       await createSpace("s", adminId, "private", "t");
       const me = await devMemberUserId();
-      await setSpaceMemberRole("s", me, "reader", "t");
+      await setSpaceMemberRole((await getSpaceBySlug("s"))!.id, me, "reader", "t");
       await ensureRepo("s");
       const res = await acceptPOST(req("/api/spaces/s/proposals/x/accept", "POST", "member"), nameCtx("s", "x"));
       expect(res.status).toBe(404);

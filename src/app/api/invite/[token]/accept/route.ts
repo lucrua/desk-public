@@ -19,7 +19,7 @@
  */
 import { NextResponse } from "next/server";
 import { acceptInvite, gitHostBase } from "@/lib/invites/invites";
-import { getSpaceBySlug } from "@/lib/spaces";
+import { getSpaceById } from "@/lib/spaces";
 import {
   renderSetupPrompt,
   tokenCloneUrl,
@@ -55,7 +55,7 @@ export async function POST(req: Request, { params }: RouteContext) {
   }
 
   // Read the space's current push policy to switch the setup-prompt push line.
-  const space = await getSpaceBySlug(out.spaceSlug);
+  const space = await getSpaceById(out.spaceId);
   const pushPolicy = space?.pushPolicy ?? "direct";
 
   // Resolve the git transport host from the request's own headers (works in a

@@ -34,7 +34,6 @@ import { db } from "@/db";
 import { spaces, type MirrorState } from "@/db/schema";
 import { decryptToken, encryptToken } from "@/lib/crypto";
 import {
-  getSpaceBySlug,
   getSpaceById,
   type SpaceRow,
 } from "@/lib/spaces";
@@ -210,8 +209,8 @@ export type MirrorNowResult =
  * this is the service only). Returns the recorded mirror_state, or a reason when
  * the space can't mirror (unknown / not hosted / no remote URL).
  */
-export async function mirrorNow(spaceSlug: string): Promise<MirrorNowResult> {
-  const space = await getSpaceBySlug(spaceSlug);
+export async function mirrorNow(spaceId: number): Promise<MirrorNowResult> {
+  const space = await getSpaceById(spaceId);
   if (!space) return { ok: false, reason: "unknown-space" };
   if (space.sourceMode !== "hosted") return { ok: false, reason: "not-hosted" };
   if (!space.mirrorRemoteUrl) return { ok: false, reason: "no-remote" };
@@ -329,10 +328,10 @@ export type SetMirrorConfigResult =
  * provided fields change.
  */
 export async function setMirrorConfig(
-  spaceSlug: string,
+  spaceId: number,
   patch: { sourceMode?: "hosted" | "mirrored"; mirrorRemoteUrl?: string | null },
 ): Promise<SetMirrorConfigResult> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return { ok: false, reason: "unknown-space" };
   const set: Partial<typeof spaces.$inferInsert> = {};
   if (patch.sourceMode !== undefined) set.sourceMode = patch.sourceMode;
@@ -350,8 +349,8 @@ export async function setMirrorConfig(
  * at rest (WRITE-ONLY, never revealed). Returns false WITHOUT storing when
  * DESK_TOKEN_KEY is unset (never persist a plaintext key) or the space is unknown.
  */
-export async function setSpaceDeployKey(spaceSlug: string, privateKeyPem: string): Promise<boolean> {
-  const space = await getSpaceBySlug(spaceSlug);
+export async function setSpaceDeployKey(spaceId: number, privateKeyPem: string): Promise<boolean> {
+  const space = await getSpaceById(spaceId);
   if (!space) return false;
   const enc = encryptToken(privateKeyPem);
   if (enc === null) return false; // no key → refuse to store plaintext
@@ -360,15 +359,15 @@ export async function setSpaceDeployKey(spaceSlug: string, privateKeyPem: string
 }
 
 /** Clear a space's deploy-key override (falls back to the instance PAT). */
-export async function clearSpaceDeployKey(spaceSlug: string): Promise<boolean> {
-  const space = await getSpaceBySlug(spaceSlug);
+export async function clearSpaceDeployKey(spaceId: number): Promise<boolean> {
+  const space = await getSpaceById(spaceId);
   if (!space) return false;
   await db.update(spaces).set({ mirrorDeployKeyEnc: null }).where(eq(spaces.id, space.id));
   return true;
 }
 
 /** Whether a space has a deploy-key override (no reveal). */
-export async function hasSpaceDeployKey(spaceSlug: string): Promise<boolean> {
-  const space = await getSpaceBySlug(spaceSlug);
+export async function hasSpaceDeployKey(spaceId: number): Promise<boolean> {
+  const space = await getSpaceById(spaceId);
   return space != null && space.mirrorDeployKeyEnc != null;
 }

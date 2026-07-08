@@ -275,9 +275,18 @@ export async function reindexSpaceFull(
   spaceSlug: string,
   repoPath: string,
   actorName = "system",
+  opts: { spaceId?: number } = {},
 ): Promise<ReindexResult> {
-  const spaceRow = await db.query.spaces.findFirst({ where: eq(spaces.slug, spaceSlug) });
-  if (!spaceRow) throw new Error(`unknown space: ${spaceSlug}`);
+  // Owner-namespace S5: the slug is no longer globally unique. When the caller
+  // knows the exact space (the routes + proposals-service + import all do), it
+  // passes `spaceId` so we resolve the OWNER-CORRECT space by id; a slug lookup
+  // could otherwise pick a different same-slug owner's space. Legacy callers
+  // (single-owner recovery paths) still resolve by slug transitionally.
+  const spaceRow =
+    opts.spaceId != null
+      ? await db.query.spaces.findFirst({ where: eq(spaces.id, opts.spaceId) })
+      : await db.query.spaces.findFirst({ where: eq(spaces.slug, spaceSlug) });
+  if (!spaceRow) throw new Error(`unknown space: ${opts.spaceId ?? spaceSlug}`);
   const commit = await refTip(repoPath);
   if (!commit) return { indexed: 0, tombstoned: 0, skipped: 0, commit: null };
 

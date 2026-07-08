@@ -22,12 +22,19 @@ import { and, eq, isNull, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { docs, spaces, spaceMembers } from "@/db/schema";
 import type { ViewerScope } from "@/lib/docs";
+import { getSpaceById, ownerHandleForSpace } from "@/lib/spaces";
 import { spaceRepoPath } from "@/lib/space-repo-path";
 import { refTip, listTree, readBlob } from "@/lib/git/repo";
 import { parseCollectionConfig, COLLECTION_CONFIG_FILENAME, type CollectionConfig } from "./collection-config";
 import type { CatalogDoc } from "./projection";
 
 export type CatalogSpaceOption = {
+  /** Space id — the id-based key every catalog source fn resolves through
+   *  (Owner-namespace S5: a slug is no longer unique). */
+  id: number;
+  /** The owner's stable handle — the `<owner>` half of the owner-qualified
+   *  `?space=<owner>/<slug>` catalog param. */
+  owner: string;
   slug: string;
   visibility: "private" | "unlisted" | "public";
 };
@@ -53,7 +60,10 @@ async function visibleSpaceIds(scope: ViewerScope): Promise<number[] | null> {
   return [...ids];
 }
 
-/** The spaces a viewer may pick a catalog from (scope-filtered), slug-sorted. */
+/** The spaces a viewer may pick a catalog from (scope-filtered), owner-qualified
+ * and sorted by `owner/slug`. Each option carries the owner's stable handle so
+ * the picker can build the `?space=<owner>/<slug>` param (two owners may share a
+ * slug — the owner disambiguates). */
 export async function catalogSpaces(scope: ViewerScope): Promise<CatalogSpaceOption[]> {
   const ids = await visibleSpaceIds(scope);
   const rows =
@@ -62,9 +72,20 @@ export async function catalogSpaces(scope: ViewerScope): Promise<CatalogSpaceOpt
       : ids.length === 0
         ? []
         : await db.select().from(spaces).where(inArray(spaces.id, ids));
-  return rows
-    .map((s) => ({ slug: s.slug, visibility: s.visibility as CatalogSpaceOption["visibility"] }))
-    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const out: CatalogSpaceOption[] = [];
+  for (const s of rows) {
+    out.push({
+      id: s.id,
+      owner: await ownerHandleForSpace(s),
+      slug: s.slug,
+      visibility: s.visibility as CatalogSpaceOption["visibility"],
+    });
+  }
+  return out.sort((a, b) => {
+    const ao = `${a.owner}/${a.slug}`;
+    const bo = `${b.owner}/${b.slug}`;
+    return ao < bo ? -1 : ao > bo ? 1 : 0;
+  });
 }
 
 export type DirectoryOption = {
@@ -81,10 +102,10 @@ export type DirectoryOption = {
  * viewer can't see the space.
  */
 export async function directoriesInSpace(
-  spaceSlug: string,
+  spaceId: number,
   scope: ViewerScope,
 ): Promise<DirectoryOption[] | null> {
-  const space = await db.query.spaces.findFirst({ where: eq(spaces.slug, spaceSlug) });
+  const space = await getSpaceById(spaceId);
   if (!space) return null;
   const ids = await visibleSpaceIds(scope);
   if (ids !== null && !ids.includes(space.id)) return null;
@@ -122,11 +143,11 @@ export async function directoriesInSpace(
  * means the whole space. Returns null when the space is invisible/unknown.
  */
 export async function catalogDocs(
-  spaceSlug: string,
+  spaceId: number,
   prefix: string,
   scope: ViewerScope,
 ): Promise<CatalogDoc[] | null> {
-  const space = await db.query.spaces.findFirst({ where: eq(spaces.slug, spaceSlug) });
+  const space = await getSpaceById(spaceId);
   if (!space) return null;
   const ids = await visibleSpaceIds(scope);
   if (ids !== null && !ids.includes(space.id)) return null;
@@ -167,11 +188,11 @@ export async function catalogDocs(
  * never throws.
  */
 export async function readCollectionConfig(
-  spaceSlug: string,
+  spaceId: number,
   prefix: string,
 ): Promise<{ config: CollectionConfig; rawPath: string } | null> {
   try {
-    const space = await db.query.spaces.findFirst({ where: eq(spaces.slug, spaceSlug) });
+    const space = await getSpaceById(spaceId);
     if (!space) return null;
     const repoPath = await spaceRepoPath(space);
     const tip = await refTip(repoPath);

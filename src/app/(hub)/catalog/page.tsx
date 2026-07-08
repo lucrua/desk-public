@@ -37,20 +37,25 @@ export default async function CatalogPage({
   const scope = await scopeForPrincipal(principal);
 
   const spaces = await catalogSpaces(scope);
-  // Default the space to the chosen one, else the first visible space.
-  const space = (sp.space && spaces.find((s) => s.slug === sp.space)?.slug) ?? spaces[0]?.slug ?? null;
+  // Owner-namespace S5: the catalog `?space=` param is owner-qualified
+  // (`<owner>/<slug>`) — a slug alone is no longer unique. Default to the chosen
+  // one, else the first visible space. Resolution flows through the space id.
+  const qualify = (o: { owner: string; slug: string }) => `${o.owner}/${o.slug}`;
+  const picked =
+    (sp.space ? spaces.find((s) => qualify(s) === sp.space) : undefined) ?? spaces[0] ?? null;
+  const spaceParam = picked ? qualify(picked) : null;
   const dir = sp.dir ?? "";
 
   let dirs: Array<{ path: string; count: number }> = [];
   let projection = projectCatalog([], null);
   let schema: SchemaDTO = null;
 
-  if (space) {
-    dirs = (await directoriesInSpace(space, scope)) ?? [];
+  if (picked) {
+    dirs = (await directoriesInSpace(picked.id, scope)) ?? [];
     // Clamp the requested dir to one that exists (else root).
     const effectiveDir = dirs.some((d) => d.path === dir) ? dir : "";
-    const docs = (await catalogDocs(space, effectiveDir, scope)) ?? [];
-    const cfg = await readCollectionConfig(space, effectiveDir);
+    const docs = (await catalogDocs(picked.id, effectiveDir, scope)) ?? [];
+    const cfg = await readCollectionConfig(picked.id, effectiveDir);
     projection = projectCatalog(docs, cfg?.config ?? null);
     if (cfg && cfg.config.fields.length > 0) {
       schema = {
@@ -67,7 +72,7 @@ export default async function CatalogPage({
     <CatalogProjectionClient
       spaces={spaces}
       dirs={dirs}
-      space={space}
+      space={spaceParam}
       dir={dirs.some((d) => d.path === dir) ? dir : ""}
       projection={projection}
       schema={schema}

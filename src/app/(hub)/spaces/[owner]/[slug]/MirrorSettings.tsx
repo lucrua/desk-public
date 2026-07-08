@@ -49,12 +49,14 @@ function fmtStamp(iso: string | null): string {
  * `SpaceVisibility`'s island pattern.
  */
 export default function MirrorSettings({
+  owner,
   slug,
   sourceMode: initialSourceMode,
   mirrorRemoteUrl: initialRemoteUrl,
   mirrorState: initialState,
   hasDeployKey: initialHasDeployKey,
 }: {
+  owner: string;
   slug: string;
   sourceMode: SourceMode;
   mirrorRemoteUrl: string | null;
@@ -78,7 +80,7 @@ export default function MirrorSettings({
     setError(null);
     setSavingConfig(true);
     try {
-      const res = await fetch(`/api/spaces/${slug}/mirror`, {
+      const res = await fetch(`/api/spaces/${owner}/${slug}/mirror`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(patch),
@@ -104,7 +106,7 @@ export default function MirrorSettings({
     setError(null);
     setMirroring(true);
     try {
-      const res = await fetch(`/api/spaces/${slug}/mirror/now`, { method: "POST" });
+      const res = await fetch(`/api/spaces/${owner}/${slug}/mirror/now`, { method: "POST" });
       const data = (await res.json().catch(() => null)) as
         | { ok: true; state: MirrorState }
         | { error?: string }
@@ -127,7 +129,7 @@ export default function MirrorSettings({
     setError(null);
     setSavingKey(true);
     try {
-      const res = await fetch(`/api/spaces/${slug}/mirror/deploy-key`, {
+      const res = await fetch(`/api/spaces/${owner}/${slug}/mirror/deploy-key`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ privateKeyPem: deployKeyPem }),
@@ -150,7 +152,7 @@ export default function MirrorSettings({
     setError(null);
     setSavingKey(true);
     try {
-      const res = await fetch(`/api/spaces/${slug}/mirror/deploy-key`, { method: "DELETE" });
+      const res = await fetch(`/api/spaces/${owner}/${slug}/mirror/deploy-key`, { method: "DELETE" });
       if (!res.ok) {
         const d = (await res.json().catch(() => null)) as { error?: string } | null;
         setError(d?.error ?? `Clear failed (${res.status})`);

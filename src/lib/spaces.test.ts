@@ -342,8 +342,8 @@ describe("spaces service", () => {
       // owner-segment = the owner's tokenName-derived slug.
       ownerSlug = ownerSlugForUser({ tokenName: "owner", email: null }, ownerId);
 
-      await setSpaceMemberRole("acme", writerId, "writer", "tester");
-      await setSpaceMemberRole("acme", readerId, "reader", "tester");
+      await setSpaceMemberRole(created.space.id, writerId, "writer", "tester");
+      await setSpaceMemberRole(created.space.id, readerId, "reader", "tester");
       // stranger gets NO membership.
 
       ownerToken = (await mintPrincipalToken(ownerId, "owner-tok")).token;
@@ -415,21 +415,23 @@ describe("spaces service", () => {
   describe("setSpaceMemberRole", () => {
     it("guards the owner (cannot demote/remove the space owner)", async () => {
       const owner = await seedUser("Owner", { email: "o@x.com", role: "admin" });
-      await createSpace("g", owner, "private", "tester");
-      const out = await setSpaceMemberRole("g", owner, "reader", "tester");
+      const g = await createSpace("g", owner, "private", "tester");
+      if (!g.ok) throw new Error("setup");
+      const out = await setSpaceMemberRole(g.space.id, owner, "reader", "tester");
       expect(out.ok).toBe(false);
     });
 
     it("adds, updates, then removes a member role + emits events", async () => {
       const owner = await seedUser("Owner", { email: "o@x.com", role: "admin" });
       const u = await seedUser("U", { email: "u@x.com" });
-      await createSpace("g", owner, "private", "tester");
+      const g = await createSpace("g", owner, "private", "tester");
+      if (!g.ok) throw new Error("setup");
 
-      const add = await setSpaceMemberRole("g", u, "reader", "tester");
+      const add = await setSpaceMemberRole(g.space.id, u, "reader", "tester");
       expect(add.ok && add.role).toBe("reader");
-      const up = await setSpaceMemberRole("g", u, "writer", "tester");
+      const up = await setSpaceMemberRole(g.space.id, u, "writer", "tester");
       expect(up.ok && up.role).toBe("writer");
-      const rm = await setSpaceMemberRole("g", u, null, "tester");
+      const rm = await setSpaceMemberRole(g.space.id, u, null, "tester");
       expect(rm.ok && rm.role).toBe(null);
       const member = await db.query.spaceMembers.findFirst({
         where: eq(schema.spaceMembers.userId, u),
@@ -445,7 +447,7 @@ describe("spaces service", () => {
       const stranger = await seedUser("S", { email: "s@x.com" });
       const sp = await createSpace("only", owner, "private", "tester");
       if (!sp.ok) throw new Error("setup");
-      await setSpaceMemberRole("only", member, "reader", "tester");
+      await setSpaceMemberRole(sp.space.id, member, "reader", "tester");
 
       expect((await listSpaces({ isAdmin: true })).length).toBe(1);
       expect((await listSpaces({ isAdmin: false, userId: member })).length).toBe(1);

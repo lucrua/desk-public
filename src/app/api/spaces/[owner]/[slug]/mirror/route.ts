@@ -60,7 +60,7 @@ export async function PATCH(req: Request, { params }: RouteContext) {
     return err(400, "Invalid mirror_remote_url — must be a string or null");
   }
 
-  const result = await setMirrorConfig(slug, {
+  const result = await setMirrorConfig(space.id, {
     sourceMode: hasSourceMode ? (b.source_mode as "hosted" | "mirrored") : undefined,
     mirrorRemoteUrl: hasRemoteUrl ? (b.mirror_remote_url as string | null) : undefined,
   });

@@ -23,7 +23,7 @@ const label10 = {
   color: "var(--faint)",
 } as const;
 
-export type SpaceOption = { slug: string; visibility: string };
+export type SpaceOption = { owner: string; slug: string; visibility: string };
 export type DirOption = { path: string; count: number };
 
 /** A serializable description of the schema (or null for auto mode) the client
@@ -140,11 +140,16 @@ export default function CatalogProjectionClient({
           {spaces.length === 0 ? (
             <span style={{ fontSize: 13, color: "var(--faint)" }}>No spaces visible.</span>
           ) : (
-            spaces.map((s) => (
-              <PickLink key={s.slug} href={`/catalog?space=${encodeURIComponent(s.slug)}`} active={s.slug === space}>
-                {s.slug}
-              </PickLink>
-            ))
+            spaces.map((s) => {
+              // Owner-qualified param (`<owner>/<slug>`) — two owners may share a
+              // slug, so the picker disambiguates by owner (Owner-namespace S5).
+              const qual = `${s.owner}/${s.slug}`;
+              return (
+                <PickLink key={qual} href={`/catalog?space=${encodeURIComponent(qual)}`} active={qual === space}>
+                  {qual}
+                </PickLink>
+              );
+            })
           )}
         </Picker>
         {space && (

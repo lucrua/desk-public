@@ -64,7 +64,12 @@ export default async function SpaceDetailPage({
   const space = await getSpace(owner, slug);
   if (!space) notFound();
 
-  const members = (await listSpaceMembers(slug)) ?? [];
+  // The canonical `<owner>` segment for every owner-qualified link on this page
+  // (panels' API fetches + the git remote) is the owner's STABLE HANDLE
+  // (Owner-namespace S4/S5, D4) — the same segment this page resolved under.
+  const ownerHandle = await ownerHandleForSpace(space);
+
+  const members = (await listSpaceMembers(space.id)) ?? [];
   const myUserId = await resolvePrincipalUserId(principal);
   const myMembership = myUserId != null ? members.find((m) => m.userId === myUserId) : undefined;
   const myRole: SpaceRole | null = myMembership?.role ?? null;
@@ -79,15 +84,12 @@ export default async function SpaceDetailPage({
   // (canManage) may accept/reject. Fetch only when the caller may see them.
   const canSeeProposals = canManage || myRole === "writer";
   const proposals = canSeeProposals
-    ? (await listProposalsForSpace(slug).then((r) => (r.ok ? r.proposals : [])))
+    ? (await listProposalsForSpace(space.id).then((r) => (r.ok ? r.proposals : [])))
     : [];
 
-  const docs = (await docsInSpace(slug)) ?? [];
+  const docs = (await docsInSpace(space.id)) ?? [];
   // Unpublished docs are admin-only; everyone else sees the published set.
   const visibleDocs = docs.filter((d) => isAdmin || !d.unpublished);
-  // The canonical `<owner>` segment for the git remote is the owner's stable
-  // HANDLE (Owner-namespace S4, D4) — the same segment this page resolved under.
-  const ownerHandle = await ownerHandleForSpace(space);
   const repoUrl = gitRepoUrl(ownerHandle, space.slug, hdrs);
   const pushPolicy = (space.pushPolicy as "direct" | "proposal") ?? "direct";
 
@@ -103,7 +105,7 @@ export default async function SpaceDetailPage({
   // link to the raw route.
   const canSeeRawFiles = canWebAuthor || isAdmin || myMembership;
   const spaceFiles: FileEntry[] = canSeeRawFiles
-    ? (await listSpaceFiles(space.slug)).map((f) => ({
+    ? (await listSpaceFiles(space.id)).map((f) => ({
         path: f.path,
         isDoc: f.isDoc,
         docSlug: f.docSlug, // the REAL projected slug (opaque id), not path-derived
@@ -142,7 +144,7 @@ export default async function SpaceDetailPage({
 
   // GitHub mirror settings (Slice 4c) — owner/admin only; the "configured ✓"
   // flag is boolean-only (no reveal), same posture as the instance PAT.
-  const deployKeyConfigured = canManage ? await hasSpaceDeployKey(space.slug) : false;
+  const deployKeyConfigured = canManage ? await hasSpaceDeployKey(space.id) : false;
 
   const memberRows: MemberRow[] = members.map(toMemberRow);
 
@@ -172,6 +174,7 @@ export default async function SpaceDetailPage({
           </p>
           <div style={{ marginBottom: 16 }}>
             <NewDocPanel
+              owner={ownerHandle}
               slug={space.slug}
               pushPolicy={pushPolicy}
               canPublishDirect={canPublishDirect}
@@ -180,6 +183,7 @@ export default async function SpaceDetailPage({
           <div>
             <h3 style={{ ...sectionLabel, margin: "0 0 8px" }}>upload a file</h3>
             <UploadPanel
+              owner={ownerHandle}
               slug={space.slug}
               pushPolicy={pushPolicy}
               canPublishDirect={canPublishDirect}
@@ -193,7 +197,7 @@ export default async function SpaceDetailPage({
       {canSeeProposals && (pushPolicy === "proposal" || proposals.length > 0) && (
         <section style={{ marginBottom: 28 }}>
           <h2 style={sectionLabel}>proposals ({proposals.length})</h2>
-          <ProposalsPanel slug={space.slug} proposals={proposals} canDecide={canManage} />
+          <ProposalsPanel owner={ownerHandle} slug={space.slug} proposals={proposals} canDecide={canManage} />
         </section>
       )}
 
@@ -202,7 +206,7 @@ export default async function SpaceDetailPage({
           the raw route. The list is boundary-gated upstream (explorerFiles). */}
       <section>
         <h2 style={sectionLabel}>files ({explorerFiles.length})</h2>
-        <SpaceFileExplorer slug={space.slug} files={explorerFiles} />
+        <SpaceFileExplorer owner={ownerHandle} slug={space.slug} files={explorerFiles} />
       </section>
     </>
   );
@@ -215,7 +219,7 @@ export default async function SpaceDetailPage({
       <section style={{ marginBottom: 28 }}>
         <h2 style={sectionLabel}>visibility</h2>
         {canManage ? (
-          <SpaceVisibility slug={space.slug} current={space.visibility as "private" | "unlisted" | "public"} />
+          <SpaceVisibility owner={ownerHandle} slug={space.slug} current={space.visibility as "private" | "unlisted" | "public"} />
         ) : (
           <p style={{ fontSize: 13, color: "var(--muted)", margin: 0 }}>
             This space is <strong>{space.visibility}</strong>. Only an admin or the
@@ -228,7 +232,7 @@ export default async function SpaceDetailPage({
       <section style={{ marginBottom: 28 }}>
         <h2 style={sectionLabel}>push policy</h2>
         {canManage ? (
-          <PushPolicy slug={space.slug} current={pushPolicy} />
+          <PushPolicy owner={ownerHandle} slug={space.slug} current={pushPolicy} />
         ) : (
           <p style={{ fontSize: 13, color: "var(--muted)", margin: 0 }}>
             This space&rsquo;s push policy is <strong>{pushPolicy}</strong>.{" "}
@@ -247,6 +251,7 @@ export default async function SpaceDetailPage({
         <h2 style={sectionLabel}>github mirror</h2>
         {canManage ? (
           <MirrorSettings
+            owner={ownerHandle}
             slug={space.slug}
             sourceMode={space.sourceMode as "hosted" | "mirrored"}
             mirrorRemoteUrl={space.mirrorRemoteUrl}
@@ -270,7 +275,7 @@ export default async function SpaceDetailPage({
       {canManage && (
         <section style={{ marginBottom: 28 }}>
           <h2 style={sectionLabel}>invite an external partner</h2>
-          <InvitePanel slug={space.slug} />
+          <InvitePanel owner={ownerHandle} slug={space.slug} />
         </section>
       )}
 
@@ -292,6 +297,7 @@ export default async function SpaceDetailPage({
       <section style={{ marginBottom: 28 }}>
         <h2 style={sectionLabel}>members</h2>
         <MembersPanel
+          owner={ownerHandle}
           slug={space.slug}
           members={memberRows}
           userChoices={userChoices}

@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { getPrincipal, isStaff } from "@/lib/auth";
 import { getDocBySlug, scopeForPrincipal } from "@/lib/docs";
 import { canPublishVersion } from "@/lib/permissions";
-import { getSpaceById } from "@/lib/spaces";
+import { getSpaceById, ownerHandleForSpace } from "@/lib/spaces";
 import EditorLoader from "./EditorLoader";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +45,9 @@ export default async function DocEditPage({
   // was built from (docs.currentCommit) — the CAS base for a concurrent edit.
   const space = await getSpaceById(doc.spaceId);
   const spaceSlug = space?.slug;
+  // The owner-qualified `<owner>` segment for the web-author PUT (Owner-namespace
+  // S5) — the owner's stable handle. Both are needed for the git-truth save path.
+  const spaceOwner = space ? await ownerHandleForSpace(space) : undefined;
 
   return (
     <div style={{ maxWidth: 1060, margin: "0 auto", padding: "26px 20px 80px" }}>
@@ -85,6 +88,7 @@ export default async function DocEditPage({
         slug={doc.slug}
         initialContent={version.content}
         canPublishDirect={canPublishDirect}
+        spaceOwner={spaceOwner}
         spaceSlug={spaceSlug}
         baseCommit={doc.currentCommit}
       />

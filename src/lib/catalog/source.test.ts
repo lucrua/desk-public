@@ -56,7 +56,7 @@ async function seedSpaceWithFiles(
   slug: string,
   ownerId: number,
   files: Record<string, string>,
-): Promise<void> {
+): Promise<number> {
   const res = await createSpace(slug, ownerId, "private", "test");
   if (!res.ok) throw new Error(res.error);
   const space = await getSpaceBySlug(slug);
@@ -65,7 +65,9 @@ async function seedSpaceWithFiles(
   const repoPath = bareRepoPath(ownerSlug, slug);
   await initBareRepo(repoPath);
   await commitFiles(repoPath, files);
-  await reindexSpaceFull(slug, repoPath, "test");
+  await reindexSpaceFull(slug, repoPath, "test", { spaceId: space.id });
+  // Owner-namespace S5: the catalog source fns are id-based — return the id.
+  return space.id;
 }
 
 beforeEach(async () => {
@@ -105,7 +107,7 @@ default_view: board
 describe("catalog source — auto mode", () => {
   it("lists visible spaces, directories, and projects frontmatter", async () => {
     const owner = await seedUser({ email: "o@x.com", displayName: "Owner", role: "admin" });
-    await seedSpaceWithFiles("workspace", owner, {
+    const wsId = await seedSpaceWithFiles("workspace", owner, {
       "findings/f-001.md": FINDING("open", "high", "owner: lucas\n"),
       "findings/f-002.md": FINDING("shipped", "low"),
       "README.md": "# root doc, no frontmatter\n",
@@ -114,13 +116,13 @@ describe("catalog source — auto mode", () => {
     const spaces = await catalogSpaces(ADMIN);
     expect(spaces.map((s) => s.slug)).toContain("workspace");
 
-    const dirs = await directoriesInSpace("workspace", ADMIN);
+    const dirs = await directoriesInSpace(wsId, ADMIN);
     expect(dirs).not.toBeNull();
     expect(dirs!.map((d) => d.path)).toEqual(expect.arrayContaining(["", "findings"]));
     const findingsDir = dirs!.find((d) => d.path === "findings")!;
     expect(findingsDir.count).toBe(2);
 
-    const docs = (await catalogDocs("workspace", "findings", ADMIN))!;
+    const docs = (await catalogDocs(wsId, "findings", ADMIN))!;
     expect(docs).toHaveLength(2);
     const p = projectCatalog(docs, null);
     expect(p.mode).toBe("auto");
@@ -130,18 +132,18 @@ describe("catalog source — auto mode", () => {
 
   it("a directory with no docs → empty projection; a doc with no frontmatter is handled", async () => {
     const owner = await seedUser({ email: "o2@x.com", displayName: "Owner2", role: "admin" });
-    await seedSpaceWithFiles("ws2", owner, {
+    const ws2Id = await seedSpaceWithFiles("ws2", owner, {
       "notes/plain.md": "# just a heading, no frontmatter\n",
     });
     // The whole space root projects the one plain doc.
-    const rootDocs = (await catalogDocs("ws2", "", ADMIN))!;
+    const rootDocs = (await catalogDocs(ws2Id, "", ADMIN))!;
     const p = projectCatalog(rootDocs, null);
     expect(p.rows).toHaveLength(1);
     expect(p.rows[0].values).toEqual({});
     expect(p.fields).toEqual([]);
 
     // A non-existent prefix yields nothing.
-    const none = (await catalogDocs("ws2", "does-not-exist", ADMIN))!;
+    const none = (await catalogDocs(ws2Id, "does-not-exist", ADMIN))!;
     expect(none).toEqual([]);
   });
 });
@@ -149,7 +151,7 @@ describe("catalog source — auto mode", () => {
 describe("catalog source — schema mode (.desk.collection.yml from git)", () => {
   it("reads the config, renders declared views, validates, and flags drift", async () => {
     const owner = await seedUser({ email: "o3@x.com", displayName: "Owner3", role: "admin" });
-    await seedSpaceWithFiles("ws3", owner, {
+    const ws3Id = await seedSpaceWithFiles("ws3", owner, {
       "findings/.desk.collection.yml": COLLECTION_YML,
       "findings/f-001.md": FINDING("open", "high"),
       "findings/f-002.md": FINDING("shipped", "low"),
@@ -159,14 +161,14 @@ describe("catalog source — schema mode (.desk.collection.yml from git)", () =>
       "findings/f-004.md": `---\nseverity: low\n---\n\n# no status\n`,
     });
 
-    const cfg = await readCollectionConfig("ws3", "findings");
+    const cfg = await readCollectionConfig(ws3Id, "findings");
     expect(cfg).not.toBeNull();
     expect(cfg!.config.fields.map((f) => f.key)).toEqual(["status", "severity"]);
     expect(cfg!.config.views.map((v) => v.type)).toEqual(["board", "table", "list"]);
     expect(cfg!.config.defaultView).toBe("board");
     expect(cfg!.rawPath).toBe("findings/.desk.collection.yml");
 
-    const docs = (await catalogDocs("ws3", "findings", ADMIN))!;
+    const docs = (await catalogDocs(ws3Id, "findings", ADMIN))!;
     const p = projectCatalog(docs, cfg!.config);
     expect(p.mode).toBe("schema");
     // All 4 docs are projected — drift docs are NOT hidden.
@@ -179,10 +181,10 @@ describe("catalog source — schema mode (.desk.collection.yml from git)", () =>
 
   it("no .desk.collection.yml → null (auto mode)", async () => {
     const owner = await seedUser({ email: "o4@x.com", displayName: "Owner4", role: "admin" });
-    await seedSpaceWithFiles("ws4", owner, {
+    const ws4Id = await seedSpaceWithFiles("ws4", owner, {
       "findings/f-001.md": FINDING("open", "high"),
     });
-    const cfg = await readCollectionConfig("ws4", "findings");
+    const cfg = await readCollectionConfig(ws4Id, "findings");
     expect(cfg).toBeNull();
   });
 });
@@ -191,7 +193,7 @@ describe("catalog source — scope filtering", () => {
   it("a member who is not in a private space sees neither the space nor its docs", async () => {
     const owner = await seedUser({ email: "o5@x.com", displayName: "Owner5", role: "admin" });
     const outsiderId = await seedUser({ email: "out@x.com", displayName: "Outsider" });
-    await seedSpaceWithFiles("private-ws", owner, {
+    const privId = await seedSpaceWithFiles("private-ws", owner, {
       "findings/f-001.md": FINDING("open", "high"),
     });
     const outsider: ViewerScope = { viewer: "member", userId: outsiderId };
@@ -199,7 +201,7 @@ describe("catalog source — scope filtering", () => {
     const spaces = await catalogSpaces(outsider);
     expect(spaces.map((s) => s.slug)).not.toContain("private-ws");
     // Direct fetch is also denied (null), no existence leak.
-    expect(await directoriesInSpace("private-ws", outsider)).toBeNull();
-    expect(await catalogDocs("private-ws", "findings", outsider)).toBeNull();
+    expect(await directoriesInSpace(privId, outsider)).toBeNull();
+    expect(await catalogDocs(privId, "findings", outsider)).toBeNull();
   });
 });

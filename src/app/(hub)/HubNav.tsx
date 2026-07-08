@@ -9,7 +9,7 @@ import { usePathname } from "next/navigation";
  * is the supported way to know where the user is.
  *
  * A link is active when the pathname equals its href or sits beneath it
- * (`/spaces/market` keeps Spaces lit).
+ * (`/spaces/<owner>/<slug>` keeps Spaces lit).
  *
  * Spaces is the home (Gen-2 consolidation): docs are browsed inside a space.
  * There is no top-level "Docs" peer — the `/docs/[slug]` viewer is reached from

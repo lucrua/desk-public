@@ -24,16 +24,16 @@ describe("listProposalsForSpace — never-pushed space (no bare repo)", () => {
         .returning()
     )[0];
     const created = await createSpace("fresh", owner.id, "private", "t");
-    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error("setup");
 
     // No push has happened → the bare repo is absent on disk. This must NOT
     // throw `spawn git ENOENT`.
-    const res = await listProposalsForSpace("fresh");
+    const res = await listProposalsForSpace(created.space.id);
     expect(res).toEqual({ ok: true, proposals: [] });
   });
 
-  it("still reports unknown-space when the slug has no row", async () => {
-    const res = await listProposalsForSpace("does-not-exist");
+  it("still reports unknown-space when the space id has no row", async () => {
+    const res = await listProposalsForSpace(-1);
     expect(res).toEqual({ ok: false, reason: "unknown-space" });
   });
 });

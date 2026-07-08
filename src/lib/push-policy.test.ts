@@ -27,13 +27,14 @@ describe("space push_policy", () => {
   });
 
   it("setSpacePushPolicy flips it to 'proposal' (and back), emitting space.updated", async () => {
-    await createSpace("proj", ownerId, "private", "test");
+    const created = await createSpace("proj", ownerId, "private", "test");
+    if (!created.ok) throw new Error("setup");
 
-    const ok = await setSpacePushPolicy("proj", "proposal", "test");
+    const ok = await setSpacePushPolicy(created.space.id, "proposal", "test");
     expect(ok).toBe(true);
     expect((await getSpaceBySlug("proj"))?.pushPolicy).toBe("proposal");
 
-    await setSpacePushPolicy("proj", "direct", "test");
+    await setSpacePushPolicy(created.space.id, "direct", "test");
     expect((await getSpaceBySlug("proj"))?.pushPolicy).toBe("direct");
 
     const ev = await db.query.events.findFirst({
@@ -43,6 +44,6 @@ describe("space push_policy", () => {
   });
 
   it("returns false for an unknown space", async () => {
-    expect(await setSpacePushPolicy("nope", "proposal", "test")).toBe(false);
+    expect(await setSpacePushPolicy(-1, "proposal", "test")).toBe(false);
   });
 });

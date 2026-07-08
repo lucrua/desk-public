@@ -25,7 +25,7 @@ import { runGit, initBareRepo, DEFAULT_BRANCH } from "./repo";
 import { reindexSpaceFull } from "./indexer";
 import {
   createSpace,
-  getSpaceBySlug,
+  getSpaceByOwner,
   type SpaceVisibility,
 } from "@/lib/spaces";
 import { spaceRepoPath } from "@/lib/space-repo-path";
@@ -84,7 +84,10 @@ export async function importRepoAsSpace(opts: {
   const { sourceDir, slug, ownerUserId } = opts;
   const actorName = opts.actorName ?? "system";
 
-  if (await getSpaceBySlug(slug)) {
+  // Owner-namespace S5: the slug is unique PER OWNER — refuse only if THIS owner
+  // already owns it (a different owner's same-slug space is fine; createSpace
+  // enforces the per-owner uniqueness under a race).
+  if (await getSpaceByOwner(ownerUserId, slug)) {
     throw new Error(`space '${slug}' already exists — refusing to re-import`);
   }
 
@@ -141,7 +144,7 @@ export async function importRepoAsSpace(opts: {
   }
 
   // Backfill the projection.
-  const reindex = await reindexSpaceFull(slug, repoPath, actorName);
+  const reindex = await reindexSpaceFull(slug, repoPath, actorName, { spaceId: space.id });
 
   return {
     spaceSlug: slug,

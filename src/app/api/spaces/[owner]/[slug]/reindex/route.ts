@@ -36,7 +36,9 @@ export async function POST(req: Request, { params }: RouteContext) {
   const repoPath = await spaceRepoPath(space);
 
   try {
-    const result = await reindexSpaceFull(slug, repoPath, principal.name);
+    const result = await reindexSpaceFull(slug, repoPath, principal.name, {
+      spaceId: space.id,
+    });
     return NextResponse.json({ ok: true, ...result }, { status: 200 });
   } catch (e) {
     return err(500, `reindex failed: ${(e as Error)?.message}`);

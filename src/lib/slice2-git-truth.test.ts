@@ -169,7 +169,7 @@ describe.skipIf(!HAVE_GIT)("Slice 2 — git-truth write convergence", () => {
     it("a non-owner writer under `proposal` lands on proposals/*, not main", async () => {
       // Establish main first (owner/admin write).
       await run("publish_doc", admin, { space: SPACE, path: "readme.md", content: "hello" });
-      await setSpacePushPolicy(SPACE, "proposal", "t");
+      await setSpacePushPolicy(spaceId, "proposal", "t");
 
       // A member who is a WRITER of the space.
       const memberId = (await resolvePrincipalUserId(member))!;
@@ -194,7 +194,7 @@ describe.skipIf(!HAVE_GIT)("Slice 2 — git-truth write convergence", () => {
 
     it("the space owner still writes main directly under `proposal`", async () => {
       await run("publish_doc", admin, { space: SPACE, path: "readme.md", content: "hi" });
-      await setSpacePushPolicy(SPACE, "proposal", "t");
+      await setSpacePushPolicy(spaceId, "proposal", "t");
       const res = await run("publish_doc", admin, {
         space: SPACE,
         path: "owner.md",
@@ -276,7 +276,7 @@ describe.skipIf(!HAVE_GIT)("Slice 2 — git-truth write convergence", () => {
       await run("publish_doc", admin, { space: SPACE, path: "a.md", content: "one" });
       // main now has a tip; committing with baseMainTip=null asserts "main absent"
       // → the CAS loses → stale (never a silent overwrite).
-      const result = await webAuthorCommit(SPACE, {
+      const result = await webAuthorCommit(spaceId, {
         role: "owner",
         identity: { name: "x", email: "x@x", handle: "x" },
         writes: [{ path: "b.md", bytes: Buffer.from("two", "utf8") }],

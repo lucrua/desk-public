@@ -570,14 +570,18 @@ export async function listSpaces(opts: {
 /**
  * Set a space's listing visibility (private|unlisted|public). Governs DISCOVERY
  * only — never the git ACL (that is membership-based). Emits space.updated.
- * Returns false when the slug is unknown.
+ * Returns false when the space id is unknown.
+ *
+ * Owner-namespace S5: keyed by the resolved `spaceId` (the route already resolved
+ * the owner-qualified space), NOT a bare slug — a slug is no longer unique, so a
+ * slug lookup could touch a different same-slug owner's space.
  */
 export async function setSpaceVisibility(
-  spaceSlug: string,
+  spaceId: number,
   visibility: SpaceVisibility,
   actorName: string,
 ): Promise<boolean> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return false;
   await db.transaction(async (tx) => {
     await tx.update(spaces).set({ visibility }).where(eq(spaces.id, space.id));
@@ -595,14 +599,15 @@ export async function setSpaceVisibility(
  * mode (External Collaboration, E1). `direct` (the default) lets writers push
  * `main`; `proposal` routes non-owner writer pushes to `proposals/*` (ENFORCED in
  * E2 — E1 only stores the setting + reflects it in the setup prompt + UI). Emits
- * space.updated. Returns false when the slug is unknown.
+ * space.updated. Returns false when the space id is unknown. Owner-namespace S5:
+ * keyed by the resolved `spaceId`, not a bare slug.
  */
 export async function setSpacePushPolicy(
-  spaceSlug: string,
+  spaceId: number,
   pushPolicy: SpacePushPolicy,
   actorName: string,
 ): Promise<boolean> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return false;
   await db.transaction(async (tx) => {
     await tx.update(spaces).set({ pushPolicy }).where(eq(spaces.id, space.id));
@@ -626,10 +631,11 @@ export type SpaceDocItem = {
 /**
  * The LIVE docs projected into a space (for the space-detail page). Tombstoned
  * (deleted) docs are excluded; unpublished docs are flagged so the caller can
- * gate them to admins. Returns null when the slug is unknown.
+ * gate them to admins. Returns null when the space id is unknown. Owner-namespace
+ * S5: keyed by the resolved `spaceId`, not a bare slug.
  */
-export async function docsInSpace(spaceSlug: string): Promise<SpaceDocItem[] | null> {
-  const space = await getSpaceBySlug(spaceSlug);
+export async function docsInSpace(spaceId: number): Promise<SpaceDocItem[] | null> {
+  const space = await getSpaceById(spaceId);
   if (!space) return null;
   const rows = await db
     .select({
@@ -703,12 +709,12 @@ export type SetMemberRoleResult =
  * scope). Emits space.member_added / space.member_removed.
  */
 export async function setSpaceMemberRole(
-  spaceSlug: string,
+  spaceId: number,
   userId: number,
   role: SpaceRole | null,
   actorName: string,
 ): Promise<SetMemberRoleResult> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return { ok: false, error: "unknown space" };
   const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
   if (!target) return { ok: false, error: "unknown user" };
@@ -768,12 +774,14 @@ export type SpaceMemberItem = {
 /**
  * List the members of a space (owner first, then by role rank, then id). Joins
  * the user row so the UI can render a human label without a second round-trip.
- * Returns null when the space slug doesn't exist (so the caller can 404).
+ * Returns null when the space id doesn't exist (so the caller can 404).
+ * Owner-namespace S5: keyed by the resolved `spaceId`, not a bare slug — a slug
+ * is no longer unique, so a slug lookup could list a different owner's members.
  */
 export async function listSpaceMembers(
-  spaceSlug: string,
+  spaceId: number,
 ): Promise<SpaceMemberItem[] | null> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return null;
   const rows = await db
     .select({

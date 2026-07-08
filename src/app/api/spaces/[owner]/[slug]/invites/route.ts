@@ -77,7 +77,7 @@ export async function POST(req: Request, { params }: RouteContext) {
   }
 
   const out = await createInvite({
-    spaceSlug: slug,
+    spaceId: space.id,
     role: b.role as InviteRole,
     createdByUserId,
     email,

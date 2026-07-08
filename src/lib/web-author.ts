@@ -20,7 +20,7 @@ import { docs } from "@/db/schema";
 import { eq, and, isNull } from "drizzle-orm";
 import { isStaff, type Principal } from "@/lib/auth";
 import {
-  getSpaceBySlug,
+  getSpaceById,
   listSpaceMembers,
   type SpaceRole,
   type SpaceRow,
@@ -108,8 +108,8 @@ export type WebCommitResult =
  * pushed / has no repo on disk yet). The CAS base a web/agent commit builds on.
  * Non-throwing — an absent repo resolves to null (a first commit).
  */
-export async function liveMainTip(spaceSlug: string): Promise<string | null> {
-  const space = await getSpaceBySlug(spaceSlug);
+export async function liveMainTip(spaceId: number): Promise<string | null> {
+  const space = await getSpaceById(spaceId);
   if (!space) return null;
   const repoPath = await spaceRepoPath(space);
   try {
@@ -122,10 +122,11 @@ export async function liveMainTip(spaceSlug: string): Promise<string | null> {
 /**
  * The write access a principal has on a space, for a server-side commit that
  * BYPASSES the git transport (MCP `publish_doc`, `POST /api/docs`, the
- * space-scoped web-author route). Resolves the caller's SPACE ROLE + commit
+ * space-scoped web-author route). Takes the ALREADY-RESOLVED space (Owner-namespace
+ * S5: the caller owner-qualifies via `resolveSpaceArg`/`getSpace` first, so this
+ * never re-resolves a bare slug). Resolves the caller's SPACE ROLE + commit
  * IDENTITY the same way the space page + git transport do, FAIL-CLOSED:
  *   - a non-staff (anonymous) principal → forbidden;
- *   - an unknown space slug → unknown-space (callers map to a uniform 404/error);
  *   - a non-admin, non-member of the space → forbidden;
  *   - admin OR the space owner → role `owner` (unrestricted); else the
  *     membership role (writer/reader — a reader is rejected downstream by
@@ -140,13 +141,11 @@ export type WebAuthorAccess =
 
 export async function resolveWebAuthorAccess(
   principal: Principal,
-  spaceSlug: string,
+  space: SpaceRow,
 ): Promise<WebAuthorAccess> {
   if (!isStaff(principal)) return { ok: false, reason: "forbidden" };
-  const space = await getSpaceBySlug(spaceSlug);
-  if (!space) return { ok: false, reason: "unknown-space" };
 
-  const members = (await listSpaceMembers(spaceSlug)) ?? [];
+  const members = (await listSpaceMembers(space.id)) ?? [];
   const myUserId = await resolvePrincipalUserId(principal);
   const myMembership =
     myUserId != null ? members.find((m) => m.userId === myUserId) : undefined;
@@ -177,7 +176,7 @@ export async function resolveWebAuthorAccess(
     handle,
   };
 
-  return { ok: true, role, identity, spaceId: space.id, spaceSlug };
+  return { ok: true, role, identity, spaceId: space.id, spaceSlug: space.slug };
 }
 
 export type SpaceFileEntry = {
@@ -202,8 +201,8 @@ export type SpaceFileEntry = {
  * never-pushed space. Pure read — the CALLER gates who may see the space (same
  * read boundary as the space page).
  */
-export async function listSpaceFiles(spaceSlug: string): Promise<SpaceFileEntry[]> {
-  const space = await getSpaceBySlug(spaceSlug);
+export async function listSpaceFiles(spaceId: number): Promise<SpaceFileEntry[]> {
+  const space = await getSpaceById(spaceId);
   if (!space) return [];
   const repoPath = await spaceRepoPath(space);
   if (!(await repoExists(repoPath))) return [];
@@ -288,10 +287,10 @@ function sanitizeHandle(raw: string): string {
  * boundary (push-policy) and does the git work + projection.
  */
 export async function webAuthorCommit(
-  spaceSlug: string,
+  spaceId: number,
   req: WebCommitRequest,
 ): Promise<WebCommitResult> {
-  const space = await getSpaceBySlug(spaceSlug);
+  const space = await getSpaceById(spaceId);
   if (!space) return { ok: false, reason: "unknown-space" };
 
   // MIRRORED-MODE WRITE REFUSAL (Slice 4b). A `mirrored` space's canon is GitHub;
@@ -353,7 +352,7 @@ export async function webAuthorCommit(
   let reindexed = 0;
   if (target.target === "main") {
     try {
-      const r = await reindexSpaceByDisk(spaceSlug, repoPath, {
+      const r = await reindexSpaceByDisk(space.slug, repoPath, {
         fromSha: expectedTip,
         toSha: commit.newSha,
         actorName: req.identity.name,

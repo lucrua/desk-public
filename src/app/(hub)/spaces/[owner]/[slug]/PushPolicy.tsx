@@ -7,15 +7,17 @@ type Policy = "direct" | "proposal";
 
 /**
  * Admin/owner push-policy control (External Collaboration, E1): a <select> that
- * PATCHes /api/spaces/[slug] { push_policy } and re-fetches. `direct` lets
- * writers push the hosted `main` branch; `proposal` routes a non-owner writer's
- * pushes to `proposals/*` (ENFORCED in E2 — here it only changes the setting,
- * which the setup prompt + push help reflect).
+ * PATCHes /api/spaces/[owner]/[slug] { push_policy } and re-fetches. `direct`
+ * lets writers push the hosted `main` branch; `proposal` routes a non-owner
+ * writer's pushes to `proposals/*` (ENFORCED in E2 — here it only changes the
+ * setting, which the setup prompt + push help reflect).
  */
 export default function PushPolicy({
+  owner,
   slug,
   current,
 }: {
+  owner: string;
   slug: string;
   current: Policy;
 }) {
@@ -29,7 +31,7 @@ export default function PushPolicy({
     setSelected(next);
     if (next === current) return;
     try {
-      const res = await fetch(`/api/spaces/${slug}`, {
+      const res = await fetch(`/api/spaces/${owner}/${slug}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ push_policy: next }),
