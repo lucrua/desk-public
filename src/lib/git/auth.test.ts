@@ -125,3 +125,74 @@ describe("git auth — authorizeGit (THE matrix)", () => {
     expect(d.kind).toBe("denied");
   });
 });
+
+// ── Two owners, SAME slug, isolated across the git write boundary (S3) ─────────
+//
+// alice and bob each own a `reports` space. The `<owner>` URL segment is resolved
+// as a HANDLE, so /api/git/alice/reports.git and /api/git/bob/reports.git resolve
+// to DIFFERENT repos. A token with a role on one owner's `reports` is fail-closed
+// (uniform 404) on the other's same-slug `reports` — no membership there.
+describe("git auth — two same-slug owners are isolated (S3 boundary)", () => {
+  let aliceOwnerTok: string;
+  let aliceWriterTok: string;
+  let bobOwnerTok: string;
+  let aliceReportsId: number;
+  let bobReportsId: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    const aliceId = await seedUser("Alice", "alice", "admin");
+    const bobId = await seedUser("Bob", "bob", "admin");
+    const aliceWriterId = await seedUser("AliceWriter", "awr");
+
+    const a = await createSpace("reports", aliceId, "private", "t");
+    const b = await createSpace("reports", bobId, "private", "t");
+    if (!a.ok || !b.ok) throw new Error("setup");
+    aliceReportsId = a.space.id;
+    bobReportsId = b.space.id;
+
+    // alice's writer is a member of ALICE's reports ONLY (seed by id — the slug is
+    // ambiguous now, so slug-based setSpaceMemberRole would no-op).
+    await db
+      .insert(schema.spaceMembers)
+      .values({ spaceId: aliceReportsId, userId: aliceWriterId, role: "writer" })
+      .onConflictDoNothing();
+
+    aliceOwnerTok = (await mintPrincipalToken(aliceId, "t")).token;
+    aliceWriterTok = (await mintPrincipalToken(aliceWriterId, "t")).token;
+    bobOwnerTok = (await mintPrincipalToken(bobId, "t")).token;
+  });
+
+  it("each owner's token authorizes ONLY their own same-slug space (right spaceId)", async () => {
+    const a = await authorizeGit(basic("git", aliceOwnerTok), "alice", "reports", "git-receive-pack");
+    const b = await authorizeGit(basic("git", bobOwnerTok), "bob", "reports", "git-receive-pack");
+    expect(a.kind).toBe("ok");
+    expect(b.kind).toBe("ok");
+    if (a.kind !== "ok" || b.kind !== "ok") return;
+    expect(a.spaceId).toBe(aliceReportsId);
+    expect(b.spaceId).toBe(bobReportsId);
+  });
+
+  it("alice's owner token is DENIED on bob/reports (cross-owner → uniform 404)", async () => {
+    const d = await authorizeGit(basic("git", aliceOwnerTok), "bob", "reports", "git-upload-pack");
+    expect(d.kind).toBe("denied");
+  });
+
+  it("bob's owner token is DENIED on alice/reports", async () => {
+    const d = await authorizeGit(basic("git", bobOwnerTok), "alice", "reports", "git-upload-pack");
+    expect(d.kind).toBe("denied");
+  });
+
+  it("a WRITER on alice/reports can push there but is DENIED (404) on bob/reports", async () => {
+    const ok = await authorizeGit(basic("git", aliceWriterTok), "alice", "reports", "git-receive-pack");
+    expect(ok.kind).toBe("ok");
+    if (ok.kind === "ok") expect(ok.spaceId).toBe(aliceReportsId);
+    const denied = await authorizeGit(basic("git", aliceWriterTok), "bob", "reports", "git-upload-pack");
+    expect(denied.kind).toBe("denied");
+  });
+
+  it("unknown handle segment → denied even with a valid token", async () => {
+    const d = await authorizeGit(basic("git", aliceOwnerTok), "carol", "reports", "git-upload-pack");
+    expect(d.kind).toBe("denied");
+  });
+});

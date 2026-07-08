@@ -7,6 +7,9 @@ import {
   seedSpace,
   seedSpaceMember,
 } from "@/test/db";
+import { db, schema } from "@/db";
+import { mintToken, hashToken } from "@/lib/tokens";
+import { resolveShareDoc } from "./shares";
 import {
   publishDoc,
   unpublishDoc,
@@ -266,6 +269,104 @@ describe("canSeeDocSpace (space-scoped)", () => {
 
   it("an unknown space id is fail-closed for a member", async () => {
     expect(await canSeeDocSpace("member", 999999, memberId)).toBe(false);
+  });
+});
+
+// ── Two owners, SAME slug: the read boundary holds INDEPENDENTLY (S3, D2) ──────
+//
+// alice and bob each own a space named `reports` (composite key allows it). The
+// space-scope read boundary is keyed on the space ID, so it resolves per-space,
+// never per-slug: a member of alice's `reports` gets NO read into bob's same-slug
+// `reports`, visibility is decided per-space (same slug, opposite visibility), and
+// a capability share bound to one owner's space never carries the other's doc.
+describe("two same-slug owners: space-scoped read boundary is isolated (S3)", () => {
+  let alice: number;
+  let bob: number;
+  let aliceMember: number;
+  let bobMember: number;
+  let outsider: number;
+
+  beforeEach(async () => {
+    await resetDb();
+    alice = await seedUser({ email: "alice@x", displayName: "Alice", role: "member" });
+    bob = await seedUser({ email: "bob@x", displayName: "Bob", role: "member" });
+    aliceMember = await seedUser({ email: "am@x", displayName: "AliceMember", role: "member" });
+    bobMember = await seedUser({ email: "bm@x", displayName: "BobMember", role: "member" });
+    outsider = await seedUser({ email: "out@x", displayName: "Outsider", role: "member" });
+  });
+
+  it("PRIVATE same-slug: each owner's member sees only THEIR space; cross-owner + anon fail-closed", async () => {
+    const aliceReports = await seedSpace({ slug: "reports", ownerId: alice, visibility: "private" });
+    const bobReports = await seedSpace({ slug: "reports", ownerId: bob, visibility: "private" });
+    expect(aliceReports).not.toBe(bobReports);
+    await seedSpaceMember(aliceReports, aliceMember, "reader");
+    await seedSpaceMember(bobReports, bobMember, "reader");
+
+    // admin sees both same-slug spaces.
+    expect(await canSeeDocSpace("admin", aliceReports)).toBe(true);
+    expect(await canSeeDocSpace("admin", bobReports)).toBe(true);
+
+    // alice's member: sees alice/reports, NOT bob/reports.
+    expect(await canSeeDocSpace("member", aliceReports, aliceMember)).toBe(true);
+    expect(await canSeeDocSpace("member", bobReports, aliceMember)).toBe(false);
+
+    // bob's member: sees bob/reports, NOT alice/reports.
+    expect(await canSeeDocSpace("member", bobReports, bobMember)).toBe(true);
+    expect(await canSeeDocSpace("member", aliceReports, bobMember)).toBe(false);
+
+    // non-member + anonymous (null) → fail-closed on both (no existence leak).
+    expect(await canSeeDocSpace("member", aliceReports, outsider)).toBe(false);
+    expect(await canSeeDocSpace("member", bobReports, outsider)).toBe(false);
+    expect(await canSeeDocSpace("member", aliceReports, null)).toBe(false);
+    expect(await canSeeDocSpace("member", bobReports, null)).toBe(false);
+  });
+
+  it("SAME slug, OPPOSITE visibility: visibility is per-space, not per-slug", async () => {
+    // alice's `shared` is PUBLIC; bob's `shared` is PRIVATE. An outsider member
+    // sees alice's public one but NOT bob's private same-slug one.
+    const alicePublic = await seedSpace({ slug: "shared", ownerId: alice, visibility: "public" });
+    const bobPrivate = await seedSpace({ slug: "shared", ownerId: bob, visibility: "private" });
+    expect(await canSeeDocSpace("member", alicePublic, outsider)).toBe(true);
+    expect(await canSeeDocSpace("member", bobPrivate, outsider)).toBe(false);
+    // ...and an UNLISTED same-slug space for a third case is likewise per-space.
+    const carol = await seedUser({ email: "carol@x", displayName: "Carol", role: "member" });
+    const carolUnlisted = await seedSpace({ slug: "shared", ownerId: carol, visibility: "unlisted" });
+    expect(await canSeeDocSpace("member", carolUnlisted, outsider)).toBe(true);
+    expect(await canSeeDocSpace("member", bobPrivate, null)).toBe(false);
+  });
+
+  it("SHARE axis: a directory share bound to alice's space never carries bob's same-slug doc", async () => {
+    const aliceReports = await seedSpace({ slug: "reports", ownerId: alice, visibility: "private" });
+    const bobReports = await seedSpace({ slug: "reports", ownerId: bob, visibility: "private" });
+
+    // A published doc under `reports/` in EACH owner's same-slug space.
+    const aDoc = await publishDocOk({
+      ...base, slug: "alice-report", sourcePath: "reports/a.md", path: "reports",
+      by: "alice", ownerUserId: alice, spaceId: aliceReports,
+    });
+    const bDoc = await publishDocOk({
+      ...base, slug: "bob-report", sourcePath: "reports/b.md", path: "reports",
+      by: "bob", ownerUserId: bob, spaceId: bobReports,
+    });
+
+    // A directory share BOUND TO ALICE'S SPACE (by id — deterministic across the
+    // now-ambiguous slug), covering the `reports/` prefix.
+    const token = mintToken();
+    await db.insert(schema.shares).values({
+      tokenHash: hashToken(token),
+      docId: null,
+      pathPrefix: "reports",
+      spaceId: aliceReports,
+      label: "Folder: reports",
+      createdBy: "alice",
+      allowComments: 1,
+    });
+
+    // Resolves alice's doc through the share...
+    const okDoc = await resolveShareDoc(token, aDoc.slug);
+    expect(okDoc?.doc.slug).toBe("alice-report");
+    // ...but bob's same-slug-space doc is fail-closed (space guard → uniform null).
+    expect(await resolveShareDoc(token, bDoc.slug)).toBeNull();
   });
 });
 

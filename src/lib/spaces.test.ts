@@ -5,6 +5,8 @@ import { eq } from "drizzle-orm";
 import {
   ensureDefaultSpace,
   createSpace,
+  getSpace,
+  getSpaceByOwner,
   getSpaceBySlug,
   resolveSpaceRole,
   roleSatisfies,
@@ -114,11 +116,159 @@ describe("spaces service", () => {
       expect(evs.length).toBe(1);
     });
 
-    it("rejects a duplicate slug", async () => {
+    it("rejects a duplicate slug FOR THE SAME OWNER (slug already in use)", async () => {
       const owner = await seedUser("Owner", { email: "o@x.com", role: "admin" });
       await createSpace("dup", owner, "private", "tester");
       const out = await createSpace("dup", owner, "private", "tester");
       expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.error).toBe("slug already in use");
+    });
+
+    // ── S3 (D2): the composite key lets TWO owners share a slug ────────────────
+    it("two DIFFERENT owners may each own the same slug — both creates succeed", async () => {
+      const alice = await seedUser("Alice", { tokenName: "alice", role: "admin" });
+      const bob = await seedUser("Bob", { tokenName: "bob", role: "admin" });
+      const a = await createSpace("reports", alice, "private", "tester");
+      const b = await createSpace("reports", bob, "private", "tester");
+      expect(a.ok).toBe(true);
+      expect(b.ok).toBe(true);
+      if (!a.ok || !b.ok) return;
+      // Two DISTINCT rows, each owned by the right user.
+      expect(a.space.id).not.toBe(b.space.id);
+      expect(a.space.ownerUserId).toBe(alice);
+      expect(b.space.ownerUserId).toBe(bob);
+      // A third `reports` for alice still collides (per-owner uniqueness holds).
+      const dupA = await createSpace("reports", alice, "private", "tester");
+      expect(dupA.ok).toBe(false);
+    });
+
+    it("assigns the owner a handle so the new space is namespace-reachable", async () => {
+      const owner = await seedUser("Owner", { tokenName: "owner-x", role: "admin" });
+      const out = await createSpace("thing", owner, "private", "tester");
+      expect(out.ok).toBe(true);
+      const row = await db.query.users.findFirst({ where: eq(schema.users.id, owner) });
+      expect(row?.handle).toBe("owner-x"); // derived from tokenName, matches ownerSlugForUser
+    });
+  });
+
+  // ── THE canonical resolver + two-owner isolation (S3, D2/D4) ────────────────
+  describe("getSpace(handle, slug) — composite resolution + two-owner isolation", () => {
+    let alice: number;
+    let bob: number;
+    let aliceReports: number;
+    let bobReports: number;
+
+    beforeEach(async () => {
+      alice = await seedUser("Alice", { tokenName: "alice", role: "admin" });
+      bob = await seedUser("Bob", { tokenName: "bob", role: "admin" });
+      const a = await createSpace("reports", alice, "private", "tester");
+      const b = await createSpace("reports", bob, "private", "tester");
+      if (!a.ok || !b.ok) throw new Error("setup failed");
+      aliceReports = a.space.id;
+      bobReports = b.space.id;
+    });
+
+    it("resolves each owner's same-slug space to a DIFFERENT space", async () => {
+      const a = await getSpace("alice", "reports");
+      const b = await getSpace("bob", "reports");
+      expect(a?.id).toBe(aliceReports);
+      expect(b?.id).toBe(bobReports);
+      expect(a!.id).not.toBe(b!.id);
+      expect(a!.ownerUserId).toBe(alice);
+      expect(b!.ownerUserId).toBe(bob);
+    });
+
+    it("is case-insensitive on the handle (handles are stored lowercased)", async () => {
+      const a = await getSpace("ALICE", "reports");
+      expect(a?.id).toBe(aliceReports);
+    });
+
+    it("unknown handle → null (no existence leak)", async () => {
+      expect(await getSpace("carol", "reports")).toBeNull();
+      expect(await getSpace("", "reports")).toBeNull();
+    });
+
+    it("known handle but that owner has no such slug → null", async () => {
+      expect(await getSpace("alice", "ghost")).toBeNull();
+      // bob has `reports` but NOT `budget`; alice does not have `budget` either.
+      expect(await getSpace("bob", "budget")).toBeNull();
+    });
+
+    it("getSpaceByOwner isolates by (ownerUserId, slug)", async () => {
+      expect((await getSpaceByOwner(alice, "reports"))?.id).toBe(aliceReports);
+      expect((await getSpaceByOwner(bob, "reports"))?.id).toBe(bobReports);
+      expect(await getSpaceByOwner(alice, "nope")).toBeNull();
+    });
+
+    it("getSpaceBySlug is AMBIGUITY-GUARDED: two same-slug spaces → null (transitional)", async () => {
+      // Two owners hold `reports` → a bare slug is ambiguous → null (fail-closed,
+      // never an arbitrary winner). It resolves again once only one remains.
+      expect(await getSpaceBySlug("reports")).toBeNull();
+      // Remove bob's space → now unique → resolves to alice's.
+      await db.delete(schema.spaceMembers).where(eq(schema.spaceMembers.spaceId, bobReports));
+      await db.delete(schema.spaces).where(eq(schema.spaces.id, bobReports));
+      expect((await getSpaceBySlug("reports"))?.id).toBe(aliceReports);
+    });
+  });
+
+  // ── Two owners, same slug, ISOLATED across the git write boundary ───────────
+  describe("resolveSpaceRole — two same-slug owners are isolated (S3)", () => {
+    let alice: number;
+    let bob: number;
+    let aliceWriter: number;
+    let aliceReports: number;
+    let bobReports: number;
+    let aliceWriterTok: string;
+    let bobOwnerTok: string;
+
+    beforeEach(async () => {
+      alice = await seedUser("Alice", { tokenName: "alice", role: "admin" });
+      bob = await seedUser("Bob", { tokenName: "bob", role: "admin" });
+      aliceWriter = await seedUser("AliceWriter", { tokenName: "awr", role: "member" });
+      const a = await createSpace("reports", alice, "private", "tester");
+      const b = await createSpace("reports", bob, "private", "tester");
+      if (!a.ok || !b.ok) throw new Error("setup failed");
+      aliceReports = a.space.id;
+      bobReports = b.space.id;
+      // NB: `reports` is now an ambiguous slug (two owners), so the slug-based
+      // setSpaceMemberRole is a no-op here — memberships are seeded by space id.
+    });
+
+    it("owner tokens resolve to the RIGHT (owner-specific) space", async () => {
+      bobOwnerTok = (await mintPrincipalToken(bob, "t")).token;
+      const aliceOwnerTok = (await mintPrincipalToken(alice, "t")).token;
+      const ra = await resolveSpaceRole(aliceOwnerTok, "alice", "reports");
+      const rb = await resolveSpaceRole(bobOwnerTok, "bob", "reports");
+      expect(ra?.space.id).toBe(aliceReports);
+      expect(rb?.space.id).toBe(bobReports);
+      expect(ra?.role).toBe("owner");
+      expect(rb?.role).toBe("owner");
+    });
+
+    it("a writer on ALICE's reports is DENIED on BOB's same-slug reports (404)", async () => {
+      // alice's writer needs a membership on alice's space — add it directly by id
+      // (setSpaceMemberRole resolves by ambiguous slug now, so seed the row).
+      await db
+        .insert(schema.spaceMembers)
+        .values({ spaceId: aliceReports, userId: aliceWriter, role: "writer" })
+        .onConflictDoNothing();
+      aliceWriterTok = (await mintPrincipalToken(aliceWriter, "t")).token;
+      // Resolves on alice/reports (has membership there)...
+      const onAlice = await resolveSpaceRole(aliceWriterTok, "alice", "reports");
+      expect(onAlice?.space.id).toBe(aliceReports);
+      expect(onAlice?.role).toBe("writer");
+      // ...but is fail-closed on bob/reports (no membership on bob's space).
+      expect(await resolveSpaceRole(aliceWriterTok, "bob", "reports")).toBeNull();
+    });
+
+    it("bob's owner token is DENIED on alice/reports (cross-owner, no membership)", async () => {
+      bobOwnerTok = (await mintPrincipalToken(bob, "t")).token;
+      expect(await resolveSpaceRole(bobOwnerTok, "alice", "reports")).toBeNull();
+    });
+
+    it("unknown handle segment → null even with a valid token", async () => {
+      const aliceOwnerTok = (await mintPrincipalToken(alice, "t")).token;
+      expect(await resolveSpaceRole(aliceOwnerTok, "carol", "reports")).toBeNull();
     });
   });
 

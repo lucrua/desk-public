@@ -123,13 +123,14 @@ export const accessRequests = pgTable("access_requests", {
 // ── Spaces (Phase-1 document host) ───────────────────────────────────────────
 // A SPACE is an owned, access-controlled git repo that Desk hosts — the unit of
 // write/clone access and the security boundary (§3). Truth = the bare repo on
-// disk at <DATA_DIR>/spaces/<owner-slug>/<space-slug>.git; Desk's Postgres is a
-// derived projection (§2). Phase 1 has a single owner-only space; the table is
-// built so Phase-2 multi-tenancy is purely additive. `slug` is globally unique
-// (Phase 1 single-owner; a Phase-2 migration may relax to per-owner uniqueness).
+// disk at <DATA_DIR>/spaces/<owner-handle>/<space-slug>.git; Desk's Postgres is a
+// derived projection (§2). The namespace is multi-tenant (Owner-namespace S3,
+// decision D2): `slug` is unique PER OWNER, not globally — two owners may each own
+// `growth-reports`. Canonical resolution is `handle → users.id`, then
+// (owner_user_id, slug) → space (`getSpace`). Slug FORMAT is ^[a-z0-9][a-z0-9-]*$.
 export const spaces = pgTable("spaces", {
   id: serial("id").primaryKey(),
-  slug: text("slug").notNull().unique(), // ^[a-z0-9][a-z0-9-]*$ — the <space> path segment
+  slug: text("slug").notNull(), // ^[a-z0-9][a-z0-9-]*$ — the <space> path segment (unique PER OWNER, see below)
   ownerUserId: integer("owner_user_id")
     .notNull()
     .references(() => users.id),
@@ -157,7 +158,12 @@ export const spaces = pgTable("spaces", {
   // API path ever decrypts this back to a caller; only the mirror push reads it.
   mirrorDeployKeyEnc: text("mirror_deploy_key_enc"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => [
+  // Owner-namespace S3 (D2): slug is unique PER OWNER, not globally. Two owners
+  // may each own `growth-reports`; a single owner cannot own it twice. This is the
+  // concurrency guard behind createSpace's per-owner uniqueness check.
+  uniqueIndex("spaces_owner_slug_idx").on(t.ownerUserId, t.slug),
+]);
 
 // Instance-level settings — a tiny key→encrypted-value store for secrets that are
 // GLOBAL to the deployment rather than per-space (convergence fix-pass, Slice 4b;

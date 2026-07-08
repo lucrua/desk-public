@@ -29,7 +29,7 @@ import { parseGitRequest, segmentsAfterMount } from "@/lib/git/route-parse";
 import { runHttpBackend } from "@/lib/git/http-backend";
 import { initBareRepo, refTip } from "@/lib/git/repo";
 import { reindexSpaceByDisk } from "@/lib/git/indexer";
-import { getSpaceBySlug } from "@/lib/spaces";
+import { getSpaceById } from "@/lib/spaces";
 import { spaceRepoPath } from "@/lib/space-repo-path";
 import { enqueueMirror } from "@/lib/mirror";
 
@@ -77,11 +77,12 @@ async function handle(req: Request): Promise<Response> {
   if (decision.kind !== "ok") return uniform404();
 
   // ── Locate / lazily create the bare repo ──────────────────────────────────
-  // Load the space row (authorizeGit already proved it exists + the owner
-  // segment matches) and derive the on-disk path from the owner's STABLE HANDLE
-  // (Owner-namespace S2) — never the email-derived URL segment, so an email
-  // change can't orphan the repo.
-  const spaceRow = await getSpaceBySlug(decision.spaceSlug);
+  // Load the EXACT space authorizeGit resolved — by its id, NOT by slug. The slug
+  // is no longer globally unique (Owner-namespace S3), so a slug lookup could pick
+  // the wrong same-slug owner's space; the id is owner-correct. The on-disk path
+  // is derived from the owner's STABLE HANDLE (S2) — never the email-derived URL
+  // segment — so an email change can't orphan the repo.
+  const spaceRow = await getSpaceById(decision.spaceId);
   if (!spaceRow) return uniform404();
   let repoPath: string;
   try {
@@ -136,6 +137,8 @@ async function handle(req: Request): Promise<Response> {
           fromSha: beforeSha,
           toSha: afterSha,
           actorName: String(decision.userId),
+          // Owner-correct: reindex the resolved space by id, not by ambiguous slug.
+          spaceId: decision.spaceId,
         });
         // Mirror hook (Slice 4b): a push that advanced `main` fans out to the
         // space's GitHub mirror. Fire-and-forget + fail-soft — enqueueMirror

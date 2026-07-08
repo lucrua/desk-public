@@ -305,10 +305,18 @@ export async function reindexSpaceFull(
 export async function reindexSpaceByDisk(
   spaceSlug: string,
   repoPath: string,
-  opts: { fromSha: string | null; toSha: string; actorName?: string },
+  opts: { fromSha: string | null; toSha: string; actorName?: string; spaceId?: number },
 ): Promise<ReindexResult> {
-  const spaceRow = await db.query.spaces.findFirst({ where: eq(spaces.slug, spaceSlug) });
-  if (!spaceRow) throw new Error(`unknown space: ${spaceSlug}`);
+  // Owner-namespace S3: the slug is no longer globally unique. When the caller
+  // knows the exact space (the git route + web-author both do), it passes
+  // `spaceId` so we resolve the OWNER-CORRECT space by id; a slug lookup could
+  // otherwise pick a different same-slug owner's space. Legacy callers (tests,
+  // single-owner paths) still resolve by slug transitionally.
+  const spaceRow =
+    opts.spaceId != null
+      ? await db.query.spaces.findFirst({ where: eq(spaces.id, opts.spaceId) })
+      : await db.query.spaces.findFirst({ where: eq(spaces.slug, spaceSlug) });
+  if (!spaceRow) throw new Error(`unknown space: ${opts.spaceId ?? spaceSlug}`);
   const actorName = opts.actorName ?? "system";
 
   const changes = await changedPaths(repoPath, opts.fromSha, opts.toSha);

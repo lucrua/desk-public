@@ -45,6 +45,9 @@ describe("git transport — live clone/push round-trip", () => {
   let ownerSlug: string;
   let ownerTok: string;
   let readerTok: string;
+  // A SECOND owner (bob) with a SAME-SLUG `e2e` space, for the S3 isolation test.
+  let bobSlug: string;
+  let bobTok: string;
 
   beforeAll(async () => {
     await resetDb();
@@ -60,11 +63,21 @@ describe("git transport — live clone/push round-trip", () => {
       .insert(schema.users)
       .values({ tokenName: "cow", displayName: "Cow", role: "member", active: 1 })
       .returning({ id: schema.users.id });
+    const [bob] = await db
+      .insert(schema.users)
+      .values({ tokenName: "bob", displayName: "Bob", role: "admin", active: 1 })
+      .returning({ id: schema.users.id });
     await createSpace("e2e", owner.id, "private", "t");
+    // Set the reader membership while `e2e` is still a UNIQUE slug (the slug-based
+    // setSpaceMemberRole is transitional — it no-ops on an ambiguous slug, S3/D5).
     await setSpaceMemberRole("e2e", reader.id, "reader", "t");
+    // NOW add a SECOND owner's same-slug `e2e` space (the S3 isolation fixture).
+    await createSpace("e2e", bob.id, "private", "t");
     ownerSlug = ownerSlugForUser({ tokenName: "lucas", email: null }, owner.id);
+    bobSlug = ownerSlugForUser({ tokenName: "bob", email: null }, bob.id);
     ownerTok = (await mintPrincipalToken(owner.id, "t")).token;
     readerTok = (await mintPrincipalToken(reader.id, "t")).token;
+    bobTok = (await mintPrincipalToken(bob.id, "t")).token;
 
     server = createServer(async (req, res) => {
       const chunks: Buffer[] = [];
@@ -96,6 +109,9 @@ describe("git transport — live clone/push round-trip", () => {
   function repoUrl(tok: string): string {
     return `http://git:${tok}@127.0.0.1:${port}/api/git/${ownerSlug}/e2e.git`;
   }
+  function repoUrlFor(ownerSeg: string, tok: string): string {
+    return `http://git:${tok}@127.0.0.1:${port}/api/git/${ownerSeg}/e2e.git`;
+  }
 
   it("owner clones (empty), pushes; reader clones and sees it; reader push is rejected", async () => {
     const work = await mkdtemp(path.join(tmpdir(), "desk-git-e2e-work-"));
@@ -126,10 +142,48 @@ describe("git transport — live clone/push round-trip", () => {
       }
       expect(pushRejected).toBe(true);
 
-      // 4. The projection re-indexed on the owner's push: a doc exists.
+      // 4. The projection re-indexed on the owner's push into the OWNER-CORRECT
+      // space (S3): the doc lands in lucas's e2e; bob's same-slug e2e stays empty.
       const docs = await db.select().from(schema.docs).where(eq(schema.docs.sourcePath, "hello.md"));
       expect(docs.length).toBe(1);
       expect(docs[0].title).toBe("Hello");
+      // Two `e2e` spaces exist; the doc belongs to exactly one, the OTHER is empty.
+      const e2eSpaces = await db.select().from(schema.spaces).where(eq(schema.spaces.slug, "e2e"));
+      expect(e2eSpaces.length).toBe(2);
+      const otherE2e = e2eSpaces.find((s) => s.id !== docs[0].spaceId);
+      expect(otherE2e).toBeTruthy();
+      const otherDocs = await db.select().from(schema.docs).where(eq(schema.docs.spaceId, otherE2e!.id));
+      expect(otherDocs.length).toBe(0); // bob's same-slug space never received the push
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  // ── S3: two owners share the slug `e2e`; the URL owner segment is a HANDLE, so
+  // one owner's token cannot reach the other owner's same-slug repo. ────────────
+  it("cross-owner: lucas's token is REJECTED on bob/e2e; bob's token can clone bob/e2e", async () => {
+    const work = await mkdtemp(path.join(tmpdir(), "desk-git-e2e-x-"));
+    try {
+      // lucas (owner of lucas/e2e) has NO membership on bob/e2e → clone rejected.
+      let lucasRejected = false;
+      try {
+        await run("git", ["clone", repoUrlFor(bobSlug, ownerTok), path.join(work, "x1")], { env: GIT_ENV });
+      } catch {
+        lucasRejected = true;
+      }
+      expect(lucasRejected).toBe(true);
+
+      // bob (owner of bob/e2e) CAN clone bob/e2e (empty repo, exit 0).
+      await run("git", ["clone", repoUrlFor(bobSlug, bobTok), path.join(work, "x2")], { env: GIT_ENV });
+
+      // ...and bob is rejected on lucas/e2e (the mirror-image denial).
+      let bobRejected = false;
+      try {
+        await run("git", ["clone", repoUrlFor(ownerSlug, bobTok), path.join(work, "x3")], { env: GIT_ENV });
+      } catch {
+        bobRejected = true;
+      }
+      expect(bobRejected).toBe(true);
     } finally {
       await rm(work, { recursive: true, force: true });
     }

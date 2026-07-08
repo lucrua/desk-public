@@ -56,7 +56,17 @@ export function tokenFromBasicAuth(header: string | null | undefined): string | 
 }
 
 export type AuthDecision =
-  | { kind: "ok"; userId: number; role: SpaceRole; ownerSlug: string; spaceSlug: string }
+  | {
+      kind: "ok";
+      userId: number;
+      role: SpaceRole;
+      ownerSlug: string;
+      spaceSlug: string;
+      // The EXACT space `resolveSpaceRole` authorized. Owner-namespace S3: the slug
+      // is no longer globally unique, so the route MUST NOT re-resolve by slug (it
+      // would be ambiguous across two same-slug owners) — it loads this id directly.
+      spaceId: number;
+    }
   | { kind: "unauthenticated" } // no credentials supplied — prompt (401)
   | { kind: "denied" }; // anything else — uniform 404 (no leak)
 
@@ -106,5 +116,6 @@ export async function authorizeGit(
     role: resolved.role,
     ownerSlug: resolved.ownerSlug,
     spaceSlug,
+    spaceId: resolved.space.id,
   };
 }

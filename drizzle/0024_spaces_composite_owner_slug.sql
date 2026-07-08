@@ -1,0 +1,24 @@
+-- 0024_spaces_composite_owner_slug
+-- Owner-namespace, Slice S3 (decision D2): make the space namespace multi-tenant.
+--
+-- Before this, `spaces.slug` was GLOBALLY unique (a flat namespace) — only one
+-- `growth-reports` could exist instance-wide, contradicting the documented
+-- N-owners-×-spaces model and blocking two owners from each owning the same slug.
+--
+-- Change: DROP the global unique on `spaces.slug`; ADD a composite unique index on
+-- (owner_user_id, slug). Two owners may now each own `growth-reports`; a single
+-- owner still cannot own the same slug twice. Slug FORMAT validation is unchanged
+-- (^[a-z0-9][a-z0-9-]*$, enforced in code).
+--
+-- AUTH-SENSITIVE: this is the DB half of the resolution refactor. Canonical
+-- resolution is now `handle → users.id`, then `(owner_user_id, slug) → space`
+-- (`getSpace`); the git write boundary (`resolveSpaceRole`) resolves the git URL's
+-- `<owner>` segment as a stable handle. The composite index is the concurrency
+-- guard behind `createSpace`'s per-owner uniqueness (a same-owner duplicate loses
+-- the insert race and is caught; two different owners both succeed).
+--
+-- IF EXISTS / IF NOT EXISTS so a re-run (or a DB provisioned at a different point)
+-- is a clean no-op. Existing rows had globally-unique slugs, so no (owner, slug)
+-- pair collides — the composite index builds without conflict.
+ALTER TABLE "spaces" DROP CONSTRAINT IF EXISTS "spaces_slug_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "spaces_owner_slug_idx" ON "spaces" USING btree ("owner_user_id","slug");

@@ -169,6 +169,13 @@
       "when": 1781210500000,
       "tag": "0023_user_handle",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1781210600000,
+      "tag": "0024_spaces_composite_owner_slug",
+      "breakpoints": true
     }
   ]
 }

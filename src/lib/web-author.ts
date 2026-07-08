@@ -357,6 +357,7 @@ export async function webAuthorCommit(
         fromSha: expectedTip,
         toSha: commit.newSha,
         actorName: req.identity.name,
+        spaceId: space.id, // owner-correct (S3): reindex the resolved space, not by slug
       });
       reindexed = r.indexed;
     } catch (e) {

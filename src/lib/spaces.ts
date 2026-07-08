@@ -24,6 +24,7 @@ import { mintToken, hashToken } from "@/lib/tokens";
 import { emitEvent } from "@/lib/events";
 import type { Principal } from "@/lib/auth";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
+import { assignUserHandle } from "@/lib/user-handle";
 
 // The Phase-1 single space. Multi-space is Phase 2 (the schema already supports
 // it); for now every doc lands in this one owner-only space. Its slug doubles as
@@ -116,10 +117,53 @@ export async function ensureDefaultSpace(
   }
 }
 
-/** Look up a space by slug (null when absent). */
-export async function getSpaceBySlug(slug: string): Promise<SpaceRow | null> {
-  const row = await db.query.spaces.findFirst({ where: eq(spaces.slug, slug) });
+/**
+ * THE canonical space resolver (Owner-namespace S3, decision D4): resolve a space
+ * by its owner's stable HANDLE + slug. `handle → users.id` (via `users.handle`),
+ * then `(ownerUserId, slug) → space`. Returns null — never throws, never leaks —
+ * on an unknown/blank handle OR when that owner has no such slug. This is the
+ * resolver every owner-qualified surface (git write boundary now; web/API routes
+ * in S4) resolves through. The handle is matched case-insensitively (handles are
+ * stored lowercased); the slug is matched exactly.
+ */
+export async function getSpace(
+  handle: string,
+  slug: string,
+): Promise<SpaceRow | null> {
+  const h = handle.trim().toLowerCase();
+  if (h.length === 0) return null;
+  const owner = await db.query.users.findFirst({ where: eq(users.handle, h) });
+  if (!owner) return null; // unknown handle → not-found (no existence leak)
+  return getSpaceByOwner(owner.id, slug);
+}
+
+/** Resolve a space by (ownerUserId, slug) — the composite identity. Null when
+ * that owner has no space with this slug. The direct form `getSpace` uses after
+ * turning a handle into a user id, and the one `createSpace` uses for its
+ * per-owner duplicate pre-check (it already holds the owner id). */
+export async function getSpaceByOwner(
+  ownerUserId: number,
+  slug: string,
+): Promise<SpaceRow | null> {
+  const row = await db.query.spaces.findFirst({
+    where: and(eq(spaces.ownerUserId, ownerUserId), eq(spaces.slug, slug)),
+  });
   return row ?? null;
+}
+
+/**
+ * TRANSITIONAL slug-only resolver (Owner-namespace S3, decision D5). The slug is
+ * no longer globally unique, so a bare slug can match MORE THAN ONE space. This
+ * keeps the ~19 not-yet-owner-qualified web/API callers working until S4 rewrites
+ * them to `getSpace(handle, slug)`:
+ *   - exactly one space with this slug → return it (the common, single-owner case);
+ *   - ZERO or MORE-THAN-ONE → return null (fail-closed — an ambiguous slug is
+ *     treated as not-found; callers render 404 / "not found" until they qualify
+ *     the owner in S4). NEVER returns an arbitrary winner (no cross-owner leak).
+ */
+export async function getSpaceBySlug(slug: string): Promise<SpaceRow | null> {
+  const rows = await db.select().from(spaces).where(eq(spaces.slug, slug)).limit(2);
+  return rows.length === 1 ? rows[0] : null;
 }
 
 /** Look up a space by id (null when absent). */
@@ -189,16 +233,26 @@ export type ResolvedPrincipal = {
 /**
  * THE git-transport authz primitive (fail-closed).
  *
- * Given a raw Basic-auth password (the principal token), the URL's `<owner>`
+ * Given a raw Basic-auth password (the principal token), the git URL's `<owner>`
  * segment, and the `<space>` slug, resolve the caller's role on that space — or
  * `null` if anything fails to line up. Null is returned (never an exception)
  * for EVERY denial case so the caller renders one uniform 404:
  *   - no/blank token
  *   - unknown or revoked token
  *   - the resolving user is inactive
- *   - the space slug doesn't exist
- *   - the URL owner segment doesn't match the space's real owner segment
- *   - the user has no membership row on the space
+ *   - the `<owner>` segment is not a known handle
+ *   - that owner has no space with this slug (incl. a DIFFERENT owner's same-slug
+ *     space — cross-owner requests never resolve)
+ *   - the user has no membership row on the resolved space
+ *
+ * Owner-namespace S3 (D2/D4): the `<owner>` segment is resolved as a STABLE HANDLE
+ * via `getSpace(handle, slug)` — `handle → users.id`, then `(ownerUserId, slug) →
+ * space` — NOT by looking up the globally-unique slug and matching the segment
+ * against a re-derived owner slug (the slug is no longer globally unique). Because
+ * `handle === ownerSlugForUser` for existing users, existing git remotes keep
+ * resolving; but `/api/git/<ownerA>/<slug>.git` and `/api/git/<ownerB>/<slug>.git`
+ * now resolve to DIFFERENT spaces, and a token with a role on A's space is denied
+ * on B's (no membership there) — the two same-slug owners are isolated.
  *
  * On success it also bumps the token's lastUsedAt (best-effort, non-fatal).
  */
@@ -219,16 +273,15 @@ export async function resolveSpaceRole(
   const user = await db.query.users.findFirst({ where: eq(users.id, tok.userId) });
   if (!user || user.active !== 1) return null;
 
-  // Space slug must exist...
-  const space = await getSpaceBySlug(spaceSlug);
+  // Resolve the git URL's `<owner>` segment as a HANDLE → that owner's space with
+  // this slug. Unknown handle, or that owner having no such space (incl. another
+  // owner's same-slug space), both yield null — fail-closed, no cross-owner leak.
+  const space = await getSpace(ownerSegment, spaceSlug);
   if (!space) return null;
 
-  // ...and the URL's owner segment must match the space's real owner segment
-  // (prevents `/<wrong-owner>/<space>.git` from resolving the right repo).
-  const realOwnerSlug = await ownerSlugForSpace(space);
-  if (realOwnerSlug !== ownerSegment.toLowerCase()) return null;
-
-  // Membership row decides the role. No row ⇒ no access (fail-closed).
+  // Membership row on the RESOLVED space decides the role. No row ⇒ no access
+  // (fail-closed) — this is what denies a token that has a role on owner A's
+  // same-slug space when it is presented at owner B's URL.
   const member = await db.query.spaceMembers.findFirst({
     where: and(eq(spaceMembers.spaceId, space.id), eq(spaceMembers.userId, user.id)),
   });
@@ -248,7 +301,9 @@ export async function resolveSpaceRole(
     userId: user.id,
     role: member.role as SpaceRole,
     space,
-    ownerSlug: realOwnerSlug,
+    // The matched owner handle (the normalized `<owner>` segment). getSpace matched
+    // by `users.handle = ownerSegment.toLowerCase()`, so the two are equal.
+    ownerSlug: ownerSegment.trim().toLowerCase(),
   };
 }
 
@@ -355,8 +410,15 @@ export type CreateSpaceResult =
   | { ok: false; error: string };
 
 /**
- * Create a space (Phase 2 surface; usable in Phase 1 for tests/import). Owner is
- * mirrored as an `owner` member. Slug must match SPACE_SLUG_RE and be unique.
+ * Create a space. Owner is mirrored as an `owner` member. Slug must match
+ * SPACE_SLUG_RE and be unique PER OWNER (Owner-namespace S3, D2) — two different
+ * owners may each own the same slug; a single owner may not own it twice.
+ *
+ * The owner's stable `users.handle` is the `<owner>` namespace segment a space is
+ * reachable by (URLs + git), so we ensure the owner HAS one (assign-on-read,
+ * idempotent — a no-op in production, where every creation path already assigns a
+ * handle). Uniqueness is checked per-owner up front and, under a create race,
+ * enforced by the composite unique index `(owner_user_id, slug)`.
  */
 export async function createSpace(
   slug: string,
@@ -369,7 +431,12 @@ export async function createSpace(
   }
   const owner = await db.query.users.findFirst({ where: eq(users.id, ownerUserId) });
   if (!owner || owner.active !== 1) return { ok: false, error: "invalid owner" };
-  const dup = await getSpaceBySlug(slug);
+  // A namespaced space is reachable by its owner's handle — guarantee the owner
+  // has one (idempotent; keeps existing handle, derives + persists one otherwise).
+  await assignUserHandle(db, ownerUserId);
+  // Per-owner duplicate check: does THIS owner already own this slug? (A different
+  // owner owning the same slug is fine — the whole point of the composite key.)
+  const dup = await getSpaceByOwner(ownerUserId, slug);
   if (dup) return { ok: false, error: "slug already in use" };
 
   try {
