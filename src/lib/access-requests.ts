@@ -2,6 +2,7 @@ import { eq, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { accessRequests, users, userEmails } from "@/db/schema";
 import { emitEvent } from "@/lib/events";
+import { assignUserHandle } from "@/lib/user-handle";
 
 export type AccessRequestListItem = {
   id: number;
@@ -141,6 +142,8 @@ export async function approveAccessRequest(
       // Mirror the primary email into user_emails so the auth-resolution lookup
       // finds the new row.
       await tx.insert(userEmails).values({ userId: user.id, email });
+      // Assign the stable owner handle atomically with the new user (S1).
+      await assignUserHandle(tx, user.id);
       await tx.delete(accessRequests).where(eq(accessRequests.id, id));
       // user.approved is admin-only-visible in the events feed. Payload carries
       // the new user id + email only (no doc). This is the one S1 kind with no

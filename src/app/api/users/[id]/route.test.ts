@@ -260,6 +260,56 @@ describe("PATCH /api/users/[id]", () => {
     expect(row.email).toBe("orig2@example.com");
     expect(row.displayName).toBe("Orig"); // whole request rejected
   });
+
+  // ── handle edit (Owner-namespace S1) ──────────────────────────────────────
+  it("admin sets a valid handle → 200, stored", async () => {
+    const u = await createUser({ email: "h1@example.com", displayName: "H1", role: "member" });
+    const res = await PATCH(patchReq(u!.id, { handle: "renamed-handle" }), ctx(u!.id));
+    expect(res.status).toBe(200);
+    const row = (await listUsers()).find((r) => r.id === u!.id);
+    expect(row?.handle).toBe("renamed-handle");
+  });
+
+  it("invalid handle (uppercase) → 400, no change", async () => {
+    const u = await createUser({ email: "h2@example.com", displayName: "H2", role: "member" });
+    const before = (await listUsers()).find((r) => r.id === u!.id)?.handle;
+    const res = await PATCH(patchReq(u!.id, { handle: "Bad_Handle" }), ctx(u!.id));
+    expect(res.status).toBe(400);
+    const after = (await listUsers()).find((r) => r.id === u!.id)?.handle;
+    expect(after).toBe(before); // unchanged
+  });
+
+  it("invalid handle (leading dash) → 400", async () => {
+    const u = await createUser({ email: "h2b@example.com", displayName: "H2b", role: "member" });
+    const res = await PATCH(patchReq(u!.id, { handle: "-nope" }), ctx(u!.id));
+    expect(res.status).toBe(400);
+  });
+
+  it("handle over 39 chars → 400", async () => {
+    const u = await createUser({ email: "h2c@example.com", displayName: "H2c", role: "member" });
+    const res = await PATCH(patchReq(u!.id, { handle: "a".repeat(40) }), ctx(u!.id));
+    expect(res.status).toBe(400);
+  });
+
+  it("handle collision with another user → 409", async () => {
+    const a = await createUser({ email: "taken@example.com", displayName: "A", role: "member" });
+    const b = await createUser({ email: "other-user@example.com", displayName: "B", role: "member" });
+    const aHandle = (await listUsers()).find((r) => r.id === a!.id)!.handle!;
+    const res = await PATCH(patchReq(b!.id, { handle: aHandle }), ctx(b!.id));
+    expect(res.status).toBe(409);
+  });
+
+  it("handle must be a string → 400", async () => {
+    const u = await createUser({ email: "h3@example.com", displayName: "H3", role: "member" });
+    const res = await PATCH(patchReq(u!.id, { handle: 123 }), ctx(u!.id));
+    expect(res.status).toBe(400);
+  });
+
+  it("handle edit is admin-only → 403 for member", async () => {
+    const u = await createUser({ email: "h4@example.com", displayName: "H4", role: "member" });
+    const res = await PATCH(patchReq(u!.id, { handle: "sneaky" }, "member"), ctx(u!.id));
+    expect(res.status).toBe(403);
+  });
 });
 
 // ── self-lockout guard (pure predicate) ───────────────────────────────────────

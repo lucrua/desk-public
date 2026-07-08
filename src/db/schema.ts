@@ -76,8 +76,20 @@ export const users = pgTable("users", {
   displayName: text("display_name").notNull(),
   role: roleEnum("role").notNull().default("member"),
   active: integer("active").notNull().default(1), // 1|0 — offboarding flips to 0
+  // The STABLE, UNIQUE, URL-safe owner identity (Owner-namespace S1, decision
+  // D1) — ^[a-z0-9][a-z0-9-]*$, length ≤ 39. The real owner handle that later
+  // slices use for repo paths + owner-namespaced URLs, replacing the broken
+  // email-derived ownerSlugForUser (recomputed live from the mutable email; not
+  // unique, not stable). Nullable for now: Postgres allows multiple NULLs under
+  // the unique index, so existing rows sit at NULL until the idempotent boot
+  // backfill (backfillUserHandles) assigns each one; every creation path assigns
+  // a handle going forward, so NULLs exist only transiently pre-backfill. A
+  // follow-up may enforce NOT NULL once every deployment is backfilled.
+  handle: text("handle"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("users_handle_idx").on(t.handle),
+]);
 
 // Multiple emails per user. A user can own several CF-verified email addresses
 // (lucas@example.org + lucas@example.net = one account); login by ANY of

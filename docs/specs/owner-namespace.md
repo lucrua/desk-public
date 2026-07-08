@@ -52,3 +52,14 @@ Order **S1 → S2 → S3 → S4 → S5**, each committed atomically with full su
 ## Outcomes
 
 _(appended after each slice.)_
+
+### S1 — `users.handle` primitive (landed)
+
+Added a **stored, unique, URL-safe `users.handle`** (`^[a-z0-9][a-z0-9-]*$`, ≤ 39) — the real owner identity later slices use for repo paths + URLs, replacing the broken email-derived `ownerSlugForUser` (which stays in place until S2 retires it). **No URL/route/repo-path change** — this slice adds the primitive only.
+
+- **Schema + migration `0023_user_handle`** — `ALTER TABLE users ADD COLUMN handle text` + a **unique index** (`users_handle_idx`). Kept **nullable for now** on purpose: Postgres allows multiple NULLs under a unique index, so existing rows sit at NULL until the boot backfill assigns them; every creation path assigns a handle going forward, so NULLs exist only transiently pre-backfill. Hand-authored SQL + a journal entry (idx 23), per the broken-`drizzle-kit-generate` convention (no snapshot, matching 0018–0022).
+- **Shared derive+dedup** lives in **`src/lib/user-handle.ts`** as the single source: `deriveHandleBase(tokenName ?? email-local ?? u<id>, id)` → `slugifyHandle` → `dedupeHandle(base, taken)` (`lucas`, `lucas-2`, `lucas-3`…, length-capped). The **boot backfill** (`backfillUserHandles`, wired into `instrumentation.register` after the existing backfills) walks users **id-ascending**, seeds the taken-set from already-assigned handles, and assigns each NULL row — idempotent (skips assigned rows; every UPDATE guarded by `handle IS NULL`; re-run is a no-op). The **creation helper** (`assignUserHandle(tx, userId)`) runs inside each user-insert transaction; the unique index is the concurrency guard.
+- **Every creation path assigns a handle:** `createUser`, access-request accept, invite accept, first-login `bootstrapAdmin`, the `system` reserved user, and the dev-mode `dev-admin`/`dev-member` stubs.
+- **Admin edit:** `PATCH /api/users/[id]` accepts `handle` (admin-only, mass-assignment-guarded); `setUserHandle` enforces format (**400** on invalid) + uniqueness (**409** on collision). A rename stores the new handle only — no repo move yet (that's S2/S3).
+- **Exposed:** `handle` on the `whoami` MCP tool output, on `UserListItem` (so `listUsers`/`getUserById` carry it), and in the admin Users table (an `@handle` line under the name with an inline edit control mirroring the existing display-name editor).
+- **Tests:** backfill determinism + de-dup (three `lucas` → `lucas`/`lucas-2`/`lucas-3`), idempotent re-run, agent (tokenName) + no-identifier (`u<id>`) fallbacks, de-dup against a pre-assigned handle; pure-helper unit tests; admin-edit format/uniqueness/admin-only (400/409/403); creation assigns a unique handle. Full `npx vitest run` (1613) + `pnpm build` + `pnpm typecheck` green.

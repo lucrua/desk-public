@@ -8,6 +8,9 @@ export type UserRowView = {
   displayName: string;
   email: string | null;
   tokenName: string | null;
+  /** The stable, unique, URL-safe owner handle (Owner-namespace S1). Null only
+   *  transiently before the boot backfill. Admin-editable. */
+  handle: string | null;
   role: "admin" | "member";
   active: boolean;
   created: string; // YYYY-MM-DD stamp
@@ -72,6 +75,13 @@ export default function UserRow({ row }: { row: UserRowView }) {
   const [nameError, setNameError] = useState<string | null>(null);
   const [nameSaving, setNameSaving] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // ── handle editing state (Owner-namespace S1) ────────────────────────────────
+  const [editingHandle, setEditingHandle] = useState(false);
+  const [handleDraft, setHandleDraft] = useState("");
+  const [handleError, setHandleError] = useState<string | null>(null);
+  const [handleSaving, setHandleSaving] = useState(false);
+  const handleInputRef = useRef<HTMLInputElement>(null);
 
   // ── email management state (multi-email) ─────────────────────────────────────
   const [addingEmail, setAddingEmail] = useState(false);
@@ -220,6 +230,50 @@ export default function UserRow({ row }: { row: UserRowView }) {
     setNameError(null);
   }
 
+  function openHandleEdit() {
+    setHandleDraft(row.handle ?? "");
+    setHandleError(null);
+    setEditingHandle(true);
+    setTimeout(() => handleInputRef.current?.focus(), 0);
+  }
+
+  function cancelHandleEdit() {
+    setEditingHandle(false);
+    setHandleError(null);
+  }
+
+  async function saveHandle() {
+    const value = handleDraft.trim();
+    if (value.length === 0) {
+      setHandleError("Handle can't be empty.");
+      return;
+    }
+    if (value === row.handle) {
+      setEditingHandle(false);
+      return;
+    }
+    setHandleError(null);
+    setHandleSaving(true);
+    try {
+      const res = await fetch(`/api/users/${row.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ handle: value }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        setHandleError(data?.error ?? `Save failed (${res.status})`);
+        return;
+      }
+      setEditingHandle(false);
+      startTransition(() => router.refresh());
+    } catch {
+      setHandleError("Network error — no change made.");
+    } finally {
+      setHandleSaving(false);
+    }
+  }
+
   async function saveName() {
     const value = nameDraft.trim();
     if (value.length === 0) {
@@ -284,7 +338,7 @@ export default function UserRow({ row }: { row: UserRowView }) {
           gridTemplateColumns: "1.2fr 1.3fr 1fr 0.7fr 0.8fr 0.8fr 1fr",
           padding: "9px 14px",
           borderBottom:
-            editingToken || editingName || addingEmail || emailError
+            editingToken || editingName || editingHandle || addingEmail || emailError
               ? "none"
               : "1px solid var(--hairline)",
           alignItems: "center",
@@ -310,6 +364,38 @@ export default function UserRow({ row }: { row: UserRowView }) {
               type="button"
               onClick={openNameEdit}
               title="Edit display name"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "0 2px",
+                color: "var(--faint)",
+                fontSize: 10,
+                lineHeight: 1,
+              }}
+            >
+              ✎
+            </button>
+          </span>
+          {/* owner handle (Owner-namespace S1) — the stable @identity + edit. */}
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontFamily: "var(--font-mono)",
+              fontSize: 10.5,
+              fontWeight: 400,
+              color: "var(--faint)",
+            }}
+          >
+            <span title="Owner handle — stable, unique identity for repo paths & URLs">
+              {row.handle ? `@${row.handle}` : "@—"}
+            </span>
+            <button
+              type="button"
+              onClick={openHandleEdit}
+              title="Edit owner handle"
               style={{
                 background: "none",
                 border: "none",
@@ -637,6 +723,69 @@ export default function UserRow({ row }: { row: UserRowView }) {
           </button>
           {nameError && (
             <span style={{ fontSize: 11, color: "var(--danger-ink)" }}>{nameError}</span>
+          )}
+        </div>
+      )}
+      {/* ── inline handle editor (Owner-namespace S1) ── */}
+      {editingHandle && (
+        <div
+          style={{
+            padding: "8px 14px 10px",
+            borderBottom: "1px solid var(--hairline)",
+            background: "var(--surface-alt)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <input
+            ref={handleInputRef}
+            type="text"
+            value={handleDraft}
+            onChange={(e) => setHandleDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void saveHandle();
+              if (e.key === "Escape") cancelHandleEdit();
+            }}
+            placeholder="owner handle — ^[a-z0-9][a-z0-9-]*$, ≤ 39 chars"
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+              flex: 1,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--hairline-strong)",
+              background: "var(--surface)",
+              color: "var(--ink)",
+              minWidth: 0,
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => void saveHandle()}
+            disabled={handleSaving}
+            style={{
+              ...actionBtn,
+              border: "1px solid var(--ref-border)",
+              color: "var(--ref-ink)",
+            }}
+          >
+            {handleSaving ? "…" : "save"}
+          </button>
+          <button
+            type="button"
+            onClick={cancelHandleEdit}
+            disabled={handleSaving}
+            style={{
+              ...actionBtn,
+              border: "1px solid var(--hairline)",
+              color: "var(--faint)",
+            }}
+          >
+            cancel
+          </button>
+          {handleError && (
+            <span style={{ fontSize: 11, color: "var(--danger-ink)" }}>{handleError}</span>
           )}
         </div>
       )}

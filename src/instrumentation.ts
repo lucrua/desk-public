@@ -66,4 +66,18 @@ export async function register(): Promise<void> {
   } catch (e) {
     console.error("[startup] DB-only doc materialization failed:", (e as Error)?.message);
   }
+
+  // Owner-namespace, Slice S1 (decision D1): backfill users.handle — the stable,
+  // unique, URL-safe owner identity later slices use for repo paths + URLs. For
+  // each user with a NULL handle, in deterministic id-ascending order, derive a
+  // base (tokenName/email-local/`u<id>`), slugify, and de-dup with a `-N` suffix.
+  // Idempotent (a user with a handle is skipped; a re-run is a no-op) +
+  // best-effort (a failure logs, never crashes boot). Runs AFTER the backfills
+  // above by convention (order-independent — it only touches users.handle).
+  try {
+    const { backfillUserHandles } = await import("@/lib/user-handle");
+    await backfillUserHandles();
+  } catch (e) {
+    console.error("[startup] user handle backfill failed:", (e as Error)?.message);
+  }
 }

@@ -162,6 +162,13 @@
       "when": 1781210400000,
       "tag": "0022_drop_audience_catalog_cruft",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781210500000,
+      "tag": "0023_user_handle",
+      "breakpoints": true
     }
   ]
 }

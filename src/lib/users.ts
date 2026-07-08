@@ -2,6 +2,7 @@ import { eq, desc, asc, and, count, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { users, userEmails } from "@/db/schema";
 import { emitEvent } from "@/lib/events";
+import { assignUserHandle, HANDLE_RE, MAX_HANDLE_LEN } from "@/lib/user-handle";
 
 export type Role = "admin" | "member";
 
@@ -12,6 +13,9 @@ export type UserListItem = {
   displayName: string;
   role: Role;
   active: number; // 1 | 0
+  /** The stable, unique, URL-safe owner identity (Owner-namespace S1, D1). Null
+   *  only transiently for a row created before the boot backfill assigned one. */
+  handle: string | null;
   createdAt: Date;
 };
 
@@ -58,6 +62,7 @@ export async function listUsers(): Promise<UserListItem[]> {
     displayName: r.displayName,
     role: r.role,
     active: r.active,
+    handle: r.handle,
     createdAt: r.createdAt,
   }));
 }
@@ -80,6 +85,7 @@ export async function getUserById(id: number): Promise<UserListItem | null> {
     displayName: r.displayName,
     role: r.role,
     active: r.active,
+    handle: r.handle,
     createdAt: r.createdAt,
   };
 }
@@ -120,7 +126,10 @@ export async function createUser(input: CreateUserInput): Promise<UserListItem |
       if (email) {
         await tx.insert(userEmails).values({ userId: u.id, email });
       }
-      return u;
+      // Assign the stable owner handle atomically with the insert (Owner-namespace
+      // S1) — derived from tokenName/email/`u<id>`, de-duped with a `-N` suffix.
+      const handle = await assignUserHandle(tx, u.id);
+      return { ...u, handle };
     });
 
     return {
@@ -130,6 +139,7 @@ export async function createUser(input: CreateUserInput): Promise<UserListItem |
       displayName: row.displayName,
       role: row.role,
       active: row.active,
+      handle: row.handle,
       createdAt: row.createdAt,
     };
   } catch (e) {
@@ -352,6 +362,38 @@ export async function setUserTokenName(
     const updated = await db
       .update(users)
       .set({ tokenName: normalized })
+      .where(eq(users.id, id))
+      .returning({ id: users.id });
+    return updated.length > 0 ? "ok" : "not-found";
+  } catch (e) {
+    if (isUniqueViolation(e)) return "duplicate";
+    throw e;
+  }
+}
+
+// ── setUserHandle (admin rename of the owner identity) ───────────────────────
+
+export type SetHandleResult = "ok" | "not-found" | "duplicate" | "invalid";
+
+/**
+ * Set (rename) a user's owner handle (Owner-namespace S1, admin-editable per D1).
+ * The value is trimmed and must match ^[a-z0-9][a-z0-9-]*$ with length ≤ 39;
+ * anything else → "invalid" (the caller returns 400). A collision with another
+ * user's handle → "duplicate" (409). Unknown id → "not-found" (404).
+ *
+ * A rename does NOT touch on-disk repos yet — that atomic move is S2/S3. S1 only
+ * stores the new handle.
+ */
+export async function setUserHandle(
+  id: number,
+  handle: string,
+): Promise<SetHandleResult> {
+  const value = handle.trim();
+  if (!HANDLE_RE.test(value) || value.length > MAX_HANDLE_LEN) return "invalid";
+  try {
+    const updated = await db
+      .update(users)
+      .set({ handle: value })
       .where(eq(users.id, id))
       .returning({ id: users.id });
     return updated.length > 0 ? "ok" : "not-found";

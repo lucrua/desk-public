@@ -116,6 +116,7 @@ import {
   tokenOwnerUserId,
 } from "@/lib/spaces";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
+import { getUserById } from "@/lib/users";
 import { createInvite } from "@/lib/invites/invites";
 import {
   listProposalsForSpace,
@@ -632,15 +633,21 @@ const addCommentTool = defineTool({
 const whoamiTool = defineTool({
   name: "whoami",
   description:
-    "Return the resolved principal for the calling credentials (kind, name, and masked email/tokenName). The 'is my service token wired right' debugging tool. Staff only.",
+    "Return the resolved principal for the calling credentials (kind, name, masked email/tokenName, and the stable owner handle). The 'is my service token wired right' debugging tool. Staff only.",
   inputSchema: {},
   handler: async (principal) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
+    // The stable owner handle (Owner-namespace S1) — the caller's real owner
+    // identity for repo paths + URLs. Resolve the backing user row (null for a
+    // principal with no resolvable row in production).
+    const userId = await resolvePrincipalUserId(principal);
+    const user = userId != null ? await getUserById(userId) : null;
     return ok({
       kind: principal.kind,
       name: principal.name,
       email: maskContact(principal.email),
       tokenName: maskContact(principal.tokenName),
+      handle: user?.handle ?? null,
     });
   },
 });

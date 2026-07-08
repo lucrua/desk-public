@@ -8,6 +8,7 @@ import type { Principal } from "@/lib/auth";
 import { normalizePath } from "@/lib/path";
 import { SNIPPET_START, SNIPPET_STOP } from "@/lib/snippet-delim";
 import { DEFAULT_SPACE_SLUG } from "@/lib/spaces";
+import { assignUserHandle } from "@/lib/user-handle";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -59,6 +60,8 @@ async function ensureDefaultSpaceTx(tx: Tx, ownerUserId?: number): Promise<numbe
         .values({ tokenName: "system", displayName: "System", role: "member", active: 1 })
         .returning({ id: users.id });
       owner = sys.id;
+      // Assign the reserved system user a stable owner handle (S1).
+      await assignUserHandle(tx, owner);
     }
   }
 

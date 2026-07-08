@@ -220,6 +220,14 @@ describe("MCP route — role scoping", () => {
     expect(payload.name).toBe("Dev Admin");
   });
 
+  it("whoami surfaces the caller's owner handle (Owner-namespace S1)", async () => {
+    const { json } = await toolsCall("whoami", {}, "admin");
+    const payload = resultPayload(json);
+    expect(payload).toHaveProperty("handle");
+    // The dev-admin stub is created with tokenName 'dev-admin' → handle 'dev-admin'.
+    expect(payload.handle).toBe("dev-admin");
+  });
+
   it("whoami reflects member role", async () => {
     const { json } = await toolsCall("whoami", {}, "member");
     const payload = resultPayload(json);

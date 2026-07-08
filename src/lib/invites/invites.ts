@@ -25,6 +25,7 @@ import { spaceInvites, spaceMembers, users, userEmails, principalTokens } from "
 import { mintToken, hashToken } from "@/lib/tokens";
 import { emitEvent } from "@/lib/events";
 import { getSpaceBySlug, ownerSlugForSpace } from "@/lib/spaces";
+import { assignUserHandle } from "@/lib/user-handle";
 
 const SHARE_BASE_URL = process.env.SHARE_BASE_URL ?? "http://localhost:3000";
 
@@ -274,6 +275,8 @@ export async function acceptInvite(
         userId = created.id;
         // Mirror the primary email so future logins/lookups resolve this row.
         await tx.insert(userEmails).values({ userId, email });
+        // Assign the stable owner handle atomically with the new user (S1).
+        await assignUserHandle(tx, userId);
       }
 
       // ── upsert the space membership at the invite's role ─────────────────────

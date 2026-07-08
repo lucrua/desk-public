@@ -6,6 +6,7 @@ import { db, schema } from "@/db";
 import {
   setUserTokenName,
   setUserDisplayName,
+  setUserHandle,
   applyAdminMutation,
   isLastAdminOperation,
   type Role,
@@ -83,6 +84,7 @@ export async function PATCH(req: Request, { params }: RouteContext) {
   const hasRole = "role" in b;
   const hasTokenName = "tokenName" in b;
   const hasDisplayName = "displayName" in b;
+  const hasHandle = "handle" in b;
   // email is intentionally NOT accepted — it's immutable (mass-assignment guard).
   const hasEmail = "email" in b;
 
@@ -90,10 +92,10 @@ export async function PATCH(req: Request, { params }: RouteContext) {
   if (hasEmail) {
     return err(400, "email is immutable");
   }
-  if (!hasActive && !hasRole && !hasTokenName && !hasDisplayName) {
+  if (!hasActive && !hasRole && !hasTokenName && !hasDisplayName && !hasHandle) {
     return err(
       400,
-      "Provide at least one of: active (boolean), role ('admin'|'member'), tokenName (string|null), displayName (string)",
+      "Provide at least one of: active (boolean), role ('admin'|'member'), tokenName (string|null), displayName (string), handle (string)",
     );
   }
   if (hasActive && typeof b.active !== "boolean") {
@@ -111,11 +113,15 @@ export async function PATCH(req: Request, { params }: RouteContext) {
   ) {
     return err(400, "displayName must be a non-empty string");
   }
+  if (hasHandle && typeof b.handle !== "string") {
+    return err(400, "handle must be a string");
+  }
 
   const active = hasActive ? (b.active as boolean) : undefined;
   const role = hasRole ? (b.role as Role) : undefined;
   const tokenName = hasTokenName ? (b.tokenName as string | null) : undefined;
   const displayName = hasDisplayName ? (b.displayName as string) : undefined;
+  const handle = hasHandle ? (b.handle as string) : undefined;
 
   // Load the target row so the self-lockout guard can match on identity, and so
   // we can return 404 for an unknown id before mutating anything.
@@ -189,6 +195,19 @@ export async function PATCH(req: Request, { params }: RouteContext) {
     }
     // "not-found" is already handled above by the target-row load; this
     // branch means the row disappeared between the two DB calls — harmless.
+  }
+  if (handle !== undefined) {
+    // Rename the owner handle (Owner-namespace S1). Format + uniqueness are
+    // enforced in setUserHandle; a rename stores the new handle only (no repo
+    // move yet — that's S2/S3).
+    const result = await setUserHandle(id, handle);
+    if (result === "invalid") {
+      return err(400, "handle must match ^[a-z0-9][a-z0-9-]*$ and be ≤ 39 chars");
+    }
+    if (result === "duplicate") {
+      return err(409, "handle already in use by another user");
+    }
+    // "not-found" already handled above by the target-row load.
   }
 
   return NextResponse.json({ ok: true });

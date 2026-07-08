@@ -3,6 +3,7 @@ import type { JWTVerifyGetKey } from "jose";
 import { db, schema } from "@/db";
 import { eq, count, and, sql } from "drizzle-orm";
 import type { Principal } from "./principal";
+import { assignUserHandle } from "@/lib/user-handle";
 
 /**
  * The full set of key types jose's jwtVerify accepts — either a raw key
@@ -233,6 +234,8 @@ async function bootstrapAdmin(email: string): Promise<Principal | null> {
       await tx
         .insert(schema.userEmails)
         .values({ userId: u.id, email: normalized });
+      // Assign the stable owner handle atomically with the bootstrap admin (S1).
+      await assignUserHandle(tx, u.id);
       return u;
     });
     return {

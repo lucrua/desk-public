@@ -100,6 +100,11 @@ export type UserRowView = {
   email: string | null;
   tokenName: string | null;
   /**
+   * The stable, unique, URL-safe owner handle (Owner-namespace S1). Null only
+   * transiently for a row created before the boot backfill; admin-editable.
+   */
+  handle: string | null;
+  /**
    * The user's role — read from the stored `users.role` column (multi-admin
    * model v2). The `adminEmail` parameter to `toUserRow` is retained for
    * call-site compatibility but is no longer used for role derivation.
@@ -182,6 +187,7 @@ export function toUserRow(
     displayName: u.displayName,
     email: u.email,
     tokenName: u.tokenName,
+    handle: u.handle,
     role: isAdmin ? "admin" : "member",
     active: u.active === 1,
     created: dateStamp(u.createdAt),

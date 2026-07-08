@@ -27,6 +27,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import type { Principal } from "@/lib/auth";
 import { resolveMemberUserId } from "@/lib/cards";
+import { assignUserHandle } from "@/lib/user-handle";
 
 /** Reserved tokenName for the dev-mode "member" role-switcher stub user. */
 export const DEV_MEMBER_TOKEN_NAME = "dev-member";
@@ -60,11 +61,16 @@ async function ensureDevAdmin(): Promise<number> {
     .values({ tokenName: "dev-admin", displayName: DEV_ADMIN_DISPLAY, role: "admin", active: 1 })
     .onConflictDoNothing()
     .returning({ id: users.id });
-  if (u) return u.id;
+  if (u) {
+    // Assign the stable owner handle (S1); idempotent on re-entry.
+    await assignUserHandle(db, u.id);
+    return u.id;
+  }
   // Lost the race — re-read.
   const again = await db.query.users.findFirst({
     where: eq(users.tokenName, "dev-admin"),
   });
+  await assignUserHandle(db, again!.id);
   return again!.id;
 }
 
@@ -84,10 +90,15 @@ async function ensureDevMember(): Promise<number> {
     })
     .onConflictDoNothing()
     .returning({ id: users.id });
-  if (u) return u.id;
+  if (u) {
+    // Assign the stable owner handle (S1); idempotent on re-entry.
+    await assignUserHandle(db, u.id);
+    return u.id;
+  }
   const again = await db.query.users.findFirst({
     where: eq(users.tokenName, DEV_MEMBER_TOKEN_NAME),
   });
+  await assignUserHandle(db, again!.id);
   return again!.id;
 }
 
