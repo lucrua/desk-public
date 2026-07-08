@@ -1,0 +1,54 @@
+# Desk — Owner-namespaced spaces: stable user handles, composite (owner, slug), `/spaces/<owner>/<slug>` (design)
+
+> **Status: DRAFT — pending owner review (2026-07-08).** Turns Desk's flat global space namespace into a true multi-tenant one (`architecture.md`: "N owners × spaces, symmetric"), so two owners can each own a `growth-reports`. Grounded in a read-only survey of `main@98757d6`. **AUTH-SENSITIVE + DATA-SENSITIVE:** it changes how spaces resolve (read + git write boundary) and moves canonical bare repos on disk. Landing posture: branch, atomic slices, full suite + build + typecheck green, **STOP for review**; the repo migration gets a backup + dry-run before it runs anywhere real.
+
+## Why
+
+1. **No real owner identity exists.** The `<owner>` in the git URL is `ownerSlugForUser()` (`src/lib/spaces.ts`), derived from the email **local-part** (`lucas@example.org` → `lucas`), falling back to token name / `u<id>`. It is **not unique** (`lucas@a.com` and `lucas@b.com` both → `lucas`) and **not stable** (recomputed from the current email, and `users.email` is mutated — `users.ts:508–516` repoints the primary email when one is removed). You cannot build a reliable namespace on it.
+2. **Latent repo-orphan bug.** The on-disk bare-repo path is `bareRepoPath(ownerSlugForUser(...), slug)` (`repoPathForSpace` in `web-author.ts` / `proposals-service.ts` / `mirror.ts` / `materialize.ts`). Because the owner segment is re-derived from the current email, **changing a user's primary email changes their spaces' repo paths → the existing bare repos are orphaned** (history appears lost). Decoupling the path from email fixes this.
+3. **Flat global namespace.** `spaces.slug` is globally unique (`schema.ts:120`), so only one `growth-reports` can exist instance-wide; the git URL carries `<owner>` but the web/API resolve by the globally-unique slug alone — the owner segment is a validated label, not a namespace. This contradicts the documented multi-tenant model and blocks two owners sharing a slug.
+
+## Decisions
+
+- **D1 (user handle).** New column `users.handle` — a **stored, stable, unique, URL-safe** slug (`^[a-z0-9][a-z0-9-]*$`, length ≤ 39). Backfilled for existing users from the email local-part (or `tokenName`), de-duplicated with a `-2/-3…` suffix on collision. Assigned on user creation the same way. **Admin-editable** (uniqueness enforced; a rename is a real operation — see D3). This replaces `ownerSlugForUser` as the owner identity for URLs **and** repo paths.
+- **D2 (composite space uniqueness).** Drop the global unique on `spaces.slug`; add `unique(owner_user_id, slug)`. Two owners may each own `growth-reports`. Slug validation unchanged (`^[a-z0-9][a-z0-9-]*$`).
+- **D3 (repo path decoupled from email).** `repoPathForSpace` derives the path from the stored **handle** + slug (never the email), so email changes never orphan a repo. A **handle or slug rename** atomically moves the on-disk bare-repo dir within the same transaction/operation. A one-time boot migration re-points existing repos from the email-derived path to the handle-derived path (usually identical, since the handle backfills from the same local-part; the migration only moves the ones that differ). *Considered and rejected:* keying repos on immutable `spaceId` (fully decoupled, rename never touches disk) — cleaner in theory but loses on-disk browsability and forces migrating **every** repo; the handle-derived path migrates only the few that differ and keeps `DESK_DATA_DIR` human-readable. Revisit if renames become frequent.
+- **D4 (owner-shaped URLs everywhere).** Web `/spaces/<handle>/<slug>`; API `/api/spaces/<handle>/<slug>/*`; git `/api/git/<handle>/<slug>.git` (already owner-shaped — now the segment is the stable handle). Canonical resolution: `handle → userId`, then `(userId, slug) → space`. `getSpaceBySlug(slug)` becomes `getSpace(handle, slug)` (~20 callers).
+- **D5 (redirects preserve existing links).** The legacy single-segment **web** route `/spaces/<slug>` resolves the slug: **exactly one** space with that slug → **301** to `/spaces/<handle>/<slug>`; **ambiguous** (only possible once a future collision exists) → 404; none → 404. This keeps every existing link (e.g. the external project's `/spaces/growth-reports`) working. Legacy `/api/spaces/<slug>/*` does **not** 301 (a redirect on a POST would drop the body agents/CLI send) — it **resolves in place** by unique slug during a deprecation window, and returns a clear `409/400 "ambiguous — qualify with <owner>/<slug>"` if a collision exists. Same rule for MCP bare-slug args (D6).
+- **D6 (MCP/agent surface).** MCP tools that take a `space` argument (`publish_doc`, `create_directory_share`, `set_space_member`, `create_invite`, proposals, mirror, …) accept an **owner-qualified** `handle/slug`; a bare `slug` still resolves when unambiguous and errors clearly when ambiguous. `whoami` surfaces the caller's handle. `/help` + the README tool table updated.
+- **D7 (docs out of scope).** `/docs/<slug>` is unchanged — doc slugs are globally-unique opaque ids with no collision problem. Readable `/{owner}/{space}/{path}` doc URLs stay deferred (per the doc-identity spec), a separate concern.
+
+## Slices
+
+Two phases. **Phase A (S1–S2)** introduces stable handles and fixes the repo-orphan bug — shippable on its own, no URL/behavior change for users. **Phase B (S3–S5)** delivers the multi-tenant namespace. Order is strict (each builds on the last). Every slice: full `npx vitest run` + `pnpm build` + `pnpm typecheck` green, atomic commits, **STOP for review**.
+
+### Phase A — stable handles (safe foundation)
+
+- **S1 — `users.handle` primitive.** Hand-authored migration: add `users.handle text` + unique index; backfill all existing users (local-part/tokenName → slugify → de-dup with `-N`); NOT NULL after backfill. New-user creation assigns a handle. Admin edit path (`PATCH /api/users/[id]` or the users UI) with uniqueness + format validation. `whoami`/user views expose `handle`. Tests: backfill determinism + de-dup, format/uniqueness enforcement, admin-only edit. **No URL/repo change yet.**
+- **S2 — repo path via handle (fixes the orphan bug).** Replace `ownerSlugForUser` usage in `repoPathForSpace` (and `bareRepoPath` callers in `web-author.ts`, `proposals-service.ts`, `mirror.ts`, `materialize.ts`, the git route, `import.ts`) with the stored **handle**. One-time boot migration (`instrumentation.register`, following `backfillShareSpaceIds`/`materializeDbOnlyDocs`): for each space, if the email-derived legacy path exists and differs from the handle-derived path, **move** the bare repo dir (idempotent; log every move; skip when already correct). **Retire `ownerSlugForUser`.** Tests: path derives from handle not email; a simulated email change does NOT change the path; migration moves a mismatched repo and is a no-op on re-run. **⚠ canon data — dry-run/log first, backup `DESK_DATA_DIR` before running on staging/prod.**
+
+### Phase B — the namespace
+
+- **S3 — composite key + resolution refactor (auth-sensitive core).** Migration: drop `spaces.slug` global unique; add `unique(owner_user_id, slug)`. `getSpaceBySlug(slug)` → `getSpace(handle, slug)` across ~20 callers; `createSpace` uniqueness check becomes `(owner, slug)`. **Rewrite `resolveSpaceRole`** (the git write boundary) to resolve `(handle→userId, slug)→space` instead of global-slug + owner-match. Exhaustive boundary tests: two owners with the same slug stay isolated (member of A ≠ access to B); git clone/push authorizes against the right `(owner, slug)`; wrong-owner/wrong-handle → uniform 404; the full read matrix (admin/member/non-member/public/share/anonymous) holds per owner.
+- **S4 — route restructure + redirects.** Web `/spaces/[slug]` → `/spaces/[owner]/[slug]`; API `/api/spaces/[slug]/**` → `/api/spaces/[owner]/[slug]/**` (every sub-route: docs, raw, members, invites, mirror, proposals, deploy-key). Legacy single-segment web + API routes become redirect/deprecation handlers per D5 (unique→301, ambiguous→404). MCP `space` args accept `handle/slug` (D6). Git URL emission (`git-url.ts`) uses the handle. Tests: canonical routes resolve; legacy `/spaces/<slug>` 301s while unique and 404s when ambiguous; MCP owner-qualified + bare-slug resolution.
+- **S5 — links, catalog, projections, sweep.** Update every `/spaces/` link (~16 UI files: `HubNav`, `spaces/page.tsx`, all space panels, `docs/[slug]` back-links, `help`), the catalog `?space=` param (now needs owner qualification), the setup-prompt/push-help git URLs, and any breadcrumb. Confirm directory shares (space-scoped by `space_id` since fix-pass Slice 1 — id-based, no change) and doc URLs (`/docs/<slug>`, unchanged) are unaffected. Full boundary/build/typecheck sweep; update README + `architecture.md` (§3 multi-tenant now real) + AGENTS.md; append Outcomes.
+
+## Testing & verification
+
+- **Boundary-class tests are mandatory** (this is the sacred read + git-write boundary): two owners same slug isolated; per-owner read matrix (admin/member/non-member/public/share/anonymous → uniform 404 on miss); git clone/push authorizes against `(owner, slug)`; handle rename moves repo + keeps access; email change never orphans a repo.
+- **Browser verification** (per `verification-before-frontend-completion`) for the route/link changes: navigate to `/spaces/<owner>/<slug>`, confirm a legacy `/spaces/<slug>` 301s, links resolve.
+- The repo migration (S2) is validated on real seed data with a **dry-run/log pass** before an actual move; `DESK_DATA_DIR` backed up first.
+
+## Deferred / out of scope
+
+Readable doc URLs `/{owner}/{space}/{path}` · self-serve (non-admin) space creation · user-editable handles (admin-only for now) · immutable-id repo paths (D3 alternative) · changing the doc opaque-slug scheme.
+
+## Landing
+
+Order **S1 → S2 → S3 → S4 → S5**, each committed atomically with full suite + build + typecheck green, then **STOP for review** (S2 data-sensitive, S3 auth-sensitive). Never force-push. Hand-authored migrations. Phase A (S1–S2) is independently shippable and worth landing/reviewing before Phase B. Redeploy staging after Phase A and after Phase B.
+
+**Overall acceptance:** two owners each create `growth-reports`; both resolve correctly at `/spaces/<owner>/growth-reports` (web + API + git clone/push), isolated by the access boundary; the external project's legacy `/spaces/growth-reports` 301-redirects to the right one; a user's email change no longer orphans their repos.
+
+## Outcomes
+
+_(appended after each slice.)_
