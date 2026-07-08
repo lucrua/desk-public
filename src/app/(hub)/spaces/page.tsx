@@ -84,7 +84,7 @@ export default async function SpacesPage() {
 function SpaceRow({ space, first }: { space: SpaceViewItem; first: boolean }) {
   return (
     <Link
-      href={`/spaces/${space.slug}`}
+      href={`/spaces/${space.ownerHandle}/${space.slug}`}
       style={{
         display: "flex",
         alignItems: "center",

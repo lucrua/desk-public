@@ -166,6 +166,45 @@ export async function getSpaceBySlug(slug: string): Promise<SpaceRow | null> {
   return rows.length === 1 ? rows[0] : null;
 }
 
+export type ResolveSpaceArgResult =
+  | { ok: true; space: SpaceRow }
+  | { ok: false; error: string };
+
+/**
+ * Resolve an MCP/agent `space` argument to a space (Owner-namespace S4, decision
+ * D6). Accepts EITHER an owner-qualified `handle/slug` (preferred — resolves the
+ * exact owner via `getSpace`) OR a bare `slug` (transitional — resolves only when
+ * a SINGLE owner has it; two owners sharing the slug returns a clear "qualify with
+ * <owner>/<slug>" error rather than an arbitrary winner). Unknown → error. This is
+ * the helper every space-taking MCP tool (`publish_doc`, `create_directory_share`,
+ * `set_space_member`, `create_invite`, proposals, mirror, …) resolves through so a
+ * headless agent can address `alice/reports` unambiguously while a legacy bare
+ * `reports` keeps working until a collision exists.
+ */
+export async function resolveSpaceArg(arg: string): Promise<ResolveSpaceArgResult> {
+  const raw = (arg ?? "").trim();
+  if (raw.length === 0) return { ok: false, error: "Missing space" };
+  const slash = raw.indexOf("/");
+  if (slash >= 0) {
+    // Owner-qualified `handle/slug` — resolve the exact owner.
+    const handle = raw.slice(0, slash);
+    const slug = raw.slice(slash + 1);
+    const space = await getSpace(handle, slug);
+    if (!space) return { ok: false, error: `Space '${raw}' not found` };
+    return { ok: true, space };
+  }
+  // Bare slug — resolve only when unambiguous (a single owner).
+  const rows = await db.select().from(spaces).where(eq(spaces.slug, raw)).limit(2);
+  if (rows.length === 0) return { ok: false, error: `Space '${raw}' not found` };
+  if (rows.length > 1) {
+    return {
+      ok: false,
+      error: `Space slug '${raw}' is ambiguous (multiple owners) — qualify it as <owner>/${raw}`,
+    };
+  }
+  return { ok: true, space: rows[0] };
+}
+
 /** Look up a space by id (null when absent). */
 export async function getSpaceById(id: number): Promise<SpaceRow | null> {
   const row = await db.query.spaces.findFirst({ where: eq(spaces.id, id) });
@@ -203,6 +242,28 @@ export async function canManageSpace(
 export async function ownerSlugForSpace(space: SpaceRow): Promise<string> {
   const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
   return ownerSlugForUser(owner ?? null, space.ownerUserId);
+}
+
+/**
+ * The owner's STABLE HANDLE for a space — the canonical `<owner>` segment for the
+ * web/API/git URLs (Owner-namespace S4, decision D4). Loads `users.handle` for the
+ * space's owner; if it is somehow still NULL (a pre-backfill race, or a user made
+ * outside the assign-on-create paths) it ASSIGNS one on read (idempotent) rather
+ * than falling back to the mutable email-derived `ownerSlugForUser`. Throws only
+ * when the owner row is gone. This is what feeds `gitRepoUrl` / the setup-prompt /
+ * the canonical `/spaces/<owner>/<slug>` links, replacing `ownerSlugForSpace` on
+ * every URL surface.
+ */
+export async function ownerHandleForSpace(
+  space: Pick<SpaceRow, "ownerUserId" | "slug">,
+): Promise<string> {
+  const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
+  if (owner?.handle) return owner.handle;
+  const assigned = await assignUserHandle(db, space.ownerUserId);
+  if (assigned) return assigned;
+  throw new Error(
+    `ownerHandleForSpace: owner ${space.ownerUserId} of space ${space.slug} has no handle`,
+  );
 }
 
 /** Derive the stable `<owner>` URL/disk segment for a user. Prefers tokenName,
@@ -594,6 +655,10 @@ export type SpaceViewItem = SpaceListItem & {
   /** Owner's human label (display name) + the `<owner>` git-URL segment. */
   ownerLabel: string;
   ownerSlug: string;
+  /** The owner's STABLE HANDLE — the canonical `<owner>` segment for the
+   *  `/spaces/<owner>/<slug>` link (Owner-namespace S4). Falls back to the
+   *  email-derived slug only if a handle is somehow unassigned. */
+  ownerHandle: string;
   /** Count of LIVE (non-deleted) docs projected into this space. */
   docCount: number;
 };
@@ -620,6 +685,7 @@ export async function listSpacesForView(opts: {
       ...s,
       ownerLabel: owner?.displayName ?? `user ${s.ownerUserId}`,
       ownerSlug: ownerSlugForUser(owner ?? null, s.ownerUserId),
+      ownerHandle: owner?.handle ?? ownerSlugForUser(owner ?? null, s.ownerUserId),
       docCount: dc?.n ?? 0,
     });
   }

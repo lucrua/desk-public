@@ -108,7 +108,7 @@ import {
   setSpaceMemberRole,
   listSpaceMembers,
   canManageSpace,
-  getSpaceBySlug,
+  resolveSpaceArg,
   mintPrincipalToken,
   listTokensForUser,
   listAllTokens,
@@ -299,9 +299,13 @@ const getDocTool = defineTool({
 const publishDocTool = defineTool({
   name: "publish_doc",
   description:
-    "Publish a file into a SPACE by committing it to `main` (truth = git; Desk re-projects within seconds). `space` (slug) and `path` (repo-relative file path, e.g. 'reports/2026-q1.md') are BOTH REQUIRED. A doc-format path (.md/.markdown/.html/.htm) renders as a doc; any other path lands as a raw file. The doc's stable opaque slug is minted by the projection — you address by (space, path), never by slug. Content capped at 2,000,000 chars. Push policy is honored: owner/admin (and writers in `direct` mode) land on `main`; a non-owner writer in `proposal` mode gets a `proposals/<handle>` ref surfaced in the proposals queue (no slug/url until accepted). Requires the caller to be an admin or a member of the space (a reader is refused). Returns `{ slug, url, ref }` (slug/url null for a proposal write).",
+    "Publish a file into a SPACE by committing it to `main` (truth = git; Desk re-projects within seconds). `space` (owner-qualified `handle/slug`, e.g. 'alice/reports'; a bare `slug` still works when only one owner has it) and `path` (repo-relative file path, e.g. 'reports/2026-q1.md') are BOTH REQUIRED. A doc-format path (.md/.markdown/.html/.htm) renders as a doc; any other path lands as a raw file. The doc's stable opaque slug is minted by the projection — you address by (space, path), never by slug. Content capped at 2,000,000 chars. Push policy is honored: owner/admin (and writers in `direct` mode) land on `main`; a non-owner writer in `proposal` mode gets a `proposals/<handle>` ref surfaced in the proposals queue (no slug/url until accepted). Requires the caller to be an admin or a member of the space (a reader is refused). Returns `{ slug, url, ref }` (slug/url null for a proposal write).",
   inputSchema: {
-    space: z.string().describe("REQUIRED space slug to publish into."),
+    space: z
+      .string()
+      .describe(
+        "REQUIRED space to publish into — owner-qualified `handle/slug` (e.g. 'alice/reports'); a bare `slug` resolves when a single owner has it, else returns an ambiguity error.",
+      ),
     path: z
       .string()
       .describe(
@@ -319,8 +323,12 @@ const publishDocTool = defineTool({
   handler: async (principal, args) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
 
+    // Owner-qualify the space arg (handle/slug or unambiguous bare slug — D6).
+    const resolved = await resolveSpaceArg(args.space);
+    if (!resolved.ok) return fail(resolved.error);
+
     // READ/existence boundary + space role (owner|writer|reader), FAIL-CLOSED.
-    const access = await resolveWebAuthorAccess(principal, args.space.trim());
+    const access = await resolveWebAuthorAccess(principal, resolved.space.slug);
     if (!access.ok) {
       if (access.reason === "unknown-space") return fail(`Space '${args.space}' not found`);
       return fail("Forbidden — you may not write to this space");
@@ -502,11 +510,11 @@ const createShareTool = defineTool({
 const createDirectoryShareTool = defineTool({
   name: "create_directory_share",
   description:
-    "Mint a capability-link DIRECTORY share for a whole folder WITHIN a space (admin only). A directory share is SPACE-SCOPED: `space` (the space slug) is REQUIRED, and the link exposes every PUBLISHED doc under `path_prefix` IN THAT SPACE ONLY (the prefix or any descendant — boundary-safe, so 'finance' does not cover 'financial/', and a same-named folder in another space never leaks). Newly-published docs under it appear automatically and one revoke kills the lot. Audience is bypassed by design. The ROOT prefix is NOT allowed — a non-empty folder path is required. Returns the one-time share URL (the raw token appears exactly once). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `label` optional — auto-named from folder path when omitted.",
+    "Mint a capability-link DIRECTORY share for a whole folder WITHIN a space (admin only). A directory share is SPACE-SCOPED: `space` (owner-qualified `handle/slug`, or a bare `slug` when unambiguous) is REQUIRED, and the link exposes every PUBLISHED doc under `path_prefix` IN THAT SPACE ONLY (the prefix or any descendant — boundary-safe, so 'finance' does not cover 'financial/', and a same-named folder in another space never leaks). Newly-published docs under it appear automatically and one revoke kills the lot. Audience is bypassed by design. The ROOT prefix is NOT allowed — a non-empty folder path is required. Returns the one-time share URL (the raw token appears exactly once). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `label` optional — auto-named from folder path when omitted.",
   inputSchema: {
     space: z
       .string()
-      .describe("REQUIRED space slug the folder lives in (e.g. 'workspace'). The share is scoped to this space; a same-named folder in another space is never exposed."),
+      .describe("REQUIRED space the folder lives in — owner-qualified `handle/slug` (e.g. 'alice/workspace') or a bare `slug` when unambiguous. The share is scoped to this space; a same-named folder in another space is never exposed."),
     path_prefix: z
       .string()
       .describe("Non-empty folder path to share (e.g. 'finance' or 'os/canon'). Root ('') is disallowed."),
@@ -524,11 +532,15 @@ const createDirectoryShareTool = defineTool({
   handler: async (principal, args) => {
     if (principal.kind !== "admin") return fail(ADMIN_ONLY);
 
+    // Owner-qualify the space arg (handle/slug or unambiguous bare slug — D6).
+    const resolved = await resolveSpaceArg(args.space);
+    if (!resolved.ok) return fail(resolved.error);
+
     // 0 means "never expire" → pass null; otherwise pass as-is (undefined = 7d default)
     const expiresInDays = args.expires_in_days === 0 ? null : args.expires_in_days;
 
     const result = await createDirectoryShare(
-      args.space,
+      resolved.space.slug,
       args.path_prefix,
       args.label,
       principal.name,
@@ -730,9 +742,11 @@ const createSpaceTool = defineTool({
 const setSpaceMemberTool = defineTool({
   name: "set_space_member",
   description:
-    "Set or remove a user's role on a space (admin or the space owner). Mirrors POST /api/spaces/[slug]/members: role 'writer'|'reader' upserts the membership; role null removes it. The space owner cannot be demoted/removed here. An unknown space returns an error result. Emits space.member_added / space.member_removed.",
+    "Set or remove a user's role on a space (admin or the space owner). Mirrors POST /api/spaces/[owner]/[slug]/members: role 'writer'|'reader' upserts the membership; role null removes it. The space owner cannot be demoted/removed here. An unknown space returns an error result. Emits space.member_added / space.member_removed.",
   inputSchema: {
-    slug: z.string().describe("Space slug."),
+    slug: z
+      .string()
+      .describe("Space — owner-qualified `handle/slug` (e.g. 'alice/reports'), or a bare `slug` when unambiguous."),
     user_id: z.number().int().positive().describe("Target users.id."),
     role: z
       .enum(["writer", "reader"])
@@ -741,10 +755,11 @@ const setSpaceMemberTool = defineTool({
   },
   handler: async (principal, args) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const space = await getSpaceBySlug(args.slug);
-    if (!space) return fail("Unknown space");
+    const resolved = await resolveSpaceArg(args.slug);
+    if (!resolved.ok) return fail(resolved.error);
+    const space = resolved.space;
     if (!(await canManageSpace(principal, space))) return fail(ADMIN_ONLY);
-    const out = await setSpaceMemberRole(args.slug, args.user_id, args.role, principal.name);
+    const out = await setSpaceMemberRole(space.slug, args.user_id, args.role, principal.name);
     if (!out.ok) return fail(out.error);
     return ok({ ok: true, role: out.role });
   },
@@ -753,9 +768,11 @@ const setSpaceMemberTool = defineTool({
 const createInviteTool = defineTool({
   name: "create_invite",
   description:
-    "Mint an INVITE capability link for a space — a self-serve onboarding link for an EXTERNAL partner (External Collaboration, E1). Allowed for an admin or the space OWNER. role is 'writer'|'reader' (ownership is never invitable). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `max_uses` defaults to 1. `email` is an optional target (audit only — it never restricts who may accept). Returns the one-time invite URL (`<SHARE_BASE_URL>/invite/<token>`); the raw token appears EXACTLY ONCE. Mirrors POST /api/spaces/[slug]/invites. Emits space.invite_created.",
+    "Mint an INVITE capability link for a space — a self-serve onboarding link for an EXTERNAL partner (External Collaboration, E1). Allowed for an admin or the space OWNER. role is 'writer'|'reader' (ownership is never invitable). `expires_in_days`: omit = 7 days; 0 or null = never; positive = that many days. `max_uses` defaults to 1. `email` is an optional target (audit only — it never restricts who may accept). Returns the one-time invite URL (`<SHARE_BASE_URL>/invite/<token>`); the raw token appears EXACTLY ONCE. Mirrors POST /api/spaces/[owner]/[slug]/invites. Emits space.invite_created.",
   inputSchema: {
-    slug: z.string().describe("Space slug to invite into."),
+    slug: z
+      .string()
+      .describe("Space to invite into — owner-qualified `handle/slug`, or a bare `slug` when unambiguous."),
     role: z.enum(["writer", "reader"]).describe("Space role the accepter is granted."),
     email: z.string().optional().describe("Optional target email (audit only; never restricts who may accept and never leaks existence)."),
     expires_in_days: z
@@ -772,8 +789,9 @@ const createInviteTool = defineTool({
   },
   handler: async (principal, args) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const space = await getSpaceBySlug(args.slug);
-    if (!space) return fail("Unknown space");
+    const resolved = await resolveSpaceArg(args.slug);
+    if (!resolved.ok) return fail(resolved.error);
+    const space = resolved.space;
     if (!(await canManageSpace(principal, space))) return fail(ADMIN_ONLY);
     const createdByUserId = await resolvePrincipalUserId(principal);
     if (createdByUserId == null) return fail("Cannot resolve your user identity");
@@ -782,7 +800,7 @@ const createInviteTool = defineTool({
     const expiresInDays = args.expires_in_days === 0 ? null : args.expires_in_days;
 
     const out = await createInvite({
-      spaceSlug: args.slug,
+      spaceSlug: space.slug,
       role: args.role,
       createdByUserId,
       email: args.email,
@@ -811,28 +829,31 @@ const createInviteTool = defineTool({
 const listProposalsTool = defineTool({
   name: "list_proposals",
   description:
-    "List a space's open PROPOSALS — the `proposals/<name>` refs a non-owner writer pushed under the 'proposal' push policy (External Collaboration, E2). Each: { name, ref, tipSha, pusher, subject, createdAt }. Allowed for an admin, the space owner, or a writer (a contributor). A reader / non-member → an error (uniform, no existence leak). Mirrors GET /api/spaces/[slug]/proposals.",
+    "List a space's open PROPOSALS — the `proposals/<name>` refs a non-owner writer pushed under the 'proposal' push policy (External Collaboration, E2). Each: { name, ref, tipSha, pusher, subject, createdAt }. Allowed for an admin, the space owner, or a writer (a contributor). A reader / non-member → an error (uniform, no existence leak). Mirrors GET /api/spaces/[owner]/[slug]/proposals.",
   inputSchema: {
-    slug: z.string().describe("Space slug."),
+    slug: z
+      .string()
+      .describe("Space — owner-qualified `handle/slug`, or a bare `slug` when unambiguous."),
   },
   handler: async (principal, args) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const space = await getSpaceBySlug(args.slug);
-    // Uniform error for unknown space OR a caller who may not see it — never
-    // distinguish (no existence leak).
-    if (!space) return fail("Not found");
+    const resolved = await resolveSpaceArg(args.slug);
+    // Uniform error for unknown/ambiguous space OR a caller who may not see it —
+    // never distinguish (no existence leak).
+    if (!resolved.ok) return fail("Not found");
+    const space = resolved.space;
     const isAdmin = principal.kind === "admin";
     let canSee = isAdmin;
     if (!canSee) {
       const myUserId = await resolvePrincipalUserId(principal);
       if (myUserId != null) {
-        const members = (await listSpaceMembers(args.slug)) ?? [];
+        const members = (await listSpaceMembers(space.slug)) ?? [];
         const myRole = members.find((m) => m.userId === myUserId)?.role ?? null;
         canSee = myRole === "owner" || myRole === "writer";
       }
     }
     if (!canSee) return fail("Not found");
-    const result = await listProposalsForSpace(args.slug);
+    const result = await listProposalsForSpace(space.slug);
     if (!result.ok) return fail("Not found");
     return ok({ proposals: result.proposals });
   },
@@ -841,26 +862,29 @@ const listProposalsTool = defineTool({
 const decideProposalTool = defineTool({
   name: "decide_proposal",
   description:
-    "ACCEPT or REJECT a space proposal (External Collaboration, E2). decision='accept' merges `proposals/<name>` into main (fast-forward or a merge commit authored by you), reindexes the space, and deletes the proposal ref. decision='reject' deletes the ref (main untouched). Allowed for an admin or the space OWNER only. A merge conflict returns an error (main is left untouched). Mirrors POST /api/spaces/[slug]/proposals/[name]/accept|reject. Emits proposal.accepted / proposal.rejected.",
+    "ACCEPT or REJECT a space proposal (External Collaboration, E2). decision='accept' merges `proposals/<name>` into main (fast-forward or a merge commit authored by you), reindexes the space, and deletes the proposal ref. decision='reject' deletes the ref (main untouched). Allowed for an admin or the space OWNER only. A merge conflict returns an error (main is left untouched). Mirrors POST /api/spaces/[owner]/[slug]/proposals/[name]/accept|reject. Emits proposal.accepted / proposal.rejected.",
   inputSchema: {
-    slug: z.string().describe("Space slug."),
+    slug: z
+      .string()
+      .describe("Space — owner-qualified `handle/slug`, or a bare `slug` when unambiguous."),
     name: z.string().describe("Proposal name (the <name> in proposals/<name>)."),
     decision: z.enum(["accept", "reject"]).describe("'accept' (merge → main) or 'reject' (delete ref)."),
   },
   handler: async (principal, args) => {
     if (!isStaff(principal)) return fail(STAFF_ONLY);
-    const space = await getSpaceBySlug(args.slug);
-    if (!space) return fail("Not found");
+    const resolved = await resolveSpaceArg(args.slug);
+    if (!resolved.ok) return fail("Not found");
+    const space = resolved.space;
     if (!(await canManageSpace(principal, space))) return fail("Not found");
 
     if (args.decision === "reject") {
-      const r = await rejectProposalForSpace(args.slug, args.name, principal.name);
+      const r = await rejectProposalForSpace(space.slug, args.name, principal.name);
       if (!r.ok) return fail("Not found");
       return ok({ ok: true, decision: "reject", name: args.name });
     }
 
     const email = "email" in principal && principal.email ? principal.email : "desk@localhost";
-    const r = await acceptProposalForSpace(args.slug, args.name, {
+    const r = await acceptProposalForSpace(space.slug, args.name, {
       name: principal.name,
       email,
     });

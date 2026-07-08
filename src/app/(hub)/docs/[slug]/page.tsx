@@ -11,7 +11,7 @@ import { unifiedDiff } from "@/lib/diff";
 import Markdown from "@/components/Markdown";
 import HtmlPreview from "./HtmlPreview";
 import DriftBanner from "@/components/DriftBanner";
-import { getSpaceById } from "@/lib/spaces";
+import { getSpaceById, ownerHandleForSpace } from "@/lib/spaces";
 import DocActions from "./DocActions";
 import DocReaderActions from "./DocReaderActions";
 import DocSharingPanel from "./DocSharingPanel";
@@ -98,7 +98,11 @@ export default async function DocDetailPage({
   // The doc lives in a space; the back-link returns there (Gen-2: Spaces is the
   // home, there is no flat /docs list). Fall back to /spaces if the space is gone.
   const space = await getSpaceById(doc.spaceId);
-  const backHref = space ? `/spaces/${space.slug}` : "/spaces";
+  // Owner-qualified space URL (Owner-namespace S4): /spaces/<owner-handle>/<slug>.
+  const spaceHref = space
+    ? `/spaces/${await ownerHandleForSpace(space)}/${space.slug}`
+    : "/spaces";
+  const backHref = spaceHref;
   const versions = await listVersions(slug);
   const rail = buildVersionRail(versions);
   // Serializable version options for the share modal's live-vs-pinned picker.
@@ -234,7 +238,7 @@ export default async function DocDetailPage({
           </h1>
           {space && (
             <Link
-              href={`/spaces/${space.slug}`}
+              href={spaceHref}
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: 11,

@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { resetDb } from "@/test/db";
+import { spaceCtx } from "@/test/space-ctx";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { GET as listGET, POST as createPOST } from "./route";
-import { POST as membersPOST, GET as membersGET } from "./[slug]/members/route";
-import { PATCH as visibilityPATCH } from "./[slug]/route";
+import { POST as membersPOST, GET as membersGET } from "./[owner]/[slug]/members/route";
+import { PATCH as visibilityPATCH } from "./[owner]/[slug]/route";
 import { getPrincipal } from "@/lib/auth";
 import { resolvePrincipalUserId, DEV_MEMBER_TOKEN_NAME } from "@/lib/principal-user";
 
@@ -36,7 +37,7 @@ function req(url: string, method: string, role: Role, body?: unknown) {
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
 }
-const ctx = (slug: string) => ({ params: Promise.resolve({ slug }) });
+const ctx = (slug: string) => spaceCtx(slug);
 
 async function seedUser(tokenName: string, role: "admin" | "member" = "member"): Promise<number> {
   const [u] = await db

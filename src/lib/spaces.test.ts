@@ -8,6 +8,7 @@ import {
   getSpace,
   getSpaceByOwner,
   getSpaceBySlug,
+  resolveSpaceArg,
   resolveSpaceRole,
   roleSatisfies,
   mintPrincipalToken,
@@ -208,6 +209,52 @@ describe("spaces service", () => {
       await db.delete(schema.spaceMembers).where(eq(schema.spaceMembers.spaceId, bobReports));
       await db.delete(schema.spaces).where(eq(schema.spaces.id, bobReports));
       expect((await getSpaceBySlug("reports"))?.id).toBe(aliceReports);
+    });
+  });
+
+  // ── resolveSpaceArg — the MCP/agent space-arg resolver (D6) ─────────────────
+  describe("resolveSpaceArg — handle/slug (preferred) or unambiguous bare slug", () => {
+    let alice: number;
+    let bob: number;
+    let aliceReports: number;
+    let bobReports: number;
+    let aliceSolo: number;
+
+    beforeEach(async () => {
+      alice = await seedUser("Alice", { tokenName: "alice", role: "admin" });
+      bob = await seedUser("Bob", { tokenName: "bob", role: "admin" });
+      const a = await createSpace("reports", alice, "private", "tester");
+      const b = await createSpace("reports", bob, "private", "tester");
+      const s = await createSpace("solo", alice, "private", "tester");
+      if (!a.ok || !b.ok || !s.ok) throw new Error("setup failed");
+      aliceReports = a.space.id;
+      bobReports = b.space.id;
+      aliceSolo = s.space.id;
+    });
+
+    it("owner-qualified `handle/slug` resolves the EXACT owner", async () => {
+      const ra = await resolveSpaceArg("alice/reports");
+      const rb = await resolveSpaceArg("bob/reports");
+      expect(ra.ok && ra.space.id).toBe(aliceReports);
+      expect(rb.ok && rb.space.id).toBe(bobReports);
+    });
+
+    it("a bare slug resolves when a SINGLE owner has it", async () => {
+      const r = await resolveSpaceArg("solo");
+      expect(r.ok && r.space.id).toBe(aliceSolo);
+    });
+
+    it("a bare slug that TWO owners share → clear ambiguity error (never a winner)", async () => {
+      const r = await resolveSpaceArg("reports");
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/ambiguous/i);
+    });
+
+    it("unknown handle/slug or bare slug → not-found error", async () => {
+      expect((await resolveSpaceArg("carol/reports")).ok).toBe(false);
+      expect((await resolveSpaceArg("alice/ghost")).ok).toBe(false);
+      expect((await resolveSpaceArg("ghost")).ok).toBe(false);
+      expect((await resolveSpaceArg("")).ok).toBe(false);
     });
   });
 

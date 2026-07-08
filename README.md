@@ -179,13 +179,13 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `search_docs` | staff | Full-text search over title + content, ranked, with snippets. Space-scoped. |
 | `get_doc` | staff | One doc by `slug`: metadata, current content, version list. Viewer-scoped. |
 | `get_version` | staff | Raw content of a specific `version_id` of a doc (`slug`). Viewer-scoped; cross-doc ids rejected. |
-| `publish_doc` | space member | Publish a file into a **space** by committing it to git. Requires `space` + `path` (repo-relative file path) + `content` (optional `title`, `message`). Honors `push_policy` (owner/admin → `main`; non-owner writer under `proposal` → a `proposals/*` ref). The opaque slug is minted by the projection. Returns `{ slug, url, ref }` (slug/url null for a proposal). Content capped at 2 MB. |
+| `publish_doc` | space member | Publish a file into a **space** by committing it to git. Requires `space` (owner-qualified **`handle/slug`**, e.g. `alice/reports`; a bare `slug` still resolves when unambiguous) + `path` (repo-relative file path) + `content` (optional `title`, `message`). Honors `push_policy` (owner/admin → `main`; non-owner writer under `proposal` → a `proposals/*` ref). The opaque slug is minted by the projection. Returns `{ slug, url, ref }` (slug/url null for a proposal). Content capped at 2 MB. |
 | `update_doc` | admin | Move a doc to a folder (`path`) and/or reassign its owner (`owner_user_id`) — projection metadata, no new version. |
 | `unpublish_doc` | admin | Unpublish a doc by `slug` — kills the hub page and every share instantly. |
 | `delete_doc` | admin | Stage-2 destructive delete: purges content, deletes its share links, frees the slug. |
 | `list_events` | staff | The append-only event log (cursor on `since`, optional `kinds`). Space-scoped for members. Optional `wait_seconds` (0–55, default 0) long-polls — parks server-side until an event arrives or the timeout elapses, then returns (possibly empty). Near-real-time agent dispatch (e.g. `kinds:["card.assigned"]`) without tight polling. |
 | `create_share` | admin | Mint a capability link for a doc (`doc_slug`, `label`, optional `expires_in_days` / `pinned_version_id`). Returns the one-time URL. |
-| `create_directory_share` | admin | Mint a capability link for a whole folder in a space. **Space-scoped:** requires `space` (the space slug) + `path_prefix`; exposes every published doc under the prefix **in that space only** (a same-named folder in another space never leaks). One revoke kills the lot. |
+| `create_directory_share` | admin | Mint a capability link for a whole folder in a space. **Space-scoped:** requires `space` (owner-qualified **`handle/slug`**, or a bare `slug` when unambiguous) + `path_prefix`; exposes every published doc under the prefix **in that space only** (a same-named folder in another space never leaks). One revoke kills the lot. |
 | `list_shares` | admin | All shares (doc + directory) with view stats. Each row carries `mode` + `docSlug`/`pathPrefix`. |
 | `list_doc_shares` | admin | Shares for one doc (`slug`), newest-first, with view stats. |
 | `revoke_share` | admin | Revoke a share by numeric `id`. |
@@ -210,8 +210,8 @@ claude mcp add --transport http desk-local http://localhost:3000/mcp \
 | `archive_card` | staff (owner/admin) | Archive (`archived: true`) or restore a card. |
 | `list_spaces` | staff | Spaces visible to the caller (admins: all; members: theirs + public/unlisted). |
 | `create_space` | admin | Create a space (`slug`, optional `visibility` / `owner_user_id`). |
-| `set_space_member` | admin / owner | Set (`writer`/`reader`) or remove (`null`) a user's role on a space. |
-| `create_invite` | admin / owner | Mint an invite capability link for a space (`slug`, `role`, optional `email` / `expires_in_days` / `max_uses`). Returns the one-time invite URL for self-serve onboarding. |
+| `set_space_member` | admin / owner | Set (`writer`/`reader`) or remove (`null`) a user's role on a space (owner-qualified `handle/slug`, or a bare `slug` when unambiguous). |
+| `create_invite` | admin / owner | Mint an invite capability link for a space (`slug` = owner-qualified `handle/slug` or an unambiguous bare slug, `role`, optional `email` / `expires_in_days` / `max_uses`). Returns the one-time invite URL for self-serve onboarding. |
 | `list_proposals` | staff | List open `proposals/*` refs on a space (name, pusher, tip, created) — the PR queue under `push_policy=proposal`. |
 | `decide_proposal` | admin / owner | Accept (merge → `main` + reindex + drop ref) or reject (drop ref) a proposal by space + name. |
 | `create_token` | staff | Mint a principal (git) token for the caller. Returns the raw token ONCE. |

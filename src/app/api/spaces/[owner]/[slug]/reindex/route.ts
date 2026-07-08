@@ -1,0 +1,44 @@
+/**
+ * POST /api/spaces/[slug]/reindex — full re-projection of a space from its bare
+ * repo's current tip (document-host Phase 1, §14 "full-reindex available as a
+ * recovery command"). Admin only.
+ *
+ * Two uses:
+ *   - operator recovery: rebuild the projection if the index drifts / is lost
+ *     (the canon is the git repo; the projection is always rebuildable, §2).
+ *   - the bare repo's post-receive hook curls this so pushes that bypass the
+ *     HTTP route (rare; the in-route push path already re-indexes incrementally)
+ *     still refresh the projection.
+ *
+ * Idempotent. Returns the {indexed, skipped, commit} summary.
+ */
+import { NextResponse } from "next/server";
+import { getPrincipal, isStaff } from "@/lib/auth";
+import { getSpace } from "@/lib/spaces";
+import { spaceRepoPath } from "@/lib/space-repo-path";
+import { reindexSpaceFull } from "@/lib/git/indexer";
+
+function err(status: number, message: string) {
+  return NextResponse.json({ error: message }, { status });
+}
+
+type RouteContext = { params: Promise<{ owner: string; slug: string }> };
+
+export async function POST(req: Request, { params }: RouteContext) {
+  const principal = await getPrincipal(req.headers as unknown as Headers);
+  if (!isStaff(principal)) return err(403, "Forbidden — staff only");
+  if (principal.kind !== "admin") return err(403, "Forbidden — reindex is admin only");
+
+  const { owner, slug } = await params;
+  const space = await getSpace(owner, slug);
+  if (!space) return err(404, "Unknown space");
+
+  const repoPath = await spaceRepoPath(space);
+
+  try {
+    const result = await reindexSpaceFull(slug, repoPath, principal.name);
+    return NextResponse.json({ ok: true, ...result }, { status: 200 });
+  } catch (e) {
+    return err(500, `reindex failed: ${(e as Error)?.message}`);
+  }
+}
