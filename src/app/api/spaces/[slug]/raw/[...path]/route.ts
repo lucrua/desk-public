@@ -20,12 +20,10 @@
 import { NextResponse } from "next/server";
 import { getPrincipal } from "@/lib/auth";
 import { scopeForPrincipal, canSeeDocSpace } from "@/lib/docs";
-import { getSpaceBySlug, ownerSlugForUser } from "@/lib/spaces";
-import { bareRepoPath, refTip, readBlob, DEFAULT_BRANCH } from "@/lib/git/repo";
+import { getSpaceBySlug } from "@/lib/spaces";
+import { spaceRepoPath } from "@/lib/space-repo-path";
+import { refTip, readBlob, DEFAULT_BRANCH } from "@/lib/git/repo";
 import { isSafeRepoPath } from "@/lib/git/web-commit";
-import { db } from "@/db";
-import { users } from "@/db/schema";
-import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -75,9 +73,7 @@ export async function GET(req: Request, { params }: RouteContext) {
     return new NextResponse("Not found", { status: 404 });
   }
 
-  const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
-  const ownerSlug = ownerSlugForUser(owner ?? null, space.ownerUserId);
-  const repoPath = bareRepoPath(ownerSlug, space.slug);
+  const repoPath = await spaceRepoPath(space);
 
   let tip: string | null;
   try {

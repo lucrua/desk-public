@@ -31,28 +31,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { spaces, users, type MirrorState } from "@/db/schema";
+import { spaces, type MirrorState } from "@/db/schema";
 import { decryptToken, encryptToken } from "@/lib/crypto";
 import {
   getSpaceBySlug,
   getSpaceById,
-  ownerSlugForUser,
   type SpaceRow,
 } from "@/lib/spaces";
+import { spaceRepoPath } from "@/lib/space-repo-path";
 import { getInstanceGithubPat } from "@/lib/instance-settings";
-import { bareRepoPath, refTip, runGit, DEFAULT_BRANCH } from "@/lib/git/repo";
+import { refTip, runGit, DEFAULT_BRANCH } from "@/lib/git/repo";
 
 // Re-export for convenience (callers already import SpaceRow/MirrorState via
 // their own paths, but the mirror surface is self-contained here).
 export type { MirrorState } from "@/db/schema";
-
-/** Resolve the on-disk bare-repo path for a space row (mirrors web-author /
- * proposals-service / materialize — identical derivation → identical path). */
-async function repoPathForSpace(space: SpaceRow): Promise<string> {
-  const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
-  const ownerSlug = ownerSlugForUser(owner ?? null, space.ownerUserId);
-  return bareRepoPath(ownerSlug, space.slug);
-}
 
 type RemoteScheme = "https" | "ssh" | "local";
 
@@ -118,7 +110,7 @@ export async function mirrorPush(space: SpaceRow): Promise<MirrorState> {
 
   let repoPath: string;
   try {
-    repoPath = await repoPathForSpace(space);
+    repoPath = await spaceRepoPath(space);
   } catch (e) {
     return persist(space.id, {
       lastMirroredSha: keepSha,

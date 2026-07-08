@@ -27,9 +27,10 @@
 import { authorizeGit } from "@/lib/git/auth";
 import { parseGitRequest, segmentsAfterMount } from "@/lib/git/route-parse";
 import { runHttpBackend } from "@/lib/git/http-backend";
-import { bareRepoPath, initBareRepo, refTip } from "@/lib/git/repo";
+import { initBareRepo, refTip } from "@/lib/git/repo";
 import { reindexSpaceByDisk } from "@/lib/git/indexer";
 import { getSpaceBySlug } from "@/lib/spaces";
+import { spaceRepoPath } from "@/lib/space-repo-path";
 import { enqueueMirror } from "@/lib/mirror";
 
 // Resolve fresh every request — auth must never be cached, and a push must
@@ -76,9 +77,18 @@ async function handle(req: Request): Promise<Response> {
   if (decision.kind !== "ok") return uniform404();
 
   // ── Locate / lazily create the bare repo ──────────────────────────────────
-  // Use the RESOLVED owner slug (from the space's real owner), not the raw URL
-  // segment — authorizeGit already verified they match.
-  const repoPath = bareRepoPath(decision.ownerSlug, decision.spaceSlug);
+  // Load the space row (authorizeGit already proved it exists + the owner
+  // segment matches) and derive the on-disk path from the owner's STABLE HANDLE
+  // (Owner-namespace S2) — never the email-derived URL segment, so an email
+  // change can't orphan the repo.
+  const spaceRow = await getSpaceBySlug(decision.spaceSlug);
+  if (!spaceRow) return uniform404();
+  let repoPath: string;
+  try {
+    repoPath = await spaceRepoPath(spaceRow);
+  } catch {
+    return uniform404();
+  }
   try {
     await initBareRepo(repoPath);
   } catch {
@@ -92,15 +102,10 @@ async function handle(req: Request): Promise<Response> {
   const isPush = parsed.service === "git-receive-pack" && req.method === "POST";
   const beforeSha = isPush ? await refTip(repoPath) : null;
 
-  // E2: resolve the space's push policy so the pre-receive hook can enforce the
-  // ref-level write boundary. The pre-receive hook FAILS CLOSED on a missing
-  // value, so we pass an explicit policy; default to 'direct' only when the row
-  // is somehow unreadable (authorizeGit already proved the space exists, so this
-  // is belt-and-suspenders — and 'proposal' would be the conservative default,
-  // but the hook itself defaults to 'proposal' when env is absent, so a missing
-  // value already errs strict). We resolve the real stored policy here.
-  const spaceRow = isPush ? await getSpaceBySlug(decision.spaceSlug) : null;
-  const pushPolicy = spaceRow?.pushPolicy ?? "direct";
+  // E2: the space's push policy drives the pre-receive hook's ref-level write
+  // boundary. The hook FAILS CLOSED on a missing value; we pass the real stored
+  // policy, defaulting to 'direct' only if it is somehow unset.
+  const pushPolicy = spaceRow.pushPolicy ?? "direct";
 
   // ── Spawn git-http-backend ────────────────────────────────────────────────
   const bodyBuf = Buffer.from(await req.arrayBuffer());

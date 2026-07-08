@@ -15,10 +15,9 @@
 import { NextResponse } from "next/server";
 import { getPrincipal, isStaff } from "@/lib/auth";
 import { db } from "@/db";
-import { spaces, users } from "@/db/schema";
+import { spaces } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { ownerSlugForUser } from "@/lib/spaces";
-import { bareRepoPath } from "@/lib/git/repo";
+import { spaceRepoPath } from "@/lib/space-repo-path";
 import { reindexSpaceFull } from "@/lib/git/indexer";
 
 function err(status: number, message: string) {
@@ -36,9 +35,7 @@ export async function POST(req: Request, { params }: RouteContext) {
   const space = await db.query.spaces.findFirst({ where: eq(spaces.slug, slug) });
   if (!space) return err(404, "Unknown space");
 
-  const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
-  const ownerSlug = ownerSlugForUser(owner ?? null, space.ownerUserId);
-  const repoPath = bareRepoPath(ownerSlug, slug);
+  const repoPath = await spaceRepoPath(space);
 
   try {
     const result = await reindexSpaceFull(slug, repoPath, principal.name);

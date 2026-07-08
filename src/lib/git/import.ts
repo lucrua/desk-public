@@ -21,17 +21,14 @@
 import { mkdtemp, rm, mkdir, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { db } from "@/db";
-import { runGit, bareRepoPath, initBareRepo, DEFAULT_BRANCH } from "./repo";
+import { runGit, initBareRepo, DEFAULT_BRANCH } from "./repo";
 import { reindexSpaceFull } from "./indexer";
 import {
   createSpace,
   getSpaceBySlug,
-  ownerSlugForUser,
   type SpaceVisibility,
 } from "@/lib/spaces";
-import { users } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { spaceRepoPath } from "@/lib/space-repo-path";
 
 /** Patterns excluded from import regardless of the source's .gitignore. A path
  * (POSIX, repo-relative) is excluded if it matches any. */
@@ -96,9 +93,7 @@ export async function importRepoAsSpace(opts: {
   if (!created.ok) throw new Error(`createSpace failed: ${created.error}`);
   const space = created.space;
 
-  const owner = await db.query.users.findFirst({ where: eq(users.id, ownerUserId) });
-  const ownerSlug = ownerSlugForUser(owner ?? null, ownerUserId);
-  const repoPath = bareRepoPath(ownerSlug, slug);
+  const repoPath = await spaceRepoPath(space);
   await initBareRepo(repoPath);
 
   // Determine the included file set.

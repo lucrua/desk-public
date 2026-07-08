@@ -12,14 +12,9 @@
  * lib/git/repo.ts.)
  */
 import { db } from "@/db";
-import { users } from "@/db/schema";
-import { eq } from "drizzle-orm";
-import {
-  getSpaceBySlug,
-  ownerSlugForUser,
-  type SpaceRow,
-} from "@/lib/spaces";
-import { bareRepoPath, repoExists } from "@/lib/git/repo";
+import { getSpaceBySlug } from "@/lib/spaces";
+import { spaceRepoPath } from "@/lib/space-repo-path";
+import { repoExists } from "@/lib/git/repo";
 import {
   listProposals,
   getProposal,
@@ -33,13 +28,6 @@ import { reindexSpaceFull } from "@/lib/git/indexer";
 import { emitEvent } from "@/lib/events";
 import { enqueueMirror } from "@/lib/mirror";
 import { MIRRORED_WRITE_REFUSED } from "@/lib/web-author";
-
-/** Resolve the on-disk bare-repo path for a space row. */
-async function repoPathForSpace(space: SpaceRow): Promise<string> {
-  const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
-  const ownerSlug = ownerSlugForUser(owner ?? null, space.ownerUserId);
-  return bareRepoPath(ownerSlug, space.slug);
-}
 
 export type ListProposalsResult =
   | { ok: true; proposals: ProposalItem[] }
@@ -58,7 +46,7 @@ export async function listProposalsForSpace(
 ): Promise<ListProposalsResult> {
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return { ok: false, reason: "unknown-space" };
-  const repoPath = await repoPathForSpace(space);
+  const repoPath = await spaceRepoPath(space);
   // A space whose bare repo has not been created yet (never pushed) has no
   // proposals — and spawning git in a non-existent cwd throws `spawn git
   // ENOENT`, which would crash the space detail page. Treat absent as empty.
@@ -81,7 +69,7 @@ export async function proposalDiffForSpace(
 ): Promise<ProposalDiffResult> {
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return { ok: false, reason: "unknown-space" };
-  const repoPath = await repoPathForSpace(space);
+  const repoPath = await spaceRepoPath(space);
   const diff = await proposalDiff(repoPath, name);
   if (!diff) return { ok: false, reason: "not-found" };
   return { ok: true, diff };
@@ -121,7 +109,7 @@ export async function acceptProposalForSpace(
     return { ok: false, reason: "mirrored", detail: MIRRORED_WRITE_REFUSED };
   }
 
-  const repoPath = await repoPathForSpace(space);
+  const repoPath = await spaceRepoPath(space);
 
   // Confirm the proposal exists up front (so a missing one is "not-found", not a
   // git-plumbing "error").
@@ -176,7 +164,7 @@ export async function rejectProposalForSpace(
 ): Promise<RejectResult> {
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return { ok: false, reason: "unknown-space" };
-  const repoPath = await repoPathForSpace(space);
+  const repoPath = await spaceRepoPath(space);
   const outcome = await rejectProposal(repoPath, name);
   if (!outcome.ok) return { ok: false, reason: "not-found" };
 

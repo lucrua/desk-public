@@ -17,33 +17,46 @@ export async function register(): Promise<void> {
   const { ensureBootstrapAdmin } = await import("@/lib/auth/cloudflare");
   await ensureBootstrapAdmin();
 
-  // External Collaboration E2: backfill the push-policy pre-receive hook onto
-  // every EXISTING bare repo. Spaces created before E2 have no policy hook;
-  // this sweep installs it so the git write boundary is enforced regardless of
-  // when a space was created. Idempotent + best-effort (a failure logs, never
-  // crashes boot).
+  // ORDER MATTERS (Owner-namespace S2): handles must be assigned BEFORE the repo
+  // paths (which now derive from `users.handle`) are migrated, and the repo move
+  // must happen BEFORE materialization writes to the handle-derived path. So the
+  // strict sequence is:
+  //   backfillUserHandles → migrateRepoPathsToHandle → materializeDbOnlyDocs
+  //   → (the order-independent backfills: policy hooks, share space_id)
+
+  // Owner-namespace, Slice S1 (decision D1): backfill users.handle — the stable,
+  // unique, URL-safe owner identity used for repo paths + owner-namespaced URLs.
+  // For each user with a NULL handle, in deterministic id-ascending order, derive
+  // a base (tokenName/email-local/`u<id>`), slugify, and de-dup with a `-N`
+  // suffix. Idempotent (a user with a handle is skipped; a re-run is a no-op) +
+  // best-effort (a failure logs, never crashes boot). Runs FIRST so every later
+  // step that keys on the handle has one to read.
   try {
-    const { backfillPolicyHooks } = await import("@/lib/git/repo");
-    const n = await backfillPolicyHooks();
-    if (n > 0) console.log(`[startup] backfilled push-policy hook onto ${n} repo(s)`);
+    const { backfillUserHandles } = await import("@/lib/user-handle");
+    await backfillUserHandles();
   } catch (e) {
-    console.error("[startup] push-policy hook backfill failed:", (e as Error)?.message);
+    console.error("[startup] user handle backfill failed:", (e as Error)?.message);
   }
 
-  // Convergence fix-pass, Slice 1: backfill shares.space_id on pre-migration
-  // rows so every directory share is space-scoped (finding 3). Doc shares take
-  // the doc's space; ambiguous/empty directory shares are revoked (fail-closed,
-  // D-C7). Idempotent + best-effort (a failure logs, never crashes boot).
+  // Owner-namespace, Slice S2 (decision D3): re-point existing bare repos from
+  // the legacy email-derived path to the handle-derived path — fixing the
+  // repo-orphan bug (an email change used to relocate the path). DATA-SENSITIVE:
+  // it MOVES canonical bare repos on disk. Idempotent + non-clobbering (a space
+  // already at the handle path, or with no legacy repo, is skipped; both-exist is
+  // a logged conflict left untouched) + best-effort. Runs AFTER the handle
+  // backfill and BEFORE materialization (which writes to the handle path).
   try {
-    const { backfillShareSpaceIds } = await import("@/lib/shares");
-    const r = await backfillShareSpaceIds();
-    if (r.docFilled > 0 || r.dirFilled > 0 || r.dirRevoked > 0) {
+    const { migrateRepoPathsToHandle } = await import("@/lib/space-repo-path");
+    const r = await migrateRepoPathsToHandle();
+    if (r.moved > 0 || r.conflicts > 0 || r.errors > 0) {
       console.log(
-        `[startup] share space_id backfill: ${r.docFilled} doc + ${r.dirFilled} dir filled, ${r.dirRevoked} dir revoked (ambiguous/empty)`,
+        `[startup] repo-path migration: moved ${r.moved} repo(s) to the handle path` +
+          (r.conflicts > 0 ? `; ${r.conflicts} conflict(s) left untouched` : "") +
+          (r.errors > 0 ? `; ${r.errors} space(s) failed` : ""),
       );
     }
   } catch (e) {
-    console.error("[startup] share space_id backfill failed:", (e as Error)?.message);
+    console.error("[startup] repo-path migration failed:", (e as Error)?.message);
   }
 
   // Convergence fix-pass, Slice 4a: materialize legacy DB-only docs into git.
@@ -52,7 +65,8 @@ export async function register(): Promise<void> {
   // mirror. This commits each such doc's current content into its repo so git is
   // complete. Idempotent (only fills a MISSING blob; never overwrites git),
   // cheap on a materialized instance (one tree read per space), and best-effort
-  // (a failure logs, never crashes boot).
+  // (a failure logs, never crashes boot). Runs AFTER the repo-path migration so
+  // it writes into the repo at its final handle-derived path.
   try {
     const { materializeDbOnlyDocs } = await import("@/lib/materialize");
     const r = await materializeDbOnlyDocs();
@@ -67,17 +81,33 @@ export async function register(): Promise<void> {
     console.error("[startup] DB-only doc materialization failed:", (e as Error)?.message);
   }
 
-  // Owner-namespace, Slice S1 (decision D1): backfill users.handle — the stable,
-  // unique, URL-safe owner identity later slices use for repo paths + URLs. For
-  // each user with a NULL handle, in deterministic id-ascending order, derive a
-  // base (tokenName/email-local/`u<id>`), slugify, and de-dup with a `-N` suffix.
-  // Idempotent (a user with a handle is skipped; a re-run is a no-op) +
-  // best-effort (a failure logs, never crashes boot). Runs AFTER the backfills
-  // above by convention (order-independent — it only touches users.handle).
+  // External Collaboration E2: backfill the push-policy pre-receive hook onto
+  // every EXISTING bare repo. Spaces created before E2 have no policy hook;
+  // this sweep installs it so the git write boundary is enforced regardless of
+  // when a space was created. Idempotent + best-effort (a failure logs, never
+  // crashes boot). Runs AFTER the repo move so it sweeps the final on-disk layout.
   try {
-    const { backfillUserHandles } = await import("@/lib/user-handle");
-    await backfillUserHandles();
+    const { backfillPolicyHooks } = await import("@/lib/git/repo");
+    const n = await backfillPolicyHooks();
+    if (n > 0) console.log(`[startup] backfilled push-policy hook onto ${n} repo(s)`);
   } catch (e) {
-    console.error("[startup] user handle backfill failed:", (e as Error)?.message);
+    console.error("[startup] push-policy hook backfill failed:", (e as Error)?.message);
+  }
+
+  // Convergence fix-pass, Slice 1: backfill shares.space_id on pre-migration
+  // rows so every directory share is space-scoped (finding 3). Doc shares take
+  // the doc's space; ambiguous/empty directory shares are revoked (fail-closed,
+  // D-C7). Idempotent + best-effort (a failure logs, never crashes boot).
+  // Order-independent (touches only DB rows, no repo paths / handles).
+  try {
+    const { backfillShareSpaceIds } = await import("@/lib/shares");
+    const r = await backfillShareSpaceIds();
+    if (r.docFilled > 0 || r.dirFilled > 0 || r.dirRevoked > 0) {
+      console.log(
+        `[startup] share space_id backfill: ${r.docFilled} doc + ${r.dirFilled} dir filled, ${r.dirRevoked} dir revoked (ambiguous/empty)`,
+      );
+    }
+  } catch (e) {
+    console.error("[startup] share space_id backfill failed:", (e as Error)?.message);
   }
 }

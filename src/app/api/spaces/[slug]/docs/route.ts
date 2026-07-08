@@ -31,16 +31,13 @@ import {
   type SpaceRole,
 } from "@/lib/spaces";
 import { getDocBySlug, getLiveDocBySpacePath } from "@/lib/docs";
-import { refTip, bareRepoPath, DEFAULT_BRANCH } from "@/lib/git/repo";
-import { ownerSlugForUser } from "@/lib/spaces";
+import { refTip, DEFAULT_BRANCH } from "@/lib/git/repo";
+import { spaceRepoPath } from "@/lib/space-repo-path";
 import { webAuthorCommit, type WebAuthorIdentity } from "@/lib/web-author";
 import { isSafeRepoPath } from "@/lib/git/web-commit";
 import { MAX_CONTENT_CHARS } from "@/lib/limits";
 import { normalizePath } from "@/lib/path";
 import { slugFromFilename } from "@/lib/slug";
-import { db } from "@/db";
-import { users } from "@/db/schema";
-import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -119,9 +116,7 @@ async function gate(req: Request, slug: string): Promise<Resolved | NextResponse
 async function liveMainTip(spaceSlug: string): Promise<string | null> {
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return null;
-  const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
-  const ownerSlug = ownerSlugForUser(owner ?? null, space.ownerUserId);
-  const repoPath = bareRepoPath(ownerSlug, space.slug);
+  const repoPath = await spaceRepoPath(space);
   try {
     return await refTip(repoPath, DEFAULT_BRANCH);
   } catch {

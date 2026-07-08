@@ -34,10 +34,9 @@
  */
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { docs, docVersions, spaces, users } from "@/db/schema";
-import { ownerSlugForUser } from "@/lib/spaces";
+import { docs, docVersions, spaces } from "@/db/schema";
+import { spaceRepoPath } from "@/lib/space-repo-path";
 import {
-  bareRepoPath,
   refTip,
   listTree,
   repoExists,
@@ -82,11 +81,9 @@ type LiveDocRow = {
   content: string | null;
   spaceSlug: string;
   spaceOwnerUserId: number;
-  ownerTokenName: string | null;
-  ownerEmail: string | null;
 };
 
-type SpaceGroup = { spaceSlug: string; ownerSlug: string; docs: LiveDocRow[] };
+type SpaceGroup = { spaceSlug: string; ownerUserId: number; docs: LiveDocRow[] };
 
 export async function materializeDbOnlyDocs(): Promise<MaterializeResult> {
   const result: MaterializeResult = {
@@ -100,7 +97,7 @@ export async function materializeDbOnlyDocs(): Promise<MaterializeResult> {
   };
 
   // 1) Enumerate LIVE docs only (skip unpublished + tombstoned/deleted), joined
-  //    to their space + owner (for the on-disk repo path) and their CURRENT
+  //    to their space (for the owner id → on-disk repo path) and their CURRENT
   //    version content. Ordered by (space, id) so grouping is contiguous and the
   //    collision "first wins" is deterministic (lowest id).
   const rows: LiveDocRow[] = await db
@@ -113,27 +110,21 @@ export async function materializeDbOnlyDocs(): Promise<MaterializeResult> {
       content: docVersions.content,
       spaceSlug: spaces.slug,
       spaceOwnerUserId: spaces.ownerUserId,
-      ownerTokenName: users.tokenName,
-      ownerEmail: users.email,
     })
     .from(docs)
     .innerJoin(spaces, eq(spaces.id, docs.spaceId))
-    .innerJoin(users, eq(users.id, spaces.ownerUserId))
     .leftJoin(docVersions, eq(docVersions.id, docs.currentVersionId))
     .where(and(isNull(docs.deletedAt), isNull(docs.unpublishedAt)))
     .orderBy(docs.spaceId, docs.id);
 
-  // 2) Group by space, deriving the owner segment ONCE per space (same function
-  //    webAuthorCommit's repoPathForSpace uses → identical on-disk path).
+  // 2) Group by space, remembering the owner id so the on-disk repo path is
+  //    resolved ONCE per space via the shared `spaceRepoPath` (handle-derived —
+  //    identical to what webAuthorCommit uses).
   const bySpace = new Map<number, SpaceGroup>();
   for (const r of rows) {
     let g = bySpace.get(r.spaceId);
     if (!g) {
-      const ownerSlug = ownerSlugForUser(
-        { tokenName: r.ownerTokenName, email: r.ownerEmail },
-        r.spaceOwnerUserId,
-      );
-      g = { spaceSlug: r.spaceSlug, ownerSlug, docs: [] };
+      g = { spaceSlug: r.spaceSlug, ownerUserId: r.spaceOwnerUserId, docs: [] };
       bySpace.set(r.spaceId, g);
     }
     g.docs.push(r);
@@ -144,7 +135,10 @@ export async function materializeDbOnlyDocs(): Promise<MaterializeResult> {
   for (const g of bySpace.values()) {
     result.spacesScanned++;
     try {
-      const repoPath = bareRepoPath(g.ownerSlug, g.spaceSlug);
+      const repoPath = await spaceRepoPath({
+        ownerUserId: g.ownerUserId,
+        slug: g.spaceSlug,
+      });
       // A space whose bare repo doesn't exist yet has no committed blobs — every
       // live doc is DB-only, and webAuthorCommit's initBareRepo creates it.
       const exists = await repoExists(repoPath);

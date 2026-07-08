@@ -16,19 +16,18 @@
  * the ref-level half. (READ boundary is the route's job, mirroring page.tsx.)
  */
 import { db } from "@/db";
-import { users, docs } from "@/db/schema";
+import { docs } from "@/db/schema";
 import { eq, and, isNull } from "drizzle-orm";
 import { isStaff, type Principal } from "@/lib/auth";
 import {
   getSpaceBySlug,
   listSpaceMembers,
-  ownerSlugForUser,
   type SpaceRole,
   type SpaceRow,
 } from "@/lib/spaces";
 import { resolvePrincipalUserId } from "@/lib/principal-user";
+import { spaceRepoPath } from "@/lib/space-repo-path";
 import {
-  bareRepoPath,
   initBareRepo,
   refTip,
   listTree,
@@ -104,13 +103,6 @@ export type WebCommitResult =
       detail?: string;
     };
 
-/** Resolve the on-disk bare-repo path for a space row (mirrors proposals-service). */
-async function repoPathForSpace(space: SpaceRow): Promise<string> {
-  const owner = await db.query.users.findFirst({ where: eq(users.id, space.ownerUserId) });
-  const ownerSlug = ownerSlugForUser(owner ?? null, space.ownerUserId);
-  return bareRepoPath(ownerSlug, space.slug);
-}
-
 /**
  * The live `main` tip for a space's bare repo (null when the space was never
  * pushed / has no repo on disk yet). The CAS base a web/agent commit builds on.
@@ -119,7 +111,7 @@ async function repoPathForSpace(space: SpaceRow): Promise<string> {
 export async function liveMainTip(spaceSlug: string): Promise<string | null> {
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return null;
-  const repoPath = await repoPathForSpace(space);
+  const repoPath = await spaceRepoPath(space);
   try {
     return await refTip(repoPath, DEFAULT_BRANCH);
   } catch {
@@ -213,7 +205,7 @@ export type SpaceFileEntry = {
 export async function listSpaceFiles(spaceSlug: string): Promise<SpaceFileEntry[]> {
   const space = await getSpaceBySlug(spaceSlug);
   if (!space) return [];
-  const repoPath = await repoPathForSpace(space);
+  const repoPath = await spaceRepoPath(space);
   if (!(await repoExists(repoPath))) return [];
   const tip = await refTip(repoPath, DEFAULT_BRANCH);
   if (!tip) return [];
@@ -315,7 +307,7 @@ export async function webAuthorCommit(
   const target = targetRefFor(space.pushPolicy, req.role, req.identity.handle);
   if (!target) return { ok: false, reason: "forbidden" };
 
-  const repoPath = await repoPathForSpace(space);
+  const repoPath = await spaceRepoPath(space);
   // A never-pushed space has no bare repo on disk yet — create it (idempotent),
   // installing the policy hook, so the web write has somewhere to land.
   await initBareRepo(repoPath);

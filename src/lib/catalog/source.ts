@@ -22,8 +22,8 @@ import { and, eq, isNull, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { docs, spaces, spaceMembers } from "@/db/schema";
 import type { ViewerScope } from "@/lib/docs";
-import { ownerSlugForSpace } from "@/lib/spaces";
-import { bareRepoPath, refTip, listTree, readBlob } from "@/lib/git/repo";
+import { spaceRepoPath } from "@/lib/space-repo-path";
+import { refTip, listTree, readBlob } from "@/lib/git/repo";
 import { parseCollectionConfig, COLLECTION_CONFIG_FILENAME, type CollectionConfig } from "./collection-config";
 import type { CatalogDoc } from "./projection";
 
@@ -173,8 +173,7 @@ export async function readCollectionConfig(
   try {
     const space = await db.query.spaces.findFirst({ where: eq(spaces.slug, spaceSlug) });
     if (!space) return null;
-    const ownerSlug = await ownerSlugForSpace(space);
-    const repoPath = bareRepoPath(ownerSlug, spaceSlug);
+    const repoPath = await spaceRepoPath(space);
     const tip = await refTip(repoPath);
     if (!tip) return null;
 
