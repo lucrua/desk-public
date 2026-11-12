@@ -2,6 +2,10 @@
 
 Desk is a **self-hosted git host for document _spaces_** with a render + access + feedback layer on top. Documents live as files in git repos Desk hosts; Desk renders them, scopes who can see which, and holds the feedback (comments, proposed revisions, share links). You publish by pushing — `git push … HEAD:main` — and Desk re-renders within seconds. Source files are never exposed directly; unpublishing a doc kills its page and every share link instantly.
 
+## About this repository
+
+This is a self-hosted document hub, built spec-first with AI coding agents: the specs in `docs/specs/` were written and reviewed before each slice was implemented, and the commit history (including the `Co-Authored-By` trailers) is the record of that process. It is a working project, not a hosted product, and it makes no production claim. All sample data, hostnames, e-mail addresses and names in the tests and docs are fictional or anonymised placeholders. Licensed under MIT, see `LICENSE`.
+
 ## The one principle — one source, many doors
 
 **Desk is a render + access + feedback layer over a source. It is never a second place the content lives.**
@@ -339,8 +343,7 @@ desk/
 │   ├── cutover-checklist.md  # Supervised cloud cutover runbook
 │   ├── account-merge-runbook.md
 │   ├── agent-runbook.md    # Autonomous reporting-bot recipe (provision → loop → review → distribute → dispatch)
-│   ├── remotes.md          # Source modes + GitHub mirroring (hosted/mirrored recipes)
-│   └── plans/              # Implementation phase plans
+│   └── remotes.md          # Source modes + GitHub mirroring (hosted/mirrored recipes)
 ├── drizzle/                # Generated migration SQL files
 ├── docker-compose.dev.yml  # Local Postgres 16 for development
 ├── drizzle.config.ts       # Drizzle Kit config
